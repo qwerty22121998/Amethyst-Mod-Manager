@@ -167,7 +167,7 @@ class _GamePickerDialog(ctk.CTkToplevel):
         self.grid_rowconfigure(1, weight=1)
 
         ctk.CTkLabel(
-            self, text="Select a game to add / reconfigure:",
+            self, text="Select a game to add:",
             font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w"
         ).grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 6))
 
