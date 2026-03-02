@@ -11,6 +11,7 @@ Order in the file defines load order (line 0 = first loaded).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -189,6 +190,7 @@ def sync_plugins_from_filemap(
     filemap_path: Path,
     plugins_path: Path,
     plugin_extensions: list[str],
+    disabled_plugins: dict[str, list[str]] | None = None,
 ) -> int:
     """
     Scan filemap.txt for files matching plugin_extensions and append any
@@ -197,6 +199,8 @@ def sync_plugins_from_filemap(
     The filemap format is: <relative/path/to/file>\\t<mod_name>
     Only root-level files (no directory separator in relative path) are
     considered, because Bethesda plugins live at the root of the Data folder.
+
+    disabled_plugins maps mod_name -> list of plugin filenames to suppress.
     """
     if not filemap_path.is_file() or not plugin_extensions:
         return 0
@@ -213,7 +217,7 @@ def sync_plugins_from_filemap(
             line = line.rstrip("\n")
             if "\t" not in line:
                 continue
-            rel_path, _ = line.split("\t", 1)
+            rel_path, mod_name = line.split("\t", 1)
             rel_path = rel_path.replace("\\", "/")
             if "/" in rel_path:
                 # Plugin is inside a subfolder — not a root-level plugin file
@@ -221,6 +225,10 @@ def sync_plugins_from_filemap(
             filename = rel_path
             if (Path(filename).suffix.lower() in exts_lower
                     and filename.lower() not in existing_lower):
+                if disabled_plugins:
+                    mod_disabled = {n.lower() for n in disabled_plugins.get(mod_name, [])}
+                    if filename.lower() in mod_disabled:
+                        continue
                 new_entries.append(PluginEntry(name=filename, enabled=True))
                 existing_lower.add(filename.lower())
 
@@ -228,3 +236,24 @@ def sync_plugins_from_filemap(
         write_plugins(plugins_path, existing + new_entries)
 
     return len(new_entries)
+
+
+def read_disabled_plugins(path: Path) -> dict[str, list[str]]:
+    """Read disabled_plugins.json. Returns {} if absent or corrupt."""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if isinstance(v, list)}
+    except Exception:
+        pass
+    return {}
+
+
+def write_disabled_plugins(path: Path, data: dict[str, list[str]]) -> None:
+    """Write disabled_plugins.json atomically."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)

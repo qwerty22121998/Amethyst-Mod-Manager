@@ -400,6 +400,7 @@ def build_filemap(
     per_mod_strip_prefixes: dict[str, list[str]] | None = None,
     allowed_extensions: set[str] | None = None,
     root_deploy_folders: set[str] | None = None,
+    disabled_plugins: dict[str, list[str]] | None = None,
 ) -> tuple[int, dict[str, int], dict[str, set[str]], dict[str, set[str]]]:
     """
     Build filemap.txt from the current modlist.
@@ -513,14 +514,25 @@ def build_filemap(
         else:
             conflict_map[name] = CONFLICT_PARTIAL
 
+    # Build per-mod disabled-plugin sets for fast lookup (lowercase filenames, root-level only)
+    _disabled_lower: dict[str, set[str]] = {}
+    if disabled_plugins:
+        for _mod, _names in disabled_plugins.items():
+            _disabled_lower[_mod] = {n.lower() for n in _names}
+
     # Write sorted output
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sorted_keys = sorted(filemap)
-    count = len(sorted_keys)
+    count = 0
     with output_path.open("w", encoding="utf-8") as f:
         for rel_key in sorted_keys:
             rel_str, mod_name = filemap[rel_key]
+            # Skip root-level files that the user has disabled for this mod
+            if _disabled_lower and "/" not in rel_key and mod_name in _disabled_lower:
+                if rel_key in _disabled_lower[mod_name]:
+                    continue
             f.write(f"{rel_str}\t{mod_name}\n")
+            count += 1
 
     # Write root-deploy filemap if any root files were found.
     root_output = output_path.parent / "filemap_root.txt"

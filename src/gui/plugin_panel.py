@@ -126,7 +126,7 @@ class PluginPanel(ctk.CTkFrame):
 
         # Warning icon for missing masters (canvas-compatible PhotoImage)
         self._warning_icon: ImageTk.PhotoImage | None = None
-        _warn_path = _ICONS_DIR / "warning.png"
+        _warn_path = _ICONS_DIR / "warning2.png"
         if _warn_path.is_file():
             _img = PilImage.open(_warn_path).convert("RGBA").resize((16, 16), PilImage.LANCZOS)
             self._warning_icon = ImageTk.PhotoImage(_img)

@@ -2447,6 +2447,124 @@ class _SelectFilesDialog(ctk.CTkToplevel):
 
 
 # ---------------------------------------------------------------------------
+# Per-mod plugin disabling dialog
+# ---------------------------------------------------------------------------
+class _DisablePluginsDialog(ctk.CTkToplevel):
+    """
+    Modal checklist dialog for disabling specific plugins within a mod.
+
+    Checked = enabled (will appear in plugins.txt).
+    Unchecked = disabled (excluded from plugins.txt).
+
+    result: set[str] of plugin names to disable, or None if cancelled.
+    """
+
+    def __init__(self, parent, mod_name: str,
+                 plugin_names: list[str], disabled: set[str]):
+        super().__init__(parent, fg_color=BG_DEEP)
+        self.title(f"Disable Plugins — {mod_name}")
+        self.resizable(False, True)
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+        self.after(100, self._make_modal)
+
+        self.result: set[str] | None = None
+        self._plugin_names = plugin_names
+        self._disabled_lower = {n.lower() for n in disabled}
+        self._vars: list[tuple[tk.BooleanVar, str]] = []
+        self._build()
+
+    def _make_modal(self):
+        try:
+            self.grab_set()
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _build(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            self,
+            text="Checked plugins are enabled and will appear in plugins.txt.\n"
+                 "Uncheck a plugin to exclude it.",
+            font=FONT_SMALL,
+            text_color=TEXT_DIM,
+            anchor="w",
+            justify="left",
+        ).grid(row=0, column=0, sticky="ew", padx=16, pady=(12, 6))
+
+        scroll = ctk.CTkScrollableFrame(self, fg_color=BG_PANEL, corner_radius=6)
+        scroll.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 4))
+        scroll.grid_columnconfigure(0, weight=1)
+
+        for i, name in enumerate(self._plugin_names):
+            var = tk.BooleanVar(value=name.lower() not in self._disabled_lower)
+            self._vars.append((var, name))
+            ctk.CTkCheckBox(
+                scroll,
+                text=name,
+                variable=var,
+                font=FONT_NORMAL,
+                text_color=TEXT_MAIN,
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOV,
+                checkmark_color="white",
+                border_color=BORDER,
+            ).grid(row=i, column=0, sticky="w", padx=8, pady=3)
+
+        helper = ctk.CTkFrame(self, fg_color="transparent")
+        helper.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 4))
+        ctk.CTkButton(
+            helper, text="Enable All", width=90, height=24, font=FONT_SMALL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=lambda: [v.set(True) for v, _ in self._vars],
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            helper, text="Disable All", width=90, height=24, font=FONT_SMALL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=lambda: [v.set(False) for v, _ in self._vars],
+        ).pack(side="left")
+
+        bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
+        bar.grid(row=3, column=0, sticky="ew")
+        bar.grid_propagate(False)
+        ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(
+            side="top", fill="x"
+        )
+        ctk.CTkButton(
+            bar, text="Cancel", width=80, height=28, font=FONT_NORMAL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=(4, 12), pady=12)
+        ctk.CTkButton(
+            bar, text="Save", width=80, height=28, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_ok,
+        ).pack(side="right", padx=4, pady=12)
+
+        h = min(500, max(200, 80 + len(self._plugin_names) * 32 + 60 + 52))
+        w = 400
+        self.update_idletasks()
+        try:
+            x = self.master.winfo_rootx() + (self.master.winfo_width() - w) // 2
+            y = self.master.winfo_rooty() + (self.master.winfo_height() - h) // 2
+            self.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception:
+            self.geometry(f"{w}x{h}")
+
+    def _on_ok(self):
+        self.result = {name for var, name in self._vars if not var.get()}
+        self.grab_release()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.grab_release()
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
 # Separator color picker dialog
 # ---------------------------------------------------------------------------
 class _SepColorPickerDialog(ctk.CTkToplevel):

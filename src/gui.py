@@ -51,7 +51,13 @@ from gui.version_check import (
 
 from version import __version__
 from Utils.app_log import set_app_log
-from Utils.plugins import prune_plugins_from_filemap, sync_plugins_from_filemap
+from Utils.plugins import (
+    prune_plugins_from_filemap,
+    sync_plugins_from_filemap,
+    read_disabled_plugins,
+    read_plugins,
+    write_plugins,
+)
 from Nexus.nexus_api import NexusAPI, load_api_key
 from Nexus.nexus_download import NexusDownloader
 from Nexus.nxm_handler import NxmLink, NxmHandler, NxmIPC
@@ -557,10 +563,28 @@ class App(ctk.CTk):
                 )
                 if removed:
                     self._status.log(f"plugins.txt: removed {removed} plugin(s).")
+                # Read per-mod disabled plugin list and prune any already-synced disabled plugins
+                disabled_path = (
+                    self._mod_panel._modlist_path.parent / "disabled_plugins.json"
+                    if self._mod_panel._modlist_path else None
+                )
+                disabled_map = read_disabled_plugins(disabled_path) if disabled_path else {}
+                if disabled_map and self._plugin_panel._plugins_path is not None:
+                    existing = read_plugins(self._plugin_panel._plugins_path)
+                    all_disabled_lower = {
+                        n.lower() for names in disabled_map.values() for n in names
+                    }
+                    kept = [e for e in existing if e.name.lower() not in all_disabled_lower]
+                    if len(kept) < len(existing):
+                        write_plugins(self._plugin_panel._plugins_path, kept)
+                        self._status.log(
+                            f"plugins.txt: removed {len(existing) - len(kept)} disabled plugin(s)."
+                        )
                 added = sync_plugins_from_filemap(
                     Path(filemap_path_str),
                     self._plugin_panel._plugins_path,
                     self._plugin_panel._plugin_extensions,
+                    disabled_plugins=disabled_map,
                 )
                 if added:
                     self._status.log(f"plugins.txt: added {added} new plugin(s).")

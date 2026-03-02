@@ -62,6 +62,7 @@ from gui.dialogs import (
     _OverwritesDialog,
     _PriorityDialog,
     _SepColorPickerDialog,
+    _DisablePluginsDialog,
     ask_yes_no,
     show_error,
 )
@@ -92,6 +93,11 @@ from Utils.modlist import (
     ensure_mod_preserving_position,
 )
 from Utils.plugin_parser import check_missing_masters
+from Utils.plugins import (
+    read_disabled_plugins, write_disabled_plugins,
+    read_plugins, write_plugins, PluginEntry,
+    read_loadorder, write_loadorder,
+)
 from Utils.profile_backup import create_backup
 from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
 from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
@@ -2162,6 +2168,7 @@ class ModListPanel(ctk.CTkFrame):
         # Find .ini files in this mod's staging folder (only for non-separators)
         ini_files: list[Path] = []
         mod_folder: Path | None = None
+        plugin_files: list[str] = []
         if self._modlist_path is not None:
             staging_root = self._modlist_path.parent.parent.parent / "mods"
             if not is_sep:
@@ -2170,17 +2177,27 @@ class ModListPanel(ctk.CTkFrame):
                 if mod_dir.is_dir():
                     ini_files = [p for p in sorted(mod_dir.rglob("*.ini"))
                                  if p.name.lower() != "meta.ini"]
+                    app = self.winfo_toplevel()
+                    plugin_ext: set[str] = set()
+                    if hasattr(app, "_plugin_panel"):
+                        plugin_ext = {e.lower() for e in app._plugin_panel._plugin_extensions}
+                    if plugin_ext:
+                        plugin_files = sorted(
+                            p.name for p in mod_dir.iterdir()
+                            if p.is_file() and p.suffix.lower() in plugin_ext
+                        )
             elif entry.name == OVERWRITE_NAME:
                 mod_folder = staging_root.parent / "overwrite"
             elif entry.name == ROOT_FOLDER_NAME:
                 mod_folder = staging_root.parent / "Root_Folder"
 
         self._show_context_menu(event.x_root, event.y_root, idx, is_sep, ini_files,
-                                mod_folder=mod_folder)
+                                mod_folder=mod_folder, plugin_files=plugin_files)
 
     def _show_context_menu(self, x: int, y: int, idx: int, is_separator: bool,
                            ini_files: list[Path] | None = None,
-                           mod_folder: Path | None = None):
+                           mod_folder: Path | None = None,
+                           plugin_files: list[str] | None = None):
         """CTkPopupMenu for mod list context menu. Supports submenus."""
         if self._context_menu is None:
             self._context_menu = CTkPopupMenu(
@@ -2216,6 +2233,10 @@ class ModListPanel(ctk.CTkFrame):
                 menu.add_submenu("INI files",
                     lambda: self._show_ini_picker(ini_files,
                         parent_dismiss=menu._withdraw, parent_popup=menu))
+            if plugin_files:
+                mod_name_cap = self._entries[idx].name
+                menu.add_command("Disable Plugins…",
+                    lambda n=mod_name_cap, pf=plugin_files: self._show_disable_plugins_dialog(n, pf))
             if mod_folder is not None:
                 mod_name_cap = self._entries[idx].name
                 menu.add_command("Set deployment paths…",
@@ -2695,6 +2716,83 @@ class ModListPanel(ctk.CTkFrame):
         popup.wm_deiconify()
 
         return popup
+
+    def _show_disable_plugins_dialog(self, mod_name: str, plugin_files: list[str]) -> None:
+        """Open the Disable Plugins dialog for a mod and save results."""
+        if self._modlist_path is None:
+            return
+        disabled_path = self._modlist_path.parent / "disabled_plugins.json"
+        all_disabled = read_disabled_plugins(disabled_path)
+        currently_disabled = set(all_disabled.get(mod_name, []))
+
+        dlg = _DisablePluginsDialog(
+            self.winfo_toplevel(),
+            mod_name=mod_name,
+            plugin_names=plugin_files,
+            disabled=currently_disabled,
+        )
+        self.wait_window(dlg)
+        if dlg.result is None:
+            return  # cancelled
+
+        if dlg.result:
+            all_disabled[mod_name] = sorted(dlg.result)
+        else:
+            all_disabled.pop(mod_name, None)
+
+        # Compute which plugins for this mod were just re-enabled vs newly disabled
+        newly_disabled = dlg.result - currently_disabled  # was enabled, now disabled
+        newly_enabled  = currently_disabled - dlg.result  # was disabled, now enabled
+
+        write_disabled_plugins(disabled_path, all_disabled)
+
+        # Immediately update plugins.txt and refresh the panel without waiting
+        # for the async filemap rebuild to complete.
+        app = self.winfo_toplevel()
+        if hasattr(app, "_plugin_panel"):
+            pp = app._plugin_panel
+            if pp._plugins_path is not None:
+                changed = False
+                existing = read_plugins(pp._plugins_path)
+
+                loadorder_path = pp._plugins_path.parent / "loadorder.txt"
+                loadorder = read_loadorder(loadorder_path)
+                lo_changed = False
+
+                # Remove newly-disabled plugins from both plugins.txt and loadorder.txt
+                if newly_disabled:
+                    disabled_lower = {n.lower() for n in newly_disabled}
+                    kept = [e for e in existing if e.name.lower() not in disabled_lower]
+                    if len(kept) < len(existing):
+                        existing = kept
+                        changed = True
+                    new_lo = [n for n in loadorder if n.lower() not in disabled_lower]
+                    if len(new_lo) < len(loadorder):
+                        loadorder = new_lo
+                        lo_changed = True
+
+                # Append newly re-enabled plugins to bottom of plugins.txt and loadorder.txt
+                if newly_enabled:
+                    existing_lower = {e.name.lower() for e in existing}
+                    loadorder_lower = {n.lower() for n in loadorder}
+                    for name in sorted(newly_enabled):
+                        if name.lower() not in existing_lower:
+                            existing.append(PluginEntry(name=name, enabled=True))
+                            existing_lower.add(name.lower())
+                            changed = True
+                        if name.lower() not in loadorder_lower:
+                            loadorder.append(name)
+                            loadorder_lower.add(name.lower())
+                            lo_changed = True
+
+                if lo_changed:
+                    write_loadorder(loadorder_path, [PluginEntry(name=n, enabled=True) for n in loadorder])
+
+                if changed:
+                    write_plugins(pp._plugins_path, existing)
+                    pp._refresh_plugins_tab()
+
+        self._rebuild_filemap()
 
     def _show_ini_picker(self, ini_files: list[Path],
                          parent_dismiss=None,
@@ -3968,6 +4066,7 @@ class ModListPanel(ctk.CTkFrame):
         root_deploy_folders = self._root_deploy_folders
         rescan_index        = self._filemap_rescan_index
         self._filemap_rescan_index = False
+        disabled_plugins    = read_disabled_plugins(modlist_path.parent / "disabled_plugins.json")
 
         def _worker():
             try:
@@ -3986,6 +4085,7 @@ class ModListPanel(ctk.CTkFrame):
                     per_mod_strip_prefixes=self._mod_strip_prefixes,
                     allowed_extensions=install_extensions or None,
                     root_deploy_folders=root_deploy_folders or None,
+                    disabled_plugins=disabled_plugins or None,
                 )
                 self.after(0, lambda: _done(count, conflict_map, overrides, overridden_by, None))
             except Exception as exc:
