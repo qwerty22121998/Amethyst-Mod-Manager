@@ -606,24 +606,27 @@ class AddGameDialog(ctk.CTkToplevel):
 
     def _on_remove(self):
         """Ask for confirmation, then restore the game, delete the staging
-        folder, and remove paths.json."""
+        folder (except mods/ and profiles/), and remove paths.json."""
         from Utils.config_paths import get_game_config_path
         from Utils.deploy import restore_root_folder
 
         profile_root = self._game.get_profile_root()
         paths_json = get_game_config_path(self._game.name)
 
-        # Build a warning message listing what will be deleted
+        # Build a warning message listing what will be deleted / kept
         lines = [
-            f"This will permanently remove all data for {self._game.name}:\n",
-            f"  • Restore the game to its vanilla state\n",
-            f"  • Staging folder (all installed mods, profiles, overwrite):\n"
-            f"      {profile_root}\n",
-            f"  • Game configuration:\n"
-            f"      {paths_json}\n",
-            "\nThis action cannot be undone. Continue?",
+            f"Removes the instance configuration for {self._game.name}.\n",
+            f"Deleted:\n",
+            f"  • Game configuration ({paths_json.name})\n",
+            f"  • Generated caches (filemap, modindex, etc.)\n",
+            f"  • The game will be restored to its vanilla state\n",
+            f"\nKept (your data is safe):\n",
+            f"  • Mods folder:  {profile_root / 'mods'}\n",
+            f"  • Profiles (modlist, plugins):  {profile_root / 'profiles'}\n",
+            f"  • Overwrite:  {profile_root / 'overwrite'}\n",
+            f"\nThis action cannot be undone. Continue?",
         ]
-        msg = "\n".join(lines)
+        msg = "".join(lines)
 
         confirm = _RemoveConfirmDialog(self, self._game.name, msg)
         self.wait_window(confirm)
@@ -645,9 +648,17 @@ class AddGameDialog(ctk.CTkToplevel):
         except Exception:
             pass
 
-        # Delete the staging / profile folder
+        # Delete everything in the profile root except mods/, profiles/, and overwrite/
+        # (mods/ contains installed mod archives; profiles/ has modlist.txt and plugins.txt)
+        _KEEP = {"mods", "profiles", "overwrite"}
         if profile_root.is_dir():
-            shutil.rmtree(profile_root, ignore_errors=True)
+            for child in profile_root.iterdir():
+                if child.name in _KEEP:
+                    continue
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
 
         # Delete the paths.json (and its parent dir if empty)
         if paths_json.is_file():
@@ -695,7 +706,7 @@ class _RemoveConfirmDialog(ctk.CTkToplevel):
     """Modal yes/no dialog warning the user before removing a game instance."""
 
     WIDTH  = 480
-    HEIGHT = 320
+    HEIGHT = 360
 
     def __init__(self, parent, game_name: str, message: str):
         super().__init__(parent, fg_color=BG_DEEP)
