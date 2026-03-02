@@ -42,6 +42,7 @@ def _default_state():
         "filter_partial": False,
         "filter_full": False,
         "filter_missing_reqs": False,
+        "filter_has_disabled_plugins": False,
     }
 
 
@@ -52,7 +53,7 @@ class ModlistFiltersDialog(ctk.CTkToplevel):
     """
 
     WIDTH  = 380
-    HEIGHT = 380
+    HEIGHT = 410
 
     def __init__(
         self,
@@ -102,6 +103,7 @@ class ModlistFiltersDialog(ctk.CTkToplevel):
             ("filter_partial", "Show only winning and losing conflicts"),
             ("filter_full", "Show only fully conflicted (all files overridden)"),
             ("filter_missing_reqs", "Show only mods with missing requirements"),
+            ("filter_has_disabled_plugins", "Show only mods with disabled plugins"),
         ]
 
         self._vars = {}

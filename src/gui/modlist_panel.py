@@ -264,6 +264,8 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_conflict_partial: bool = False
         self._filter_conflict_full: bool = False
         self._filter_missing_reqs: bool = False
+        self._filter_has_disabled_plugins: bool = False
+        self._disabled_plugins_map: dict[str, list[str]] = {}  # mod_name → [plugin, ...]
         self._visible_indices: list[int] = []  # entry indices matching current filter
         self._vis_dirty: bool = True           # True when _visible_indices needs recomputing
 
@@ -1641,6 +1643,18 @@ class ModListPanel(ctk.CTkFrame):
                     result.append(i)
             base = result
 
+        # Step 4c: disabled plugins filter (show only mods with at least one plugin disabled)
+        if self._filter_has_disabled_plugins:
+            result = []
+            for i in base:
+                entry = self._entries[i]
+                if entry.is_separator:
+                    if self._sep_block_has_disabled_plugins(i):
+                        result.append(i)
+                elif entry.name in self._disabled_plugins_map:
+                    result.append(i)
+            base = result
+
         # Step 5: apply column sort (visual only)
         if self._sort_column is not None:
             base = self._apply_column_sort(base)
@@ -1975,6 +1989,14 @@ class ModListPanel(ctk.CTkFrame):
             if not self._entries[i].is_separator:
                 name = self._entries[i].name
                 if name in self._missing_reqs and name not in self._ignored_missing_reqs:
+                    return True
+        return False
+
+    def _sep_block_has_disabled_plugins(self, sep_idx: int) -> bool:
+        """True if this separator's block contains at least one mod with disabled plugins."""
+        for i in self._sep_block_range(sep_idx):
+            if not self._entries[i].is_separator:
+                if self._entries[i].name in self._disabled_plugins_map:
                     return True
         return False
 
@@ -2747,6 +2769,7 @@ class ModListPanel(ctk.CTkFrame):
         newly_enabled  = currently_disabled - dlg.result  # was disabled, now enabled
 
         write_disabled_plugins(disabled_path, all_disabled)
+        self._disabled_plugins_map = all_disabled
 
         # Immediately update plugins.txt and refresh the panel without waiting
         # for the async filemap rebuild to complete.
@@ -3878,6 +3901,7 @@ class ModListPanel(ctk.CTkFrame):
             "filter_partial": self._filter_conflict_partial,
             "filter_full": self._filter_conflict_full,
             "filter_missing_reqs": self._filter_missing_reqs,
+            "filter_has_disabled_plugins": self._filter_has_disabled_plugins,
         }
         ModlistFiltersDialog(
             self.winfo_toplevel(),
@@ -3915,6 +3939,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_conflict_partial = state.get("filter_partial", False)
         self._filter_conflict_full = state.get("filter_full", False)
         self._filter_missing_reqs = state.get("filter_missing_reqs", False)
+        self._filter_has_disabled_plugins = state.get("filter_has_disabled_plugins", False)
         self._vis_dirty = True
         self._redraw()
 
@@ -4067,6 +4092,7 @@ class ModListPanel(ctk.CTkFrame):
         rescan_index        = self._filemap_rescan_index
         self._filemap_rescan_index = False
         disabled_plugins    = read_disabled_plugins(modlist_path.parent / "disabled_plugins.json")
+        self._disabled_plugins_map = disabled_plugins
 
         def _worker():
             try:
