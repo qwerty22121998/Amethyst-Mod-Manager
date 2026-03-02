@@ -43,6 +43,7 @@ from gui.theme import (
     conflict_lower,
     _ICONS_DIR,
     load_icon as _load_icon,
+    FS9, FS10, FS11, FS12, FS13, FS16,
 )
 from gui.ctk_components import CTkPopupMenu
 from gui.game_helpers import (
@@ -478,12 +479,12 @@ class ModListPanel(ctk.CTkFrame):
         bar.grid_propagate(False)
 
         tk.Label(bar, text="🔍", bg=BG_DEEP, fg=TEXT_DIM,
-                 font=("Segoe UI", 11)).pack(side="left", padx=(8, 2), pady=4)
+                 font=("Segoe UI", FS11)).pack(side="left", padx=(8, 2), pady=4)
 
         self._search_entry = tk.Entry(
             bar,
             bg=BG_PANEL, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", 11),
+            relief="flat", font=("Segoe UI", FS11),
             bd=0, highlightthickness=1,
             highlightbackground=BORDER, highlightcolor=ACCENT,
         )
@@ -594,7 +595,7 @@ class ModListPanel(ctk.CTkFrame):
                 display = title + arrow
             lbl = tk.Label(
                 self._header, text=display, anchor=anc,
-                font=("Segoe UI", 11, "bold"),
+                font=("Segoe UI", FS11, "bold"),
                 fg=ACCENT if sort_key == self._sort_column else TEXT_SEP,
                 bg=BG_HEADER, bd=0,
                 cursor="hand2" if sort_key else "",
@@ -935,7 +936,7 @@ class ModListPanel(ctk.CTkFrame):
             bg_id = c.create_rectangle(0, -200, 0, -200, fill="", outline="", state="hidden")
             # Mod name / separator label text
             name_id = c.create_text(0, -200, text="", anchor="w", fill="",
-                                    font=("Segoe UI", 11), state="hidden")
+                                    font=("Segoe UI", FS11), state="hidden")
             # Flags column icon (warning / lock star / update / endorsed)
             flag_id = c.create_image(0, -200, anchor="center", state="hidden")
             # Conflict icons (left slot and right slot)
@@ -943,10 +944,10 @@ class ModListPanel(ctk.CTkFrame):
             conf2_id = c.create_image(0, -200, anchor="center", state="hidden")
             # Install date text
             inst_id = c.create_text(0, -200, text="", anchor="center", fill="",
-                                    font=("Segoe UI", 10), state="hidden")
+                                    font=("Segoe UI", FS10), state="hidden")
             # Priority text
             prio_id = c.create_text(0, -200, text="", anchor="center", fill="",
-                                    font=("Segoe UI", 10), state="hidden")
+                                    font=("Segoe UI", FS10), state="hidden")
             # Separator collapse icon
             sep_icon_id = c.create_image(0, -200, anchor="center", state="hidden")
             # Separator decorative lines (left and right of label)
@@ -975,7 +976,7 @@ class ModListPanel(ctk.CTkFrame):
             )
             mark_id = c.create_text(
                 0, -200, text="✓", anchor="center", fill=ACCENT,
-                font=("Segoe UI", 12, "bold"), state="hidden",
+                font=("Segoe UI", FS12, "bold"), state="hidden",
                 tags=(cb_tag, "pool_cb"),
             )
             self._pool_cb_rect.append(rect_id)
@@ -1144,7 +1145,7 @@ class ModListPanel(ctk.CTkFrame):
                     mid_x = cw // 2
                     c.coords(self._pool_name[s], mid_x, y_mid)
                     c.itemconfigure(self._pool_name[s], text=label, anchor="center",
-                                    fill=txt_col, font=("Segoe UI", 10, "bold"), state="normal")
+                                    fill=txt_col, font=("Segoe UI", FS10, "bold"), state="normal")
 
                     # Decorative lines flanking the label
                     lock_w  = 28 if not is_synthetic else 0
@@ -1226,7 +1227,7 @@ class ModListPanel(ctk.CTkFrame):
                             )
                             mark_id = c.create_text(
                                 cb_cx, y_mid, text="✓", anchor="center",
-                                fill=ACCENT, font=("Segoe UI", 12, "bold"),
+                                fill=ACCENT, font=("Segoe UI", FS12, "bold"),
                                 state="normal" if checked_rf else "hidden",
                                 tags=(lk_tag, "lock_cb"),
                             )
@@ -1272,7 +1273,7 @@ class ModListPanel(ctk.CTkFrame):
                             else:
                                 mark2_id = c.create_text(
                                     lk_x, y_mid, text="🔒", anchor="center",
-                                    fill=TEXT_SEP, font=("Segoe UI", 9),
+                                    fill=TEXT_SEP, font=("Segoe UI", FS9),
                                     state="normal" if locked_state else "hidden",
                                     tags=(lk_tag2, "lock_cb"),
                                 )
@@ -1323,7 +1324,7 @@ class ModListPanel(ctk.CTkFrame):
                     name_color = TEXT_DIM if not entry.enabled else TEXT_MAIN
                     c.coords(self._pool_name[s], self._COL_X[1], y_mid)
                     c.itemconfigure(self._pool_name[s], text=entry.name, anchor="w",
-                                    fill=name_color, font=("Segoe UI", 11), state="normal")
+                                    fill=name_color, font=("Segoe UI", FS11), state="normal")
 
                     # Hide separator-only items
                     c.itemconfigure(self._pool_sep_icon[s], state="hidden")
@@ -1345,7 +1346,7 @@ class ModListPanel(ctk.CTkFrame):
                         c.coords(self._pool_install_text[s], flag_x, y_mid)
                         c.itemconfigure(self._pool_install_text[s],
                                         text="★", anchor="center", fill="#e5c07b",
-                                        font=("Segoe UI", 11), state="normal")
+                                        font=("Segoe UI", FS11), state="normal")
                         # secondary icon after star
                         flag_x2 = flag_x + 18
                         if entry.name in self._update_mods and self._icon_update:
@@ -1409,7 +1410,7 @@ class ModListPanel(ctk.CTkFrame):
                             c.coords(self._pool_install_text[s], self._COL_X[4] + 34, y_mid)
                             c.itemconfigure(self._pool_install_text[s],
                                             text=install_text, anchor="center",
-                                            fill=TEXT_DIM, font=("Segoe UI", 10), state="normal")
+                                            fill=TEXT_DIM, font=("Segoe UI", FS10), state="normal")
                         else:
                             c.itemconfigure(self._pool_install_text[s], state="hidden")
 
@@ -1417,7 +1418,7 @@ class ModListPanel(ctk.CTkFrame):
                         c.coords(self._pool_priority_text[s], self._COL_X[5] + 32, y_mid)
                         c.itemconfigure(self._pool_priority_text[s],
                                         text=str(priorities.get(i, "")), anchor="center",
-                                        fill=TEXT_DIM, font=("Segoe UI", 10), state="normal")
+                                        fill=TEXT_DIM, font=("Segoe UI", FS10), state="normal")
                     else:
                         # locked row — install date / priority still shown
                         install_text = self._install_dates.get(entry.name, "")
@@ -1425,11 +1426,11 @@ class ModListPanel(ctk.CTkFrame):
                             c.coords(self._pool_install_text[s], self._COL_X[4] + 34, y_mid)
                             c.itemconfigure(self._pool_install_text[s],
                                             text=install_text, anchor="center",
-                                            fill=TEXT_DIM, font=("Segoe UI", 10), state="normal")
+                                            fill=TEXT_DIM, font=("Segoe UI", FS10), state="normal")
                         c.coords(self._pool_priority_text[s], self._COL_X[5] + 32, y_mid)
                         c.itemconfigure(self._pool_priority_text[s],
                                         text=str(priorities.get(i, "")), anchor="center",
-                                        fill=TEXT_DIM, font=("Segoe UI", 10), state="normal")
+                                        fill=TEXT_DIM, font=("Segoe UI", FS10), state="normal")
 
                     # Enable/disable checkbox (canvas-drawn, no opaque widget)
                     if not dragging and i < len(self._check_vars) and self._check_vars[i] is not None:
@@ -1517,7 +1518,7 @@ class ModListPanel(ctk.CTkFrame):
                 self._COL_X[1], gy_mid,
                 text=entry.display_name, anchor="w",
                 fill=TEXT_SEP if is_sep else TEXT_MAIN,
-                font=("Segoe UI", 10, "bold") if is_sep else ("Segoe UI", 11),
+                font=("Segoe UI", FS10, "bold") if is_sep else ("Segoe UI", 11),
                 tags="drag_overlay",
             )
 
@@ -2121,7 +2122,7 @@ class ModListPanel(ctk.CTkFrame):
         lbl = tk.Label(
             tw, text=text, justify="left",
             bg="#1a1a2e", fg="#ff6b6b",
-            font=("Segoe UI", 10), padx=8, pady=4,
+            font=("Segoe UI", FS10), padx=8, pady=4,
             wraplength=350,
         )
         lbl.pack()
@@ -2980,12 +2981,12 @@ class ModListPanel(ctk.CTkFrame):
         style.configure(_tree_style,
                         background=_tree_bg, foreground=TEXT_MAIN,
                         fieldbackground=_tree_bg, rowheight=22,
-                        font=("Segoe UI", 10),
+                        font=("Segoe UI", FS10),
                         bordercolor=BG_ROW, borderwidth=1,
                         focuscolor=_tree_bg)
         style.configure(_heading_style,
                         background=BG_HEADER, foreground=TEXT_SEP,
-                        font=("Segoe UI", 10), borderwidth=0)
+                        font=("Segoe UI", FS10), borderwidth=0)
         style.map(_tree_style,
                   background=[("selected", BG_SELECT), ("focus", _tree_bg)],
                   foreground=[("selected", TEXT_MAIN)])
@@ -3390,13 +3391,13 @@ class ModListPanel(ctk.CTkFrame):
                     canvas.create_text(
                         NAME_PAD, y_top + 12,
                         text=title[:80] + ("…" if len(title) > 80 else ""),
-                        anchor="w", font=("Segoe UI", 11), fill=TEXT_MAIN,
+                        anchor="w", font=("Segoe UI", FS11), fill=TEXT_MAIN,
                     )
                     canvas.create_text(
                         NAME_PAD, y_top + 30,
                         text=notes[:120] + ("…" if len(notes) > 120 else ""),
                         anchor="nw", width=name_max_px,
-                        font=("Segoe UI", 10), fill=TEXT_DIM,
+                        font=("Segoe UI", FS10), fill=TEXT_DIM,
                     )
                     y = y_bot
                 total_h = max(y, 1)
@@ -3410,14 +3411,14 @@ class ModListPanel(ctk.CTkFrame):
                     vb = tk.Button(
                         canvas, text="View",
                         bg=ACCENT, fg="#ffffff", activebackground=ACCENT_HOV,
-                        relief="flat", font=("Segoe UI", 10), bd=0,
+                        relief="flat", font=("Segoe UI", FS10), bd=0,
                         highlightthickness=0, cursor="hand2",
                         command=lambda u=url: webbrowser.open(u),
                     )
                     ib = tk.Button(
                         canvas, text="Install",
                         bg="#2d7a2d", fg="#ffffff", activebackground="#3a9e3a",
-                        relief="flat", font=("Segoe UI", 10), bd=0,
+                        relief="flat", font=("Segoe UI", FS10), bd=0,
                         highlightthickness=0, cursor="hand2",
                         command=lambda r=req: _on_install(r),
                     )

@@ -39,6 +39,7 @@ from gui.theme import (
     plugin_mod,
     _ICONS_DIR,
     load_icon as _load_icon,
+    FS9, FS10, FS11, FS12, FS13, FS16,
 )
 from gui.game_helpers import _GAMES, _vanilla_plugins_for_game
 from gui.dialogs import _PriorityDialog, _ExeConfigDialog, _VRAMrPresetDialog
@@ -995,7 +996,7 @@ class PluginPanel(ctk.CTkFrame):
         tk.Button(
             toolbar, text="↺ Refresh",
             bg=ACCENT, fg=TEXT_MAIN, activebackground=ACCENT_HOV,
-            relief="flat", font=("Segoe UI", 10),
+            relief="flat", font=("Segoe UI", FS10),
             bd=0, cursor="hand2", highlightthickness=0,
             command=self._refresh_data_tab,
         ).pack(side="left", padx=8, pady=2)
@@ -1005,14 +1006,14 @@ class PluginPanel(ctk.CTkFrame):
         search_entry = tk.Entry(
             toolbar, textvariable=self._data_search_var,
             bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", 10), width=30,
+            relief="flat", font=("Segoe UI", FS10), width=30,
             highlightthickness=0, highlightbackground=BG_DEEP,
         )
         search_entry.pack(side="right", padx=8, pady=3)
         search_entry.bind("<Escape>", lambda e: self._data_search_var.set(""))
         tk.Label(
             toolbar, text="Search:", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", 10),
+            font=("Segoe UI", FS10),
         ).pack(side="right")
 
         self._data_tree = CTkTreeview(
@@ -1708,9 +1709,9 @@ class PluginPanel(ctk.CTkFrame):
 
             bg_id = c.create_rectangle(0, -200, 0, -200, fill="", outline="", state="hidden")
             name_id = c.create_text(0, -200, text="", anchor="w", fill="",
-                                    font=("Segoe UI", 11), state="hidden")
+                                    font=("Segoe UI", FS11), state="hidden")
             idx_id = c.create_text(0, -200, text="", anchor="center", fill="",
-                                   font=("Segoe UI", 10), state="hidden")
+                                   font=("Segoe UI", FS10), state="hidden")
             warn_id: int | None = None
             if self._warning_icon:
                 warn_id = c.create_image(0, -200, image=self._warning_icon,
@@ -1728,7 +1729,7 @@ class PluginPanel(ctk.CTkFrame):
             )
             cb_mark = c.create_text(
                 0, -200, text="✓", anchor="center", fill=ACCENT,
-                font=("Segoe UI", 12, "bold"), state="hidden",
+                font=("Segoe UI", FS12, "bold"), state="hidden",
                 tags=(cb_tag, "pcb"),
             )
             self._pool_check_rects.append(cb_rect)
@@ -1759,7 +1760,7 @@ class PluginPanel(ctk.CTkFrame):
             else:
                 lk_mark = c.create_text(
                     0, -200, text="🔒", anchor="center", fill=TEXT_MAIN,
-                    font=("Segoe UI", 9), state="hidden",
+                    font=("Segoe UI", FS9), state="hidden",
                     tags=(lk_tag, "plk"),
                 )
             self._pool_lock_rects.append(lk_rect)
@@ -1948,7 +1949,7 @@ class PluginPanel(ctk.CTkFrame):
             anchor = "w" if i == 1 else "center"
             lbl = tk.Label(
                 self._pheader, text=title, anchor=anchor,
-                font=("Segoe UI", 11, "bold"), fg=TEXT_SEP, bg=BG_HEADER,
+                font=("Segoe UI", FS11, "bold"), fg=TEXT_SEP, bg=BG_HEADER,
             )
             lbl.place(x=col_x[i], y=0, width=cw, height=28)
             self._pheader_labels.append(lbl)
@@ -2263,7 +2264,7 @@ class PluginPanel(ctk.CTkFrame):
         lbl = tk.Label(
             tw, text=text, justify="left",
             bg="#1a1a2e", fg="#ff6b6b",
-            font=("Segoe UI", 10), padx=8, pady=4,
+            font=("Segoe UI", FS10), padx=8, pady=4,
             wraplength=350,
         )
         lbl.pack()
@@ -2546,7 +2547,7 @@ class PluginPanel(ctk.CTkFrame):
             btn = tk.Label(
                 inner, text=label, anchor="w",
                 bg=BG_PANEL, fg=TEXT_MAIN,
-                font=("Segoe UI", 11),
+                font=("Segoe UI", FS11),
                 padx=12, pady=5, cursor="hand2",
             )
             btn.pack(fill="x")
