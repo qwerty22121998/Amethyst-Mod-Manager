@@ -28,19 +28,14 @@ from gui.theme import (
     BG_SEP,
     BG_SELECT,
     BORDER,
-    FONT_BOLD,
-    FONT_HEADER,
-    FONT_MONO,
-    FONT_NORMAL,
-    FONT_SMALL,
     TEXT_DIM,
     TEXT_MAIN,
     TEXT_SEP,
     plugin_mod,
     _ICONS_DIR,
     load_icon as _load_icon,
-    FS9, FS10, FS11, FS12, FS13, FS16,
 )
+import gui.theme as _theme
 from gui.game_helpers import _GAMES, _vanilla_plugins_for_game
 from gui.dialogs import _PriorityDialog, _ExeConfigDialog, _VRAMrPresetDialog
 from gui.install_mod import install_mod_from_archive
@@ -187,7 +182,7 @@ class PluginPanel(ctk.CTkFrame):
         self._exe_paths: list[Path] = []
         self._exe_menu = ctk.CTkOptionMenu(
             exe_bar, values=["(no executables)"], variable=self._exe_var,
-            width=175, font=FONT_SMALL,
+            width=175, font=_theme.FONT_SMALL,
             fg_color=BG_PANEL, button_color=ACCENT, button_hover_color=ACCENT_HOV,
             dropdown_fg_color=BG_PANEL, text_color=TEXT_MAIN,
             command=self._on_exe_selected,
@@ -195,7 +190,7 @@ class PluginPanel(ctk.CTkFrame):
         self._exe_menu.pack(side="left", padx=(8, 4), pady=6)
 
         ctk.CTkButton(
-            exe_bar, text="▶ Run EXE", width=90, height=28, font=FONT_SMALL,
+            exe_bar, text="▶ Run EXE", width=90, height=28, font=_theme.FONT_SMALL,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_run_exe,
         ).pack(side="left", padx=4, pady=6)
@@ -203,7 +198,7 @@ class PluginPanel(ctk.CTkFrame):
         self._exe_args_var = tk.StringVar(value="")
 
         ctk.CTkButton(
-            exe_bar, text="⚙", width=30, height=30, font=FONT_SMALL,
+            exe_bar, text="⚙", width=30, height=30, font=_theme.FONT_SMALL,
             fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_configure_exe,
         ).pack(side="left", padx=4, pady=6)
@@ -211,7 +206,7 @@ class PluginPanel(ctk.CTkFrame):
         refresh_icon = _load_icon("refresh.png", size=(16, 16))
         ctk.CTkButton(
             exe_bar, text="" if refresh_icon else "↺", image=refresh_icon,  
-            width=30, height=30, font=FONT_SMALL,
+            width=30, height=30, font=_theme.FONT_SMALL,
             fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self.refresh_exe_list,
         ).pack(side="left", padx=4, pady=6)
@@ -243,7 +238,7 @@ class PluginPanel(ctk.CTkFrame):
             tab.grid_columnconfigure(0, weight=1)
             ctk.CTkLabel(
                 tab, text=f"[ {name} — Coming Soon ]",
-                font=FONT_NORMAL, text_color=TEXT_DIM
+                font=_theme.FONT_NORMAL, text_color=TEXT_DIM
             ).grid(row=0, column=0)
 
     # ------------------------------------------------------------------
@@ -996,7 +991,7 @@ class PluginPanel(ctk.CTkFrame):
         tk.Button(
             toolbar, text="↺ Refresh",
             bg=ACCENT, fg=TEXT_MAIN, activebackground=ACCENT_HOV,
-            relief="flat", font=("Segoe UI", FS10),
+            relief="flat", font=("Segoe UI", _theme.FS10),
             bd=0, cursor="hand2", highlightthickness=0,
             command=self._refresh_data_tab,
         ).pack(side="left", padx=8, pady=2)
@@ -1006,14 +1001,14 @@ class PluginPanel(ctk.CTkFrame):
         search_entry = tk.Entry(
             toolbar, textvariable=self._data_search_var,
             bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", FS10), width=30,
+            relief="flat", font=("Segoe UI", _theme.FS10), width=30,
             highlightthickness=0, highlightbackground=BG_DEEP,
         )
         search_entry.pack(side="right", padx=8, pady=3)
         search_entry.bind("<Escape>", lambda e: self._data_search_var.set(""))
         tk.Label(
             toolbar, text="Search:", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", FS10),
+            font=("Segoe UI", _theme.FS10),
         ).pack(side="right")
 
         self._data_tree = CTkTreeview(
@@ -1691,7 +1686,7 @@ class PluginPanel(ctk.CTkFrame):
         ctk.CTkButton(
             toolbar, text="Sort Plugins", width=110, height=26,
             fg_color="#2e6b30", hover_color="#3a8a3d",
-            text_color=TEXT_MAIN, font=FONT_SMALL,
+            text_color=TEXT_MAIN, font=_theme.FONT_SMALL,
             command=self._sort_plugins_loot,
         ).pack(side="left", padx=8, pady=5)
 
@@ -1709,9 +1704,9 @@ class PluginPanel(ctk.CTkFrame):
 
             bg_id = c.create_rectangle(0, -200, 0, -200, fill="", outline="", state="hidden")
             name_id = c.create_text(0, -200, text="", anchor="w", fill="",
-                                    font=("Segoe UI", FS11), state="hidden")
+                                    font=("Segoe UI", _theme.FS11), state="hidden")
             idx_id = c.create_text(0, -200, text="", anchor="center", fill="",
-                                   font=("Segoe UI", FS10), state="hidden")
+                                   font=("Segoe UI", _theme.FS10), state="hidden")
             warn_id: int | None = None
             if self._warning_icon:
                 warn_id = c.create_image(0, -200, image=self._warning_icon,
@@ -1729,7 +1724,7 @@ class PluginPanel(ctk.CTkFrame):
             )
             cb_mark = c.create_text(
                 0, -200, text="✓", anchor="center", fill=ACCENT,
-                font=("Segoe UI", FS12, "bold"), state="hidden",
+                font=("Segoe UI", _theme.FS12, "bold"), state="hidden",
                 tags=(cb_tag, "pcb"),
             )
             self._pool_check_rects.append(cb_rect)
@@ -1760,7 +1755,7 @@ class PluginPanel(ctk.CTkFrame):
             else:
                 lk_mark = c.create_text(
                     0, -200, text="🔒", anchor="center", fill=TEXT_MAIN,
-                    font=("Segoe UI", FS9), state="hidden",
+                    font=("Segoe UI", _theme.FS9), state="hidden",
                     tags=(lk_tag, "plk"),
                 )
             self._pool_lock_rects.append(lk_rect)
@@ -1949,7 +1944,7 @@ class PluginPanel(ctk.CTkFrame):
             anchor = "w" if i == 1 else "center"
             lbl = tk.Label(
                 self._pheader, text=title, anchor=anchor,
-                font=("Segoe UI", FS11, "bold"), fg=TEXT_SEP, bg=BG_HEADER,
+                font=("Segoe UI", _theme.FS11, "bold"), fg=TEXT_SEP, bg=BG_HEADER,
             )
             lbl.place(x=col_x[i], y=0, width=cw, height=28)
             self._pheader_labels.append(lbl)
@@ -2264,7 +2259,7 @@ class PluginPanel(ctk.CTkFrame):
         lbl = tk.Label(
             tw, text=text, justify="left",
             bg="#1a1a2e", fg="#ff6b6b",
-            font=("Segoe UI", FS10), padx=8, pady=4,
+            font=("Segoe UI", _theme.FS10), padx=8, pady=4,
             wraplength=350,
         )
         lbl.pack()
@@ -2547,7 +2542,7 @@ class PluginPanel(ctk.CTkFrame):
             btn = tk.Label(
                 inner, text=label, anchor="w",
                 bg=BG_PANEL, fg=TEXT_MAIN,
-                font=("Segoe UI", FS11),
+                font=("Segoe UI", _theme.FS11),
                 padx=12, pady=5, cursor="hand2",
             )
             btn.pack(fill="x")
