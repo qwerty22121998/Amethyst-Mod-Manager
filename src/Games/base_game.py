@@ -192,6 +192,27 @@ class BaseGame(ABC):
         return False
 
     @property
+    def mod_staging_requires_subdir(self) -> bool:
+        """
+        When True, each mod's staging folder must contain a named subdirectory
+        at its top level — loose files must NOT sit at the staging folder root.
+
+        This applies to games like Stardew Valley where the mod loader requires
+        mods to live in <game>/Mods/<ModName>/.  The staging structure must
+        therefore be mods/<StagingName>/<ModName>/... so the filemap records
+        <ModName>/... and deploys to Mods/<ModName>/....
+
+        A common mistake is copying an existing Mods/<ModName>/ folder directly
+        into staging (resulting in mods/<ModName>/manifest.json at root).  When
+        this flag is True the mod list panel automatically wraps the contents of
+        any flat staging folder inside a subdirectory named after the folder
+        before building the filemap, preventing silent mis-deployment.
+
+        Return False (the default) to disable this behaviour.
+        """
+        return False
+
+    @property
     def steam_id(self) -> str:
         """
         Steam App ID for this game, e.g. '377160' for Fallout 4.

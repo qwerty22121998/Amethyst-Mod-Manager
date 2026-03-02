@@ -30,6 +30,7 @@ so build_filemap() can skip the normalize step entirely.
 from __future__ import annotations
 
 import os
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -152,6 +153,58 @@ def _scan_dir(
         except OSError:
             pass
     return source_name, result, root_result
+
+
+def fix_flat_staging_folders(staging_root: Path) -> list[str]:
+    """Wrap any flat mod staging folders so files are one level deeper.
+
+    Some games (e.g. Stardew Valley) require mods to live inside a named
+    subdirectory: Mods/<ModName>/<files>.  The staging folder should therefore
+    look like mods/<StagingName>/<ModName>/<files>.
+
+    A common mistake is copying Mods/<ModName>/ directly into staging, giving
+    mods/<ModName>/<files> — the <ModName> wrapper is missing and deploy puts
+    the files straight into Mods/ instead of Mods/<ModName>/.
+
+    This function detects staging folders whose contents are entirely loose
+    files (no subdirectory at all) and moves those files into a new subfolder
+    named after the staging folder itself.
+
+    Only folders that contain *exclusively* loose files (no existing subdir) are
+    touched, so mods that are already correctly structured are never modified.
+
+    Returns a list of staging folder names that were restructured.
+    """
+    fixed: list[str] = []
+    if not staging_root.is_dir():
+        return fixed
+
+    for mod_dir in staging_root.iterdir():
+        if not mod_dir.is_dir():
+            continue
+
+        children = list(mod_dir.iterdir())
+        if not children:
+            continue
+
+        # For games that require a subdir wrapper (e.g. Stardew Valley / SMAPI),
+        # manifest.json at the staging root is the definitive signal that the
+        # mod was copied flat and needs wrapping — regardless of whether there
+        # are also subdirectories (assets/, i18n/, etc.) present.
+        has_manifest = any(c.name.lower() == "manifest.json"
+                           for c in children if c.is_file())
+        if not has_manifest:
+            continue
+
+        # Move everything (files and subdirs) into a new subfolder named after
+        # the staging folder so the mod loader finds <ModName>/manifest.json.
+        sub = mod_dir / mod_dir.name
+        sub.mkdir(exist_ok=True)
+        for child in children:
+            shutil.move(str(child), str(sub / child.name))
+        fixed.append(mod_dir.name)
+
+    return fixed
 
 
 def _pick_canonical_segment(a: str, b: str) -> str:

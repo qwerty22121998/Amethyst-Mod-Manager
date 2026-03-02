@@ -65,6 +65,10 @@ class StardewValley(BaseGame):
         return False
 
     @property
+    def mod_staging_requires_subdir(self) -> bool:
+        return True
+
+    @property
     def wizard_tools(self) -> list[WizardTool]:
         return [
             WizardTool(
