@@ -1574,9 +1574,11 @@ class ModListPanel(ctk.CTkFrame):
                 elif not skip:
                     base.append(i)
 
-        # Step 2: hide separators filter
+        # Step 2: hide separators filter (keep synthetic Overwrite/Root Folder rows)
         if self._filter_hide_separators:
-            base = [i for i in base if not self._entries[i].is_separator]
+            base = [i for i in base
+                    if not self._entries[i].is_separator
+                    or self._entries[i].name in (OVERWRITE_NAME, ROOT_FOLDER_NAME)]
 
         # Step 3: enabled/disabled filter
         # When showing only disabled (or only enabled), keep separators only if their
