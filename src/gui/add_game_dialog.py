@@ -325,14 +325,21 @@ class AddGameDialog(ctk.CTkToplevel):
         )
         self._add_btn.pack(side="right", padx=4, pady=10)
 
-        # "Remove Instance" — only visible when the game is already configured
+        # "Remove Instance" / "Clean Game Folder" — only visible when configured
         if self._game.is_configured():
             self._remove_btn = ctk.CTkButton(
                 btn_bar, text="Remove Instance", width=140, height=30,
                 font=FONT_BOLD, fg_color=RED_BTN, hover_color=RED_HOV,
                 text_color="white", command=self._on_remove
             )
-            self._remove_btn.pack(side="left", padx=12, pady=10)
+            self._remove_btn.pack(side="left", padx=(12, 4), pady=10)
+
+            self._clean_btn = ctk.CTkButton(
+                btn_bar, text="Clean Game Folder", width=150, height=30,
+                font=FONT_NORMAL, fg_color=RED_BTN, hover_color=RED_HOV,
+                text_color="white", command=self._on_clean_game_folder
+            )
+            self._clean_btn.pack(side="left", padx=(0, 4), pady=10)
 
     # ------------------------------------------------------------------
     # Steam scan (runs in background thread)
@@ -673,6 +680,45 @@ class AddGameDialog(ctk.CTkToplevel):
         self.grab_release()
         self.destroy()
 
+    def _on_clean_game_folder(self):
+        """Warn the user, then remove all hardlinked/symlinked files from the
+        game's data directory.  Safe to use when restore cannot run normally."""
+        game_path = self._game.get_game_path()
+        if not game_path:
+            return
+
+        # Find the directory that actually contains deployed files.
+        # Use get_mod_data_path() only when it points to a subdirectory of the
+        # game root (e.g. Bethesda/BepInEx Data/ folder).  For UE5 games that
+        # scatter files across multiple locations under the game root, scan the
+        # game root itself so nothing is missed.
+        target_dir = game_path
+        if hasattr(self._game, "get_mod_data_path"):
+            data_path = self._game.get_mod_data_path()
+            if data_path and data_path != game_path:
+                try:
+                    data_path.relative_to(game_path)  # confirms it's a subdir
+                    target_dir = data_path
+                except ValueError:
+                    pass  # not under game_path — fall back to game_path
+
+        if not target_dir or not target_dir.is_dir():
+            return
+
+        confirm = _CleanGameFolderDialog(self, self._game.name, target_dir)
+        self.wait_window(confirm)
+        if not confirm.confirmed:
+            return
+
+        from Utils.deploy import remove_deployed_files
+        removed = remove_deployed_files(target_dir)
+
+        # Brief status update on the dialog's status label
+        self._status_label.configure(
+            text=f"Clean complete — {removed} deployed file(s) removed.",
+            text_color=TEXT_OK,
+        )
+
     def _on_add(self):
         if self._found_path is None:
             return
@@ -757,6 +803,102 @@ class _RemoveConfirmDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             btn_bar, text="Remove", width=110, height=30, font=FONT_BOLD,
+            fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
+            command=self._confirm
+        ).pack(side="right", padx=4, pady=10)
+
+        self.after(100, self._make_modal)
+
+    def _make_modal(self):
+        try:
+            self.grab_set()
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _confirm(self):
+        self.confirmed = True
+        self.grab_release()
+        self.destroy()
+
+    def _cancel(self):
+        self.confirmed = False
+        self.grab_release()
+        self.destroy()
+
+
+# ---------------------------------------------------------------------------
+# Clean-game-folder confirmation dialog
+# ---------------------------------------------------------------------------
+
+class _CleanGameFolderDialog(ctk.CTkToplevel):
+    """Warn the user before removing all hardlinked/symlinked files from the
+    game directory.  This is a recovery tool — not part of the normal workflow."""
+
+    WIDTH  = 500
+    HEIGHT = 380
+
+    def __init__(self, parent, game_name: str, target_dir):
+        super().__init__(parent, fg_color=BG_DEEP)
+        self.title(f"Clean Game Folder — {game_name}")
+        self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.confirmed = False
+
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # Header
+        header = ctk.CTkFrame(self, fg_color=RED_BTN, corner_radius=0, height=40)
+        header.grid(row=0, column=0, sticky="ew")
+        header.grid_propagate(False)
+        ctk.CTkLabel(
+            header, text="Clean Game Folder",
+            font=FONT_BOLD, text_color="white", anchor="w"
+        ).pack(side="left", padx=12, pady=8)
+
+        # Body
+        body = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_rowconfigure(0, weight=1)
+
+        message = (
+            "This is an emergency recovery tool.\n\n"
+            "It will:\n"
+            "  1. Delete every hardlinked or symlinked file from the game folder "
+            "(mod-placed files), leaving vanilla files untouched.\n"
+            "  2. Rename any vanilla backup folder back to its original name "
+            "(e.g. Data_Core → Data).\n"
+            "  3. Remove empty directories left behind.\n\n"
+            f"Target folder:\n  {target_dir}\n\n"
+            "Only use this if the normal Restore button cannot run "
+            "(e.g. your profile was lost or deleted).  Continue?"
+        )
+
+        ctk.CTkLabel(
+            body, text=message,
+            font=FONT_NORMAL, text_color=TEXT_MAIN,
+            anchor="nw", justify="left", wraplength=self.WIDTH - 40
+        ).grid(row=0, column=0, sticky="nsew", padx=16, pady=16)
+
+        # Button bar
+        btn_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
+        btn_bar.grid(row=2, column=0, sticky="ew")
+        btn_bar.grid_propagate(False)
+        ctk.CTkFrame(btn_bar, fg_color=BORDER, height=1, corner_radius=0).pack(
+            side="top", fill="x"
+        )
+
+        ctk.CTkButton(
+            btn_bar, text="Cancel", width=100, height=30, font=FONT_NORMAL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._cancel
+        ).pack(side="right", padx=(4, 12), pady=10)
+
+        ctk.CTkButton(
+            btn_bar, text="Clean Folder", width=120, height=30, font=FONT_BOLD,
             fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
             command=self._confirm
         ).pack(side="right", padx=4, pady=10)

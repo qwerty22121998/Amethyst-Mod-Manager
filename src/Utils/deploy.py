@@ -905,6 +905,124 @@ def _resolve_nocase(root: Path, rel_str: str,
 
 
 # ---------------------------------------------------------------------------
+# Emergency cleanup — remove hardlinked / symlinked mod files
+# ---------------------------------------------------------------------------
+
+def remove_deployed_files(game_dir: Path, log_fn=None) -> int:
+    """Remove all hardlinked and symlinked files from *game_dir* recursively,
+    then rename any ``*_Core`` vanilla-backup directories back to their
+    original names and prune empty directories.
+
+    This is an emergency recovery tool for situations where the mod manager's
+    own restore cannot run (e.g. the profile was deleted or the modlist is
+    missing).  It works by detecting files that were placed by the deploy step:
+
+    * **Symlinks** — trivially identifiable; always removed.
+    * **Hardlinks** — identified by ``st_nlink > 1``: the file has more than
+      one directory entry pointing at it, meaning the mod staging copy and the
+      game-folder copy share the same inode.  A vanilla file that was never
+      hardlinked will have ``st_nlink == 1``.
+
+    After removing deployed files, any sibling ``*_Core`` directory (e.g.
+    ``Data_Core/``) is renamed back to its original name (``Data/``), merging
+    into any remaining content.  The same rename pass is also applied to
+    ``*_Core`` subdirectories found directly inside *game_dir* (covers UE5
+    games where the game root itself is scanned).
+
+    Empty sub-directories left behind after removal are pruned.
+
+    Returns the number of files removed.
+    """
+    def _log(msg: str) -> None:
+        if log_fn:
+            log_fn(msg)
+
+    removed = 0
+    if not game_dir.is_dir():
+        _log(f"Directory not found: {game_dir}")
+        return 0
+
+    # --- Step 1: remove deployed files ---
+    for root, dirs, files in os.walk(game_dir, topdown=False):
+        root_path = Path(root)
+        for fname in files:
+            fpath = root_path / fname
+            try:
+                if fpath.is_symlink():
+                    fpath.unlink()
+                    _log(f"Removed symlink: {fpath}")
+                    removed += 1
+                elif fpath.stat().st_nlink > 1:
+                    fpath.unlink()
+                    _log(f"Removed hardlink: {fpath}")
+                    removed += 1
+            except OSError as exc:
+                _log(f"Could not remove {fpath}: {exc}")
+        # Prune empty directories (skip the root itself)
+        if root_path != game_dir:
+            try:
+                root_path.rmdir()   # only succeeds if empty
+            except OSError:
+                pass
+
+    _log(f"Removed {removed} deployed file(s) from {game_dir}")
+
+    # --- Step 2: rename *_Core backup dirs back to their original names ---
+    # Collect candidate directories to check:
+    #   • Siblings of game_dir whose name ends with "_Core" and whose stripped
+    #     name matches game_dir's name (e.g. Data_Core → Data).
+    #   • Direct children of game_dir ending with "_Core" (UE5 / game-root scan).
+    def _rename_core_dirs(search_parent: Path) -> None:
+        try:
+            entries = list(search_parent.iterdir())
+        except OSError:
+            return
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            name = entry.name
+            if not name.endswith("_Core"):
+                continue
+            original_name = name[: -len("_Core")]
+            target = entry.parent / original_name
+            if target.exists():
+                # Merge: move contents of core dir into target, then remove core dir
+                for src in list(entry.rglob("*")):
+                    if not src.is_file():
+                        continue
+                    rel = src.relative_to(entry)
+                    dst = target / rel
+                    if not dst.exists():
+                        dst.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(src), str(dst))
+                        _log(f"Restored vanilla file: {dst}")
+                shutil.rmtree(entry, ignore_errors=True)
+                _log(f"Merged {entry.name}/ into {original_name}/")
+            else:
+                try:
+                    entry.rename(target)
+                    _log(f"Renamed {entry.name}/ → {original_name}/")
+                except OSError as exc:
+                    _log(f"Could not rename {entry}: {exc}")
+
+    # Siblings (Bethesda / BepInEx style: Data_Core/ next to Data/)
+    _rename_core_dirs(game_dir.parent)
+    # Children (UE5 style: game root contains subdirs that may have _Core siblings)
+    _rename_core_dirs(game_dir)
+
+    # --- Step 3: prune empty directories left inside game_dir ---
+    for root, dirs, files in os.walk(game_dir, topdown=False):
+        root_path = Path(root)
+        if root_path != game_dir and not files and not dirs:
+            try:
+                root_path.rmdir()
+            except OSError:
+                pass
+
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # Wine / Proton prefix helpers
 # ---------------------------------------------------------------------------
 
