@@ -36,6 +36,7 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Fallout New Vegas
 - Starfield
 - Oblivion
+- Oblivion Remastered
 - Baldur's Gate 3
 - Witcher 3
 - Cyberpunk 2077
@@ -100,6 +101,7 @@ As this application is fairly new, the following needs testing:
 - Support on multiple Linux distros
 - Verification that all added games work
 - Baulders Gate 3 testing - The Mod manager can build modsettings.lsx but further testing is needed to know if it's working fully
+- Oblivion Remastered - Uses a special ue5 handler that auto sorts mods into the correct locations. Some mods could be applied incorrectly. from a test of 10-20 mods only 1 caused trouble but was easily fixed with the set deployment paths right click option
 
 ## VRAMr + BENDr + ParallaxR
 
