@@ -73,17 +73,29 @@ def _read_prefix_runner(compat_data: Path) -> str:
         return ""
 
 
+_truncate_cache: dict[tuple, str] = {}
+
 def _truncate_plugin_name(widget: tk.Widget, text: str, font: tuple, max_px: int) -> str:
-    """Return *text* truncated with '…' so it fits within *max_px* pixels."""
+    """Return *text* truncated with '…' so it fits within *max_px* pixels.
+    Results are cached by (text, font, max_px) to avoid repeated Tcl font measure calls."""
+    key = (text, font, max_px)
+    cached = _truncate_cache.get(key)
+    if cached is not None:
+        return cached
     if max_px <= 0:
+        _truncate_cache[key] = ""
         return ""
-    if widget.tk.call("font", "measure", font, text) <= max_px:
+    measure = widget.tk.call("font", "measure", font, text)
+    if measure <= max_px:
+        _truncate_cache[key] = text
         return text
     ellipsis = "…"
     ellipsis_w = widget.tk.call("font", "measure", font, ellipsis)
     while text and widget.tk.call("font", "measure", font, text) + ellipsis_w > max_px:
         text = text[:-1]
-    return text + ellipsis
+    result = text + ellipsis
+    _truncate_cache[key] = result
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -1202,15 +1214,16 @@ class PluginPanel(ctk.CTkFrame):
         self._log(f"Tracked Mods: Installing '{mod_name}'...")
 
         mod_panel = getattr(app, "_mod_panel", None)
+        cancel_event_tracked = mod_panel.get_download_cancel_event() if mod_panel else None
         if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}")
+            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_event_tracked)
         log_fn = self._log
 
         def _worker():
             downloader = getattr(app, "_nexus_downloader", None)
             if downloader is None:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
                     log_fn("Tracked Mods: Downloader not initialised."),
                 ))
                 return
@@ -1227,7 +1240,7 @@ class PluginPanel(ctk.CTkFrame):
                 files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
                 def _fallback():
                     if mod_panel:
-                        mod_panel.hide_download_progress()
+                        mod_panel.hide_download_progress(cancel=cancel_event_tracked)
                     log_fn("Tracked Mods: Premium required for direct download.")
                     log_fn(f"Tracked Mods: Opening files page — click \"Download with Mod Manager\" there.")
                     log_fn(f"Tracked Mods: {files_url}")
@@ -1254,14 +1267,14 @@ class PluginPanel(ctk.CTkFrame):
                                     key=lambda f: f.uploaded_timestamp)
             except Exception as exc:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
                     log_fn(f"Tracked Mods: Could not fetch file list — {exc}"),
                 ))
                 return
 
             if file_info is None:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
                     log_fn(f"Tracked Mods: No files found for '{mod_name}'."),
                 ))
                 return
@@ -1272,16 +1285,17 @@ class PluginPanel(ctk.CTkFrame):
                 file_id=file_info.file_id,
                 progress_cb=lambda cur, total: app.after(
                     0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t)
+                        mod_panel.update_download_progress(c, t, cancel=cancel_event_tracked)
                         if mod_panel else None
                     )
                 ),
+                cancel=cancel_event_tracked,
             )
 
             if result.success and result.file_path:
                 def _install():
                     if mod_panel:
-                        mod_panel.hide_download_progress()
+                        mod_panel.hide_download_progress(cancel=cancel_event_tracked)
                     log_fn(f"Tracked Mods: Installing '{mod_name}'...")
                     install_mod_from_archive(
                         str(result.file_path), app, log_fn, game, mod_panel)
@@ -1313,7 +1327,7 @@ class PluginPanel(ctk.CTkFrame):
                 app.after(0, _install)
             else:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
                     log_fn(f"Tracked Mods: Download failed — {result.error}"),
                 ))
 
@@ -1371,15 +1385,16 @@ class PluginPanel(ctk.CTkFrame):
         self._log(f"Endorsed Mods: Installing '{mod_name}'...")
 
         mod_panel = getattr(app, "_mod_panel", None)
+        cancel_event_endorsed = mod_panel.get_download_cancel_event() if mod_panel else None
         if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}")
+            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_event_endorsed)
         log_fn = self._log
 
         def _worker():
             downloader = getattr(app, "_nexus_downloader", None)
             if downloader is None:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
                     log_fn("Endorsed Mods: Downloader not initialised."),
                 ))
                 return
@@ -1396,7 +1411,7 @@ class PluginPanel(ctk.CTkFrame):
                 files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
                 def _fallback():
                     if mod_panel:
-                        mod_panel.hide_download_progress()
+                        mod_panel.hide_download_progress(cancel=cancel_event_endorsed)
                     log_fn("Endorsed Mods: Premium required for direct download.")
                     log_fn(f"Endorsed Mods: Opening files page — click \"Download with Mod Manager\" there.")
                     log_fn(f"Endorsed Mods: {files_url}")
@@ -1423,14 +1438,14 @@ class PluginPanel(ctk.CTkFrame):
                                     key=lambda f: f.uploaded_timestamp)
             except Exception as exc:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
                     log_fn(f"Endorsed Mods: Could not fetch file list — {exc}"),
                 ))
                 return
 
             if file_info is None:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
                     log_fn(f"Endorsed Mods: No files found for '{mod_name}'."),
                 ))
                 return
@@ -1441,16 +1456,17 @@ class PluginPanel(ctk.CTkFrame):
                 file_id=file_info.file_id,
                 progress_cb=lambda cur, total: app.after(
                     0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t)
+                        mod_panel.update_download_progress(c, t, cancel=cancel_event_endorsed)
                         if mod_panel else None
                     )
                 ),
+                cancel=cancel_event_endorsed,
             )
 
             if result.success and result.file_path:
                 def _install():
                     if mod_panel:
-                        mod_panel.hide_download_progress()
+                        mod_panel.hide_download_progress(cancel=cancel_event_endorsed)
                     log_fn(f"Endorsed Mods: Installing '{mod_name}'...")
                     install_mod_from_archive(
                         str(result.file_path), app, log_fn, game, mod_panel)
@@ -1482,7 +1498,7 @@ class PluginPanel(ctk.CTkFrame):
                 app.after(0, _install)
             else:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
                     log_fn(f"Endorsed Mods: Download failed — {result.error}"),
                 ))
 
@@ -1534,15 +1550,16 @@ class PluginPanel(ctk.CTkFrame):
         self._log(f"Browse: Installing '{mod_name}'...")
 
         mod_panel = getattr(app, "_mod_panel", None)
+        cancel_event_browse = mod_panel.get_download_cancel_event() if mod_panel else None
         if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}")
+            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_event_browse)
         log_fn = self._log
 
         def _worker():
             downloader = getattr(app, "_nexus_downloader", None)
             if downloader is None:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
                     log_fn("Browse: Downloader not initialised."),
                 ))
                 return
@@ -1558,7 +1575,7 @@ class PluginPanel(ctk.CTkFrame):
                 files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
                 def _fallback():
                     if mod_panel:
-                        mod_panel.hide_download_progress()
+                        mod_panel.hide_download_progress(cancel=cancel_event_browse)
                     log_fn("Browse: Premium required for direct download.")
                     log_fn(f'Browse: Opening files page — click "Download with Mod Manager" there.')
                     log_fn(f"Browse: {files_url}")
@@ -1584,14 +1601,14 @@ class PluginPanel(ctk.CTkFrame):
                                     key=lambda f: f.uploaded_timestamp)
             except Exception as exc:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
                     log_fn(f"Browse: Could not fetch file list — {exc}"),
                 ))
                 return
 
             if file_info is None:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
                     log_fn(f"Browse: No files found for '{mod_name}'."),
                 ))
                 return
@@ -1602,16 +1619,17 @@ class PluginPanel(ctk.CTkFrame):
                 file_id=file_info.file_id,
                 progress_cb=lambda cur, total: app.after(
                     0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t)
+                        mod_panel.update_download_progress(c, t, cancel=cancel_event_browse)
                         if mod_panel else None
                     )
                 ),
+                cancel=cancel_event_browse,
             )
 
             if result.success and result.file_path:
                 def _install():
                     if mod_panel:
-                        mod_panel.hide_download_progress()
+                        mod_panel.hide_download_progress(cancel=cancel_event_browse)
                     log_fn(f"Browse: Installing '{mod_name}'...")
                     install_mod_from_archive(
                         str(result.file_path), app, log_fn, game, mod_panel)
@@ -1642,7 +1660,7 @@ class PluginPanel(ctk.CTkFrame):
                 app.after(0, _install)
             else:
                 app.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
                     log_fn(f"Browse: Download failed — {result.error}"),
                 ))
 
@@ -2364,6 +2382,7 @@ class PluginPanel(ctk.CTkFrame):
         self._pcanvas_w = event.width
         self._layout_plugin_cols(event.width)
         self._update_plugin_header(event.width)
+        _truncate_cache.clear()
         self._schedule_predraw()
 
     def _on_pscroll_up(self, _event):

@@ -7,6 +7,7 @@ import tkinter as tk
 import customtkinter as ctk
 
 from Utils.config_paths import get_config_dir
+from gui.ctk_components import CTkProgressPopup
 from gui.theme import (
     BG_DEEP,
     BG_HEADER,
@@ -52,17 +53,8 @@ class StatusBar(ctk.CTkFrame):
         )
         self._toggle_btn.pack(side="right", padx=6, pady=2)
 
-        # Progress bar + label (hidden until a deploy is in progress)
-        self._progress_label = ctk.CTkLabel(
-            label_bar, text="", font=FONT_SMALL, text_color=TEXT_DIM, width=120, anchor="e"
-        )
-        self._progress_bar = ctk.CTkProgressBar(
-            label_bar, width=180, height=10,
-            fg_color=BG_HEADER, progress_color="#7aa2f7", corner_radius=4
-        )
-        self._progress_bar.set(0)
-        self._progress_visible = False
-        self._progress_phase = ""
+        self._progress_popup: CTkProgressPopup | None = None
+        self._progress_bind_id: str | None = None
 
         self._textbox = ctk.CTkTextbox(
             self, font=FONT_MONO, fg_color=BG_DEEP,
@@ -87,32 +79,48 @@ class StatusBar(ctk.CTkFrame):
         if not self._visible:
             self._toggle_log()
 
+    def _reposition_popup(self, *_) -> None:
+        """Place the progress popup in the bottom-right corner of the root window."""
+        p = self._progress_popup
+        if p is None or not p.winfo_exists():
+            return
+        root = self.winfo_toplevel()
+        x = root.winfo_width() - p.width - 20
+        y = root.winfo_height() - p.height - 20
+        p.place(x=x, y=y)
+
     def set_progress(self, done: int, total: int, phase: str | None = None) -> None:
-        """Show / update the progress bar.  Call from main thread only.
-        phase: optional label (e.g. 'Unpacking', 'Repacking'); kept until next set_progress with a different phase.
-        """
-        if not self._progress_visible:
-            # Pack bar first (rightmost after toggle btn), then label to its left.
-            self._progress_bar.pack(side="right", padx=(0, 8))
-            self._progress_label.pack(side="right", padx=(0, 4))
-            self._progress_visible = True
-        if phase is not None:
-            self._progress_phase = phase
-        phase_str = getattr(self, "_progress_phase", "") or ""
-        label = f"{phase_str}: {done} / {total}" if phase_str else f"{done} / {total}"
+        """Show / update the deploy progress popup. Call from main thread only."""
+        root = self.winfo_toplevel()
+        if self._progress_popup is None or not self._progress_popup.winfo_exists():
+            self._progress_popup = CTkProgressPopup(
+                root,
+                title="Deploying",
+                label=phase or "Working...",
+                message=f"{done} / {total}",
+            )
+            # Silence the popup's own <Configure> handler (calls update_idletasks twice per event)
+            self._progress_popup.update_position = lambda *_: None
+            self._reposition_popup()
+            self._progress_bind_id = root.bind("<Configure>", self._reposition_popup, add="+")
         frac = done / total if total > 0 else 0
-        self._progress_bar.set(frac)
-        self._progress_label.configure(text=label)
+        self._progress_popup.update_progress(frac)
+        self._progress_popup.update_message(f"{done} / {total}")
+        if phase is not None:
+            self._progress_popup.update_label(phase)
 
     def clear_progress(self) -> None:
-        """Hide the progress bar when the operation finishes."""
-        if self._progress_visible:
-            self._progress_bar.pack_forget()
-            self._progress_label.pack_forget()
-            self._progress_visible = False
-        self._progress_bar.set(0)
-        self._progress_label.configure(text="")
-        self._progress_phase = ""
+        """Close the deploy progress popup."""
+        bid = getattr(self, "_progress_bind_id", None)
+        if bid is not None:
+            try:
+                self.winfo_toplevel().unbind("<Configure>", bid)
+            except Exception:
+                pass
+            self._progress_bind_id = None
+        if self._progress_popup is not None and self._progress_popup.winfo_exists():
+            self._progress_popup.destroy()
+        self._progress_popup = None
 
     def log(self, message: str):
         timestamp = datetime.now().strftime("%H:%M:%S")

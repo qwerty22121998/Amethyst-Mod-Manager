@@ -43,7 +43,7 @@ from gui.theme import (
     load_icon as _load_icon,
 )
 import gui.theme as _theme
-from gui.ctk_components import CTkPopupMenu
+from gui.ctk_components import CTkPopupMenu, CTkProgressPopup
 from gui.game_helpers import (
     _GAMES,
     _load_games,
@@ -500,55 +500,134 @@ class ModListPanel(ctk.CTkFrame):
             "break"
         )[-1])
 
+    # ------------------------------------------------------------------
+    # Download progress popups (one per concurrent download, stacked)
+    # ------------------------------------------------------------------
+    # Each active download is tracked as a _DlSlot: (popup, cancel_event, bind_id).
+    # Popups stack upward from the bottom-right corner.
+
+    class _DlSlot:
+        __slots__ = ("popup", "cancel", "bind_id")
+        def __init__(self, popup: "CTkProgressPopup", cancel: threading.Event, bind_id: str):
+            self.popup = popup
+            self.cancel = cancel
+            self.bind_id = bind_id
+
     def _build_download_bar(self):
-        """Nexus download progress bar — hidden by default."""
-        self._dl_bar = ctk.CTkFrame(self, fg_color=BG_DEEP, corner_radius=0, height=36)
-        # Don't grid it yet — shown only during downloads
-        self._dl_bar.grid_propagate(False)
+        """Initialise the download-popup slot list."""
+        self._dl_slots: list["ModListPanel._DlSlot"] = []
+        self._dl_cancel_locked: bool = False
 
-        self._dl_label = ctk.CTkLabel(
-            self._dl_bar, text="", font=_theme.FONT_SMALL, text_color=TEXT_MAIN, anchor="w",
-        )
-        self._dl_label.pack(side="left", padx=(8, 6), pady=4)
+    def _reposition_all_dl_popups(self, *_) -> None:
+        """Stack all live download popups upward from the bottom-right corner."""
+        root = self.winfo_toplevel()
+        gap = 8
+        rw = root.winfo_width()
+        rh = root.winfo_height()
+        y = rh - 20
+        for slot in self._dl_slots:
+            p = slot.popup
+            if not p.winfo_exists():
+                continue
+            y -= p.height
+            p.place(x=rw - p.width - 20, y=y)
+            y -= gap
 
-        self._dl_progress = ctk.CTkProgressBar(
-            self._dl_bar, width=200, height=14,
-            fg_color=BG_HEADER, progress_color=ACCENT,
-            corner_radius=4,
-        )
-        self._dl_progress.set(0)
-        self._dl_progress.pack(side="left", fill="x", expand=True, padx=(0, 6), pady=4)
+    def get_download_cancel_event(self) -> threading.Event:
+        """Create a new download slot with a popup and cancel event.
+        Returns the cancel event; pass it to the downloader."""
+        root = self.winfo_toplevel()
+        cancel = threading.Event()
+        popup = CTkProgressPopup(root, title="Downloading", label="Starting...", message="0%")
+        # CTkProgressPopup binds its own update_position to <Configure>, which calls
+        # update_idletasks() twice on every event — expensive during scroll. Silence it.
+        popup.update_position = lambda *_: None
+        bind_id = root.bind("<Configure>", self._reposition_all_dl_popups, add="+")
+        slot = self._DlSlot(popup, cancel, bind_id)
+        self._dl_slots.append(slot)
+        # Wire this popup's X button to cancel just this slot
+        popup.cancel_btn.configure(command=lambda s=slot: self._cancel_dl_slot(s))
+        self._reposition_all_dl_popups()
+        return cancel
 
-        self._dl_pct = ctk.CTkLabel(
-            self._dl_bar, text="0%", font=_theme.FONT_SMALL, text_color=TEXT_DIM,
-            width=48, anchor="e",
-        )
-        self._dl_pct.pack(side="right", padx=(0, 8), pady=4)
+    def _cancel_dl_slot(self, slot: "_DlSlot") -> None:
+        if self._dl_cancel_locked:
+            return
+        slot.cancel.set()
+        self._close_dl_slot(slot, user_cancel=True)
 
-    def show_download_progress(self, label: str = "Downloading..."):
-        """Show the download progress bar."""
-        self._dl_label.configure(text=label)
-        self._dl_progress.set(0)
-        self._dl_pct.configure(text="0%")
-        self._dl_bar.grid(row=4, column=0, sticky="ew")
+    def _close_dl_slot(self, slot: "_DlSlot", user_cancel: bool = False) -> None:
+        try:
+            self.winfo_toplevel().unbind("<Configure>", slot.bind_id)
+        except Exception:
+            pass
+        if slot.popup.winfo_exists():
+            slot.popup.destroy()
+        try:
+            self._dl_slots.remove(slot)
+        except ValueError:
+            pass
 
-    def update_download_progress(self, current: int, total: int, label: str = ""):
-        """Update the download progress bar."""
+        if user_cancel and self._dl_slots:
+            # Hide surviving popups and defer reposition so that the mouse
+            # button is released before any popup appears under the cursor.
+            for s in self._dl_slots:
+                if s.popup.winfo_exists():
+                    s.popup.place_forget()
+            self._dl_cancel_locked = True
+            self.after(300, self._deferred_reshow)
+        else:
+            self._reposition_all_dl_popups()
+
+    def _deferred_reshow(self) -> None:
+        self._dl_cancel_locked = False
+        self._reposition_all_dl_popups()
+
+    def _slot_for_cancel(self, cancel: threading.Event) -> "_DlSlot | None":
+        for slot in self._dl_slots:
+            if slot.cancel is cancel:
+                return slot
+        return None
+
+    def show_download_progress(self, label: str = "Downloading...", cancel: threading.Event | None = None):
+        """Update the label on the popup for the given cancel event (or the most recent one)."""
+        if cancel is not None:
+            slot = self._slot_for_cancel(cancel)
+        else:
+            slot = self._dl_slots[-1] if self._dl_slots else None
+        if slot and slot.popup.winfo_exists():
+            slot.popup.update_label(label)
+            slot.popup.update_progress(0)
+            slot.popup.update_message("0%")
+
+    def update_download_progress(self, current: int, total: int, label: str = "",
+                                  cancel: threading.Event | None = None):
+        """Update progress on the popup for the given cancel event (or most recent)."""
+        if cancel is not None:
+            slot = self._slot_for_cancel(cancel)
+        else:
+            slot = self._dl_slots[-1] if self._dl_slots else None
+        if slot is None or not slot.popup.winfo_exists():
+            return
         if total > 0:
             frac = min(current / total, 1.0)
-            self._dl_progress.set(frac)
             pct = int(frac * 100)
             cur_mb = current / (1024 * 1024)
             tot_mb = total / (1024 * 1024)
-            self._dl_pct.configure(text=f"{pct}%")
-            if label:
-                self._dl_label.configure(text=label)
-            else:
-                self._dl_label.configure(text=f"Downloading: {cur_mb:.1f} / {tot_mb:.1f} MB")
+            slot.popup.update_progress(frac)
+            slot.popup.update_message(
+                label if label else f"{cur_mb:.1f} / {tot_mb:.1f} MB  ({pct}%)"
+            )
 
-    def hide_download_progress(self):
-        """Hide the download progress bar."""
-        self._dl_bar.grid_forget()
+    def hide_download_progress(self, cancel: threading.Event | None = None):
+        """Close the popup for the given cancel event (or most recent).
+        If a cancel event is given but its slot is already gone, do nothing."""
+        if cancel is not None:
+            slot = self._slot_for_cancel(cancel)
+        else:
+            slot = self._dl_slots[-1] if self._dl_slots else None
+        if slot:
+            self._close_dl_slot(slot)
 
     # ------------------------------------------------------------------
     # Layout helpers
@@ -3562,7 +3641,8 @@ class ModListPanel(ctk.CTkFrame):
         game_domain = game.nexus_game_domain or meta.game_domain
 
         self._log(f"Nexus: Updating {mod_name}...")
-        self.show_download_progress(f"Updating: {mod_name}")
+        cancel_event = self.get_download_cancel_event()
+        self.show_download_progress(f"Updating: {mod_name}", cancel=cancel_event)
         log_fn = self._log
         mod_panel = self
 
@@ -3582,7 +3662,7 @@ class ModListPanel(ctk.CTkFrame):
                 # Free user — open the mod's files page in the browser
                 files_url = f"https://www.nexusmods.com/{game_domain}/mods/{meta.mod_id}?tab=files"
                 def _fallback():
-                    mod_panel.hide_download_progress()
+                    mod_panel.hide_download_progress(cancel=cancel_event)
                     webbrowser.open(files_url)
                     log_fn(f"Nexus: Premium required for direct download.")
                     log_fn(f"Nexus: Opened files page — click \"Download with Mod Manager\" there.")
@@ -3607,13 +3687,14 @@ class ModListPanel(ctk.CTkFrame):
                 mod_id=meta.mod_id,
                 file_id=meta.latest_file_id,
                 progress_cb=lambda cur, total: app.after(
-                    0, lambda c=cur, t=total: mod_panel.update_download_progress(c, t)
+                    0, lambda c=cur, t=total: mod_panel.update_download_progress(c, t, cancel=cancel_event)
                 ),
+                cancel=cancel_event,
             )
 
             if result.success and result.file_path:
                 def _install():
-                    mod_panel.hide_download_progress()
+                    mod_panel.hide_download_progress(cancel=cancel_event)
                     log_fn(f"Nexus: Installing update for {mod_name}...")
                     install_mod_from_archive(
                         str(result.file_path), app, log_fn, game, mod_panel)
@@ -3639,7 +3720,7 @@ class ModListPanel(ctk.CTkFrame):
                 app.after(0, _install)
             else:
                 def _fail():
-                    mod_panel.hide_download_progress()
+                    mod_panel.hide_download_progress(cancel=cancel_event)
                     log_fn(f"Nexus: Update download failed — {result.error}")
                 app.after(0, _fail)
 

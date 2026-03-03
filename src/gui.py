@@ -389,8 +389,9 @@ class App(ctk.CTk):
 
         # Show download progress bar on the mod panel
         mod_panel = getattr(self, "_mod_panel", None)
+        cancel_event = mod_panel.get_download_cancel_event() if mod_panel else None
         if mod_panel:
-            mod_panel.show_download_progress("Downloading...")
+            mod_panel.show_download_progress("Downloading...", cancel=cancel_event)
 
         # Try to auto-select the matching game
         matched_game = None
@@ -415,7 +416,7 @@ class App(ctk.CTk):
                 # Update the progress bar label with the actual mod name
                 if mod_panel and mod_info:
                     self.after(0, lambda: mod_panel.show_download_progress(
-                        f"Downloading: {mod_info.name}"))
+                        f"Downloading: {mod_info.name}", cancel=cancel_event))
                 files_resp = self._nexus_api.get_mod_files(link.game_domain, link.mod_id)
                 for f in files_resp.files:
                     if f.file_id == link.file_id:
@@ -430,20 +431,21 @@ class App(ctk.CTk):
                 link,
                 progress_cb=lambda cur, total: self.after(
                     0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t)
+                        mod_panel.update_download_progress(c, t, cancel=cancel_event)
                         if mod_panel else None
                     )
                 ),
+                cancel=cancel_event,
             )
             if result.success and result.file_path:
                 self.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event) if mod_panel else None,
                     self._nxm_install(
                         result, matched_game, mod_info=mod_info, file_info=file_info),
                 ))
             else:
                 self.after(0, lambda: (
-                    mod_panel.hide_download_progress() if mod_panel else None,
+                    mod_panel.hide_download_progress(cancel=cancel_event) if mod_panel else None,
                     log(f"Nexus: Download failed — {result.error}"),
                 ))
 
