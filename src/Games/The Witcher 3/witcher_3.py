@@ -18,6 +18,7 @@ from Games.base_game import BaseGame
 from Utils.deploy import LinkMode, deploy_filemap_to_root, load_per_mod_strip_prefixes, restore_filemap_from_root
 from Utils.config_paths import get_profiles_dir
 from Utils.steam_finder import find_prefix
+from Utils.tw3_filelist import update_menu_filelists
 
 _PROFILES_DIR = get_profiles_dir()
 
@@ -215,6 +216,7 @@ class Witcher3(BaseGame):
                                                log_fn=_log,
                                                progress_fn=progress_fn)
         _log(f"Deploy complete. {linked_mod} mod file(s) placed in game root.")
+        update_menu_filelists(game_root, log_fn=_log)
 
     def restore(self, log_fn=None, progress_fn=None) -> None:
         """Remove deployed mod files from the game root and restore any vanilla files.
@@ -231,6 +233,7 @@ class Witcher3(BaseGame):
         _log("Restore: removing mod files and restoring vanilla files ...")
         removed = restore_filemap_from_root(filemap, game_root, log_fn=_log)
         _log(f"Restore complete. {removed} mod file(s) removed from game root.")
+        update_menu_filelists(game_root, log_fn=_log)
 
         mods_dir = game_root / "mods"
         if mods_dir.is_dir():
