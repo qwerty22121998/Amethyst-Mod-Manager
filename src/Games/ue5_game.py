@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from Games.base_game import BaseGame
-from Utils.deploy import LinkMode, load_per_mod_strip_prefixes, _resolve_nocase
+from Utils.deploy import LinkMode, apply_wine_dll_overrides, load_per_mod_strip_prefixes, _resolve_nocase
 from Utils.config_paths import get_profiles_dir
 from Utils.steam_finder import find_prefix
 
@@ -365,6 +365,10 @@ class UE5Game(BaseGame):
 
         backed_msg = f", {backed_up} vanilla file(s) backed up" if backed_up else ""
         _log(f"Deploy complete. {linked} file(s) placed{backed_msg}, {skipped} skipped.")
+
+        if self._prefix_path and self.wine_dll_overrides:
+            _log("Applying Wine DLL overrides to Proton prefix ...")
+            apply_wine_dll_overrides(self._prefix_path, self.wine_dll_overrides, log_fn=_log)
 
     def _find_staged_file(
         self,
