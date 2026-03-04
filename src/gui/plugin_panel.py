@@ -192,6 +192,7 @@ class PluginPanel(ctk.CTkFrame):
         self._exe_var = tk.StringVar(value="")
         # Stores full Path objects in display-name order, parallel to dropdown values
         self._exe_paths: list[Path] = []
+        self._game_exe_path: Path | None = None
         self._exe_menu = ctk.CTkOptionMenu(
             exe_bar, values=["(no executables)"], variable=self._exe_var,
             width=175, font=_theme.FONT_SMALL,
@@ -201,11 +202,12 @@ class PluginPanel(ctk.CTkFrame):
         )
         self._exe_menu.pack(side="left", padx=(8, 4), pady=6)
 
-        ctk.CTkButton(
+        self._run_exe_btn = ctk.CTkButton(
             exe_bar, text="▶ Run EXE", width=90, height=28, font=_theme.FONT_SMALL,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_run_exe,
-        ).pack(side="left", padx=4, pady=6)
+        )
+        self._run_exe_btn.pack(side="left", padx=4, pady=6)
 
         self._exe_args_var = tk.StringVar(value="")
 
@@ -376,6 +378,7 @@ class PluginPanel(ctk.CTkFrame):
                 pass
 
         self._exe_paths = exes
+        self._game_exe_path = game_exe_path
         labels = [p.name for p in exes] + [self._ADD_CUSTOM_SENTINEL]
         if not exes:
             labels = ["(no executables)", self._ADD_CUSTOM_SENTINEL]
@@ -394,9 +397,31 @@ class PluginPanel(ctk.CTkFrame):
         idx = self._exe_var_index()
         if idx < 0 or not self._exe_paths:
             self._exe_args_var.set("")
+            self._update_run_exe_btn(None)
             return
         exe_path = self._exe_paths[idx]
         self._exe_args_var.set(self._load_exe_args(exe_path.name))
+        self._update_run_exe_btn(exe_path)
+
+    def _update_run_exe_btn(self, exe_path: "Path | None") -> None:
+        """Switch the Run EXE button to green ▶ Play when the game's launch exe is selected."""
+        is_game_exe = (
+            exe_path is not None
+            and self._game_exe_path is not None
+            and exe_path == self._game_exe_path
+        )
+        if is_game_exe:
+            self._run_exe_btn.configure(
+                text="▶  Play",
+                fg_color="#2d7a2d",
+                hover_color="#3a9a3a",
+            )
+        else:
+            self._run_exe_btn.configure(
+                text="▶ Run EXE",
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOV,
+            )
 
     _EXE_ARGS_FILE = get_exe_args_path()
     _ADD_CUSTOM_SENTINEL = "+ Add custom EXE…"
