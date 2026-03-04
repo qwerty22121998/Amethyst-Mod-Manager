@@ -2406,6 +2406,14 @@ class ModListPanel(ctk.CTkFrame):
                         else:
                             menu.add_command("Endorse Mod",
                                 lambda: self._endorse_nexus_mod(mod_name_capture, _domain, _ctx_meta))
+                    # Reinstall Mod — visible when the source archive is still in ~/Downloads
+                    if _ctx_meta.installation_file:
+                        _xdg = os.environ.get("XDG_DOWNLOAD_DIR")
+                        _dl_dir = Path(_xdg) if _xdg else Path.home() / "Downloads"
+                        _archive_path = _dl_dir / _ctx_meta.installation_file
+                        if _archive_path.is_file():
+                            menu.add_command("Reinstall Mod",
+                                lambda nc=mod_name_capture, ap=_archive_path: self._reinstall_mod(nc, ap))
                 except Exception:
                     pass
             if mod_name_capture in self._update_mods:
@@ -3747,6 +3755,22 @@ class ModListPanel(ctk.CTkFrame):
                 app.after(0, _fail)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _reinstall_mod(self, mod_name: str, archive_path: Path) -> None:
+        """Reinstall a mod from its recorded installation archive in the downloads folder."""
+        app = self.winfo_toplevel()
+        topbar = getattr(app, "_topbar", None)
+        game = _GAMES.get(topbar._game_var.get()) if topbar else None
+        if game is None or not game.is_configured():
+            self._log("Reinstall: No configured game selected.")
+            return
+        if not archive_path.is_file():
+            self._log(f"Reinstall: Archive not found — {archive_path}")
+            return
+        self._log(f"Reinstalling '{mod_name}' from {archive_path.name}…")
+        install_mod_from_archive(
+            str(archive_path), app, self._log, game, mod_panel=self
+        )
 
     def _show_overwrites_dialog(self, mod_name: str) -> None:
         """Open the conflict detail dialog for a mod."""

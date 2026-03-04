@@ -150,17 +150,25 @@ def _try_auto_strip_top_level(
     return (file_list, False)
 
 
-def _stamp_meta_install_date(meta_ini_path: Path) -> None:
-    """Write the current datetime as the ``installed`` key in meta.ini if not already present."""
+def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -> None:
+    """Write the current datetime as the ``installed`` key in meta.ini if not
+    already present.  Also write ``installationFile`` if *installation_file* is
+    given and the key is not yet set (MO2-compatible)."""
     import configparser as _cp
     parser = _cp.ConfigParser()
     if meta_ini_path.is_file():
         parser.read(str(meta_ini_path), encoding="utf-8")
     if not parser.has_section("General"):
         parser.add_section("General")
+    changed = False
     if not parser.get("General", "installed", fallback=""):
         parser.set("General", "installed",
                    datetime.now().strftime("%Y-%m-%dT%H:%M:%S"))
+        changed = True
+    if installation_file and not parser.get("General", "installationFile", fallback=""):
+        parser.set("General", "installationFile", installation_file)
+        changed = True
+    if changed:
         meta_ini_path.parent.mkdir(parents=True, exist_ok=True)
         with open(meta_ini_path, "w", encoding="utf-8") as fh:
             parser.write(fh)
@@ -456,7 +464,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         _copy_file_list(file_list, mod_root, dest_root, log_fn)
         log_fn(f"Installed '{mod_name}' → {dest_root}")
 
-        _stamp_meta_install_date(dest_root / "meta.ini")
+        _stamp_meta_install_date(dest_root / "meta.ini",
+                                  installation_file=os.path.basename(archive_path))
 
         # Update the mod index for just this mod so the next filemap rebuild
         # reads from the index instead of rescanning all mod folders.
