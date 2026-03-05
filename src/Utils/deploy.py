@@ -24,9 +24,11 @@ Typical deploy workflow:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import shutil
+import threading
 from enum import Enum, auto
 from pathlib import Path
 
@@ -79,19 +81,19 @@ def _transfer(src: Path, dst: Path, mode: LinkMode) -> None:
 def _clear_dir(directory: Path) -> int:
     """Delete all files inside directory and remove empty subdirectories.
     Returns the number of files deleted.  The directory itself is kept.
+
+    Uses shutil.rmtree + recreate rather than per-file unlink — significantly
+    faster for large directories (avoids repeated stat/unlink/rmdir syscalls).
     """
-    removed = 0
-    for path in directory.rglob("*"):
-        if path.is_file():
-            path.unlink()
-            removed += 1
-    for dirpath in sorted(directory.rglob("*"), reverse=True):
-        if dirpath.is_dir():
-            try:
-                dirpath.rmdir()
-            except OSError:
-                pass
-    return removed
+    if not directory.is_dir():
+        return 0
+    files = [p for p in directory.rglob("*") if p.is_file()]
+    count = len(files)
+    if count == 0:
+        return 0
+    shutil.rmtree(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -263,17 +265,43 @@ def deploy_filemap(
     if total == 0:
         return 0, placed_lower
 
-    linked = 0
+    # Pre-create all destination directories up front (single-threaded) to
+    # avoid mkdir races inside the thread pool.
+    needed_dirs: set[Path] = {dst.parent for _, dst, _ in tasks}
+    for d in needed_dirs:
+        d.mkdir(parents=True, exist_ok=True)
 
-    for done_count, (src, dst, rel_lower) in enumerate(tasks, 1):
+    linked = 0
+    errors: list[tuple[Path, OSError]] = []
+    done_count = 0
+    lock = threading.Lock()
+
+    def _do_transfer(item: tuple[Path, Path, str]) -> tuple[str | None, tuple[Path, OSError] | None]:
+        src, dst, rel_lower = item
         try:
-            _transfer(src, dst, mode)
-            linked += 1
-            placed_lower.add(rel_lower)
+            if mode is LinkMode.HARDLINK:
+                os.link(src, dst)
+            elif mode is LinkMode.SYMLINK:
+                os.symlink(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            return rel_lower, None
         except OSError as e:
-            _log(f"  WARN: could not transfer {dst.relative_to(deploy_dir)}: {e}")
-        if progress_fn is not None and (done_count % 200 == 0 or done_count == total):
-            progress_fn(done_count, total)
+            return None, (dst, e)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for result, err in pool.map(_do_transfer, tasks):
+            with lock:
+                done_count += 1
+                _done = done_count  # local copy for progress outside lock
+            if result is not None:
+                placed_lower.add(result)
+                linked += 1
+            elif err is not None:
+                dst_err, exc = err
+                _log(f"  WARN: could not transfer {dst_err.relative_to(deploy_dir)}: {exc}")
+            if progress_fn is not None and (_done % 200 == 0 or _done == total):
+                progress_fn(_done, total)
 
     return linked, placed_lower
 
@@ -305,23 +333,52 @@ def deploy_core(
     if not core_dir.is_dir():
         return 0
 
-    linked = 0
-    files = [s for s in core_dir.rglob("*") if s.is_file()]
-    total = len(files)
+    all_files = [s for s in core_dir.rglob("*") if s.is_file()]
+    total = len(all_files)
 
-    for done_count, src in enumerate(files, 1):
+    # Filter before spinning up threads
+    tasks_core = [
+        s for s in all_files
+        if str(s.relative_to(core_dir)).replace("\\", "/").lower()
+        not in already_placed
+    ]
+
+    if not tasks_core:
+        return 0
+
+    # Pre-create destination directories (single-threaded to avoid races)
+    for src in tasks_core:
+        (deploy_dir / src.relative_to(core_dir)).parent.mkdir(parents=True, exist_ok=True)
+
+    linked = 0
+    done_count = 0
+    lock = threading.Lock()
+
+    def _do_core(src: Path) -> tuple[bool, Path, OSError | None]:
         rel = src.relative_to(core_dir)
-        rel_lower = str(rel).replace("\\", "/").lower()
-        if rel_lower in already_placed:
-            continue
         dst = deploy_dir / rel
         try:
-            _transfer(src, dst, mode)
-            linked += 1
+            if mode is LinkMode.HARDLINK:
+                os.link(src, dst)
+            elif mode is LinkMode.SYMLINK:
+                os.symlink(src, dst)
+            else:
+                shutil.copy2(src, dst)
+            return True, rel, None
         except OSError as e:
-            _log(f"  WARN: could not transfer {rel}: {e}")
-        if progress_fn is not None:
-            progress_fn(done_count, total)
+            return False, rel, e
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        for ok, rel, exc in pool.map(_do_core, tasks_core):
+            with lock:
+                done_count += 1
+                _done = done_count
+            if ok:
+                linked += 1
+            else:
+                _log(f"  WARN: could not transfer {rel}: {exc}")
+            if progress_fn is not None:
+                progress_fn(_done, total)
 
     return linked
 
