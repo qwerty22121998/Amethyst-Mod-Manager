@@ -247,6 +247,24 @@ class BaseGame(ABC):
         return False
 
     @property
+    def frameworks(self) -> dict[str, str]:
+        """
+        A mapping of framework display names to their executable filenames.
+
+        The plugin panel checks whether each executable exists in the game's
+        root directory **or** in the active profile's Root_Folder staging
+        directory, and displays a status banner at the top of the Plugins tab:
+          • Green  — "Script Extender Installed"
+          • Red    — "Script Extender Not Present"
+
+        Example (Skyrim SE):
+            {"Script Extender": "skse64_loader.exe"}
+
+        Return an empty dict (the default) to show no banners.
+        """
+        return {}
+
+    @property
     def steam_id(self) -> str:
         """
         Steam App ID for this game, e.g. '377160' for Fallout 4.

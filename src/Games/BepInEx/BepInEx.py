@@ -75,6 +75,10 @@ class Subnautica(BaseGame):
         return {"winhttp": "native,builtin"}
 
     @property
+    def frameworks(self) -> dict[str, str]:
+        return {"BepInEx": "winhttp.dll"}
+
+    @property
     def loot_sort_enabled(self) -> bool:
         return False
 

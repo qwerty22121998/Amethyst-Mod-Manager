@@ -611,6 +611,11 @@ class App(ctk.CTk):
             if (self._plugin_panel._plugins_path is not None
                     and self._plugin_panel._plugin_extensions):
                 self._plugin_panel._refresh_plugins_tab()
+            else:
+                # No plugin extensions (e.g. BepInEx, Stardew Valley) — still
+                # refresh framework banners so the status reflects any changes
+                # made to the game root since the last reload.
+                self._plugin_panel._refresh_framework_banners()
 
         self._mod_panel._on_filemap_rebuilt = _on_filemap_rebuilt
 

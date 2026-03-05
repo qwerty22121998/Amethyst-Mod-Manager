@@ -37,6 +37,16 @@ def get_game_config_path(game_name: str) -> Path:
     return path
 
 
+def get_game_config_dir(game_name: str) -> Path:
+    """Return the config directory for a given game, creating it if needed.
+
+    Result: ~/.config/AmethystModManager/games/<game_name>/
+    """
+    d = get_config_dir() / "games" / game_name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_loot_data_dir() -> Path:
     """Return the LOOT masterlist data directory, creating it if needed.
 

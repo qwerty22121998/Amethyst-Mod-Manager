@@ -69,6 +69,10 @@ class SkyrimSE(BaseGame):
         return "https://raw.githubusercontent.com/loot/skyrimse/v0.21/masterlist.yaml"
 
     @property
+    def frameworks(self) -> dict[str, str]:
+        return {"Script Extender": "skse64_loader.exe"}
+
+    @property
     def wizard_tools(self) -> list[WizardTool]:
         return [
             WizardTool(

@@ -69,6 +69,10 @@ class StardewValley(BaseGame):
         return True
 
     @property
+    def frameworks(self) -> dict[str, str]:
+        return {"SMAPI": "StardewModdingAPI.dll"}
+
+    @property
     def wizard_tools(self) -> list[WizardTool]:
         return [
             WizardTool(

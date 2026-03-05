@@ -90,6 +90,11 @@ class ResidentEvilRequiem(BaseGame):
     @property
     def wine_dll_overrides(self) -> dict[str, str]:
         return {"dinput8": "native,builtin"}
+    
+    @property
+    def frameworks(self) -> dict[str, str]:
+        return {"ReFramework": "dinput8.dll"}
+    
 
     # -----------------------------------------------------------------------
     # Paths

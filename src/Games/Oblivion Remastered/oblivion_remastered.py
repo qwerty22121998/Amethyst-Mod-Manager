@@ -75,7 +75,11 @@ class OblivionRemastered(UE5Game):
     @property
     def loot_game_type(self) -> str:
         return "OblivionRemastered"
-
+    
+    @property
+    def frameworks(self) -> dict[str, str]:
+        return {"Script Extender": "OblivionRemastered/Binaries/Win64/obse64_loader.exe"}
+    
     @property
     def loot_masterlist_url(self) -> str:
         return "https://raw.githubusercontent.com/loot/oblivion-remastered/v0.26/masterlist.yaml"

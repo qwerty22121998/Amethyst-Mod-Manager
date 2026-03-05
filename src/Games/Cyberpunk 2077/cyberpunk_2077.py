@@ -62,6 +62,16 @@ class Cyberpunk2077(BaseGame):
     @property
     def mod_auto_strip_until_required(self) -> bool:
         return True
+    
+    @property
+    def frameworks(self) -> dict[str, str]:
+        return {"Cyber Engine Tweaks": "bin/x64/plugins/cyber_engine_tweaks.asi",
+                "RED4ext": "red4ext/RED4ext.dll",
+                "ArchiveXL":"red4ext/plugins/ArchiveXL/ArchiveXL.dll",
+                "Redscript":"engine/tools/scc.exe",
+                "TweakXL":"red4ext/plugins/TweakXL/TweakXL.dll",
+                "Codeware":"red4ext/plugins/Codeware/Codeware.dll"
+                }
 
     # -----------------------------------------------------------------------
     # Paths

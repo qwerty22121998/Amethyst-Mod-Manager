@@ -203,6 +203,10 @@ class Fallout_3(BaseGame):
     def _script_extender_exe(self) -> str:
         return "fose_loader.exe"
 
+    @property
+    def frameworks(self) -> dict[str, str]:
+        return {"Script Extender": self._script_extender_exe}
+
     def _plugins_txt_target(self) -> Path | None:
         """Return the in-prefix path where Fallout 3 expects plugins.txt."""
         if self._prefix_path is None:
