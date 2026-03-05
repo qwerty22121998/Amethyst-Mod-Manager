@@ -29,8 +29,9 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import keyring
 import requests
@@ -186,6 +187,17 @@ class NexusModRequirement:
     url: str = ""
     is_external: bool = False  # True if it's an external (non-Nexus) requirement
     notes: str = ""  # Notes about the mod requirement (from GraphQL ModRequirement)
+
+
+@dataclass
+class NexusModUpdateInfo:
+    """Lightweight update status for a mod, returned by the GraphQL batch checker."""
+    mod_id: int
+    name: str
+    version: str
+    updated_at: Optional[datetime] = None   # when any file was last uploaded
+    viewer_update_available: Optional[bool] = None  # Nexus-native flag (requires tracking)
+    requirements: list["NexusModRequirement"] = field(default_factory=list)  # mod dependencies
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +829,120 @@ class NexusAPI:
         except Exception as exc:
             app_log(f"GraphQL requirements query error: {exc}")
             return []
+
+    # -- Batch update check (GraphQL v2) ------------------------------------
+
+    _GRAPHQL_UPDATE_BATCH = 20  # legacyModsByDomain returns at most 20 nodes per request
+
+    def graphql_mod_update_info_batch(
+        self,
+        ids: list[tuple[str, int]],
+    ) -> dict[int, "NexusModUpdateInfo"]:
+        """
+        Fetch update-relevant info for a batch of mods via a single GraphQL
+        request (or a small number of them for large lists).
+
+        Parameters
+        ----------
+        ids : list of (game_domain, mod_id)
+
+        Returns
+        -------
+        dict mapping mod_id → NexusModUpdateInfo
+        """
+        query = """
+        query BatchUpdateCheck($ids: [CompositeDomainWithIdInput!]!) {
+            legacyModsByDomain(ids: $ids) {
+                nodes {
+                    modId
+                    name
+                    version
+                    updatedAt
+                    viewerUpdateAvailable
+                    modRequirements {
+                        nexusRequirements {
+                            nodes {
+                                modId
+                                modName
+                                gameId
+                                url
+                                externalRequirement
+                                notes
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        results: dict[int, NexusModUpdateInfo] = {}
+        batch_size = self._GRAPHQL_UPDATE_BATCH
+        for i in range(0, len(ids), batch_size):
+            batch = ids[i: i + batch_size]
+            variables = {
+                "ids": [{"gameDomain": gd, "modId": mid} for gd, mid in batch]
+            }
+            try:
+                resp = self._session.post(
+                    GRAPHQL_BASE,
+                    json={"query": query, "variables": variables},
+                    timeout=self._timeout,
+                )
+                self._log_response("POST", "GraphQL batchUpdateCheck", resp)
+                if not resp.ok:
+                    app_log(f"GraphQL batch update check failed: {resp.status_code}")
+                    continue
+                data = resp.json()
+                if not isinstance(data, dict):
+                    app_log("GraphQL batch update check: unexpected response format")
+                    continue
+                if "errors" in data:
+                    app_log(f"GraphQL batch update check errors: {data['errors']}")
+                nodes = (
+                    (data.get("data") or {})
+                    .get("legacyModsByDomain") or {}
+                ).get("nodes") or []
+                for n in nodes:
+                    mid = int(n.get("modId", 0))
+                    updated_at = None
+                    raw_ts = n.get("updatedAt")
+                    if raw_ts:
+                        try:
+                            updated_at = datetime.fromisoformat(
+                                raw_ts.replace("Z", "+00:00")
+                            )
+                        except ValueError:
+                            pass
+                    vua = n.get("viewerUpdateAvailable")
+                    req_nodes = (
+                        (n.get("modRequirements") or {})
+                        .get("nexusRequirements") or {}
+                    ).get("nodes") or []
+                    reqs = []
+                    for rn in req_nodes:
+                        try:
+                            rmid = int(rn.get("modId", 0))
+                        except (ValueError, TypeError):
+                            rmid = 0
+                        reqs.append(NexusModRequirement(
+                            mod_id=rmid,
+                            mod_name=rn.get("modName", "") or "",
+                            game_domain=rn.get("gameId", "") or "",
+                            url=rn.get("url", "") or "",
+                            is_external=bool(rn.get("externalRequirement", False)),
+                            notes=rn.get("notes", "") or "",
+                        ))
+                    results[mid] = NexusModUpdateInfo(
+                        mod_id=mid,
+                        name=n.get("name", "") or "",
+                        version=n.get("version", "") or "",
+                        updated_at=updated_at,
+                        viewer_update_available=None if vua is None else bool(vua),
+                        requirements=reqs,
+                    )
+            except Exception as exc:
+                app_log(f"GraphQL batch update check error: {exc}")
+        return results
 
     # -- Top mods (GraphQL v2) -----------------------------------------------
 

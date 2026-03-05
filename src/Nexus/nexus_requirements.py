@@ -30,7 +30,7 @@ import requests
 # Game scope: None = apply to all games; str = Nexus game domain (e.g. "fallout4", "skyrimspecialedition")
 GameScope = Optional[str]
 
-from Nexus.nexus_api import NexusAPI, NexusModRequirement
+from Nexus.nexus_api import NexusAPI, NexusModRequirement, NexusModUpdateInfo
 from Nexus.nexus_meta import NexusModMeta, scan_installed_mods, read_meta, write_meta
 from Utils.config_paths import get_requirement_external_tool_mod_ids_path
 
@@ -331,6 +331,127 @@ def check_missing_requirements(
 
         if checked % 10 == 0:
             _log(f"  Checked {checked}/{total} mods...")
+
+    _log(f"Requirements check complete: {len(results)} mod(s) with missing dependencies.")
+    return results
+
+
+def check_requirements_from_gql(
+    gql_info: dict[int, NexusModUpdateInfo],
+    all_installed: list,
+    game_domain: str = "",
+    staging_root: Path = Path(),
+    progress_cb: Optional[ProgressCallback] = None,
+    save_results: bool = True,
+    enabled_only: Optional[set] = None,
+) -> list[MissingRequirementInfo]:
+    """
+    Check for missing requirements using pre-fetched GraphQL data.
+
+    Unlike ``check_missing_requirements``, this function makes no API calls —
+    it reads requirements from *gql_info* which was already retrieved by the
+    update checker's batch GraphQL call.  Both checks therefore share a single
+    set of GraphQL requests.
+
+    Parameters
+    ----------
+    gql_info :
+        Mapping of mod_id → NexusModUpdateInfo as returned by
+        ``NexusAPI.graphql_mod_update_info_batch``.  Each entry's
+        ``requirements`` list is used directly.
+    all_installed :
+        Full list of all installed NexusModMeta objects (used to build the
+        set of installed mod IDs for dependency resolution — includes both
+        enabled and disabled mods).
+    game_domain :
+        Nexus game domain string (e.g. ``"skyrimspecialedition"``).
+    staging_root :
+        Root of the mod staging area.
+    progress_cb :
+        Called with status strings for UI feedback.
+    save_results :
+        If True, write ``missingRequirements`` back to each mod's
+        ``meta.ini``.
+    enabled_only :
+        When provided, only mods whose folder name is in this set are
+        checked.  All installed mod IDs are still used for dependency
+        resolution regardless of this filter.
+
+    Returns
+    -------
+    list[MissingRequirementInfo]
+    """
+    _log = progress_cb or (lambda m: None)
+
+    if not gql_info:
+        return []
+
+    # All installed IDs (including disabled) so that disabled mods don't
+    # trigger spurious "missing requirement" warnings.
+    installed_mod_ids: set[int] = {m.mod_id for m in all_installed if m.mod_id > 0}
+
+    external_set, alternatives_dict = _load_requirement_filter()
+
+    # Build by_mod_id only for enabled mods (the ones we actually report on)
+    checkable = [
+        m for m in all_installed
+        if m.mod_id > 0 and (enabled_only is None or m.mod_name in enabled_only)
+    ]
+    by_mod_id: dict[int, list] = {}
+    for meta in checkable:
+        by_mod_id.setdefault(meta.mod_id, []).append(meta)
+
+    results: list[MissingRequirementInfo] = []
+
+    for mod_id, metas in by_mod_id.items():
+        info = gql_info.get(mod_id)
+        if info is None:
+            # Not returned by GraphQL (hidden/deleted mod) — leave flags unchanged
+            continue
+
+        reqs = info.requirements  # list[NexusModRequirement]
+
+        if not reqs:
+            if save_results:
+                for meta in metas:
+                    if meta.missing_requirements:
+                        meta.missing_requirements = ""
+                        write_meta(staging_root / meta.mod_name / "meta.ini", meta)
+            continue
+
+        missing: list[NexusModRequirement] = []
+        for req in reqs:
+            if req.is_external:
+                continue
+            if req.mod_id <= 0:
+                continue
+            if _is_external_for_game(game_domain, req.mod_id, external_set):
+                continue
+            if _alternative_satisfied_for_game(game_domain, req.mod_id, installed_mod_ids, alternatives_dict):
+                continue
+            if req.mod_id not in installed_mod_ids:
+                missing.append(req)
+
+        for meta in metas:
+            if missing:
+                info_result = MissingRequirementInfo(
+                    mod_name=meta.mod_name,
+                    mod_id=mod_id,
+                    missing=missing,
+                )
+                results.append(info_result)
+                names = ", ".join(r.mod_name for r in missing[:3])
+                suffix = f" (+{len(missing) - 3} more)" if len(missing) > 3 else ""
+                _log(f"  ⚠ {meta.mod_name}: missing {names}{suffix}")
+                if save_results:
+                    meta.missing_requirements = ";".join(
+                        f"{r.mod_id}:{r.mod_name}" for r in missing
+                    )
+                    write_meta(staging_root / meta.mod_name / "meta.ini", meta)
+            else:
+                if save_results and meta.missing_requirements:
+                    meta.missing_requirements = ""
+                    write_meta(staging_root / meta.mod_name / "meta.ini", meta)
 
     _log(f"Requirements check complete: {len(results)} mod(s) with missing dependencies.")
     return results

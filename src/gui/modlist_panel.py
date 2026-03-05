@@ -104,7 +104,6 @@ from Utils.profile_backup import create_backup
 from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
 from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
 from Nexus.nexus_update_checker import check_for_updates
-from Nexus.nexus_requirements import check_missing_requirements
 import webbrowser
 
 
@@ -3966,7 +3965,7 @@ class ModListPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _on_check_updates(self):
-        """Check all installed Nexus mods for updates and missing requirements."""
+        """Check for mod updates and missing requirements in one background pass."""
         app = self.winfo_toplevel()
         if app._nexus_api is None:
             self._log("Nexus: Set your API key first (Nexus button).")
@@ -3983,19 +3982,13 @@ class ModListPanel(ctk.CTkFrame):
 
         def _worker():
             try:
-                results = check_for_updates(
+                results, missing = check_for_updates(
                     app._nexus_api, staging,
                     game_domain=game.nexus_game_domain,
                     progress_cb=lambda m: app.after(0, lambda msg=m: log_fn(msg)),
                     enabled_only=enabled_names,
                 )
-                app.after(0, lambda: log_fn("Nexus: Checking mod requirements..."))
-                missing = check_missing_requirements(
-                    app._nexus_api, staging,
-                    game_domain=game.nexus_game_domain,
-                    progress_cb=lambda m: app.after(0, lambda msg=m: log_fn(msg)),
-                    enabled_only=enabled_names,
-                )
+
                 def _done():
                     self._update_btn.configure(text="Check Updates", state="normal")
                     if results:
