@@ -8,6 +8,8 @@ import os
 import shutil
 import subprocess
 import threading
+
+from Utils.xdg import xdg_open
 import tkinter as tk
 import tkinter.messagebox
 import tkinter.ttk as ttk
@@ -3300,7 +3302,7 @@ class ModListPanel(ctk.CTkFrame):
     def _open_ini(self, path: Path):
         """Open an .ini file in the user's default text editor via xdg-open."""
         try:
-            subprocess.Popen(["xdg-open", str(path)])
+            xdg_open(path)
             self._log(f"Opened: {path.name}")
         except Exception as e:
             self._log(f"Could not open {path.name}: {e}")
@@ -3311,7 +3313,7 @@ class ModListPanel(ctk.CTkFrame):
             self._log(f"Folder not found: {path}")
             return
         try:
-            subprocess.Popen(["xdg-open", str(path)])
+            xdg_open(path)
         except Exception as e:
             self._log(f"Could not open folder: {e}")
 

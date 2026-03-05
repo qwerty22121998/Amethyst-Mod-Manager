@@ -20,6 +20,7 @@ import tkinter as tk
 from Games.base_game import BaseGame
 from Utils.portal_filechooser import pick_folder
 from Utils.deploy import LinkMode
+from Utils.xdg import xdg_open
 from Utils.steam_finder import find_steam_libraries, find_game_in_libraries, find_prefix
 from Utils.heroic_finder import find_heroic_game, find_heroic_prefix
 
@@ -588,17 +589,17 @@ class AddGameDialog(ctk.CTkToplevel):
     def _on_open_path(self):
         """Open the game installation folder in the file manager."""
         if self._found_path:
-            subprocess.Popen(["xdg-open", str(self._found_path)])
+            xdg_open(self._found_path)
 
     def _on_open_prefix(self):
         """Open the Proton prefix folder in the file manager."""
         if self._found_prefix:
-            subprocess.Popen(["xdg-open", str(self._found_prefix)])
+            xdg_open(self._found_prefix)
 
     def _on_open_staging(self):
         """Open the mod staging folder in the file manager."""
         path = self._custom_staging or self._game.get_mod_staging_path()
-        subprocess.Popen(["xdg-open", str(path)])
+        xdg_open(path)
 
     def _on_reset_staging(self):
         """Clear any custom staging path and revert to the default location."""

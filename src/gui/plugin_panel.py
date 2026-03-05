@@ -49,6 +49,7 @@ from gui.ctk_components import CTkTreeview
 
 from Utils.config_paths import get_exe_args_path
 from Utils.filemap import build_filemap
+from Utils.xdg import xdg_open
 from Utils.plugins import (
     PluginEntry,
     read_plugins,
@@ -508,8 +509,7 @@ class PluginPanel(ctk.CTkFrame):
         apps_dir = staging.parent / "Applications"
         apps_dir.mkdir(parents=True, exist_ok=True)
         try:
-            import subprocess
-            subprocess.Popen(["xdg-open", str(apps_dir)])
+            xdg_open(apps_dir)
         except Exception as e:
             self._log(f"Could not open Applications folder: {e}")
 
@@ -926,11 +926,7 @@ class PluginPanel(ctk.CTkFrame):
 
         def _worker():
             try:
-                subprocess.Popen(
-                    ["xdg-open", url],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                xdg_open(url)
             except Exception as e:
                 self.after(0, lambda err=e: self._log(f"Run EXE error: {err}"))
 

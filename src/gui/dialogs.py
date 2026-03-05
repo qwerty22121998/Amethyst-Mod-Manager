@@ -40,6 +40,7 @@ from gui.theme import (
 )
 from gui.path_utils import _to_wine_path
 from Utils.config_paths import get_exe_args_path, get_custom_game_images_dir
+from Utils.xdg import xdg_open
 
 
 # ---------------------------------------------------------------------------
@@ -958,7 +959,7 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
         def _launch():
             log(f"Proton Tools: opening prefix folder …")
             try:
-                subprocess.Popen(["xdg-open", path])
+                xdg_open(path)
             except Exception as e:
                 log(f"Proton Tools error: {e}")
 
@@ -976,7 +977,7 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
         def _launch():
             log("Proton Tools: opening game folder …")
             try:
-                subprocess.Popen(["xdg-open", path])
+                xdg_open(path)
             except Exception as e:
                 log(f"Proton Tools error: {e}")
 

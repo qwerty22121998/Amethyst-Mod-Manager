@@ -5,6 +5,8 @@ APPDIR="$(dirname "$(readlink -f "$0")")"
 PYTHON_PREFIX="${APPDIR}/opt/python3.13"
 
 # Library path for bundled shared libs
+# Save the original so Python can restore it when spawning host processes (e.g. xdg-open)
+export APPIMAGE_ORIGINAL_LD_LIBRARY_PATH="${LD_LIBRARY_PATH}"
 export LD_LIBRARY_PATH="${APPDIR}/usr/lib:${LD_LIBRARY_PATH}"
 
 # Bundled binaries (7zzs, etc.)
