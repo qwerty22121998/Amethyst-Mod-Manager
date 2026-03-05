@@ -53,6 +53,8 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Valheim
 - Lethal Company
 
+- The manager now has the ability to define custom games. See the Wiki for the guide
+
 ## Usage
 
 1. Add a game with the **+** icon in the top left.
