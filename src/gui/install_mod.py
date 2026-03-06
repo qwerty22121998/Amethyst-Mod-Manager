@@ -481,11 +481,19 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                         _ev.set()
 
                 with _fomod_dialog_lock:
-                    try:
-                        parent_window.after(0, _show_dialog)
-                    except Exception:
-                        _dialog_done.set()
-                    _dialog_done.wait()
+                    if threading.current_thread() is threading.main_thread():
+                        # Already on the main thread — call directly so that
+                        # wait_window() can run its nested event loop.  Using
+                        # after(0, …) + Event.wait() here would deadlock because
+                        # wait() blocks the Tk event loop before the after
+                        # callback ever gets dispatched.
+                        _show_dialog()
+                    else:
+                        try:
+                            parent_window.after(0, _show_dialog)
+                        except Exception:
+                            _dialog_done.set()
+                        _dialog_done.wait()
 
                 if _result_holder[0] is None:
                     log_fn("FOMOD install cancelled.")
