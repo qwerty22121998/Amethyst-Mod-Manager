@@ -79,6 +79,7 @@ class FomodDialog(ctk.CTkToplevel):
         self._mod_root      = mod_root
         self._installed     = installed_files or set()
         self._flag_state: dict[str, str] = {}
+        # Keyed by str(config_step_index) so duplicate step names never collide.
         self._all_selections: dict[str, dict[str, list[str]]] = {}
         self._saved_selections = saved_selections or {}
         self._visible_steps: list[InstallStep] = []
@@ -281,6 +282,13 @@ class FomodDialog(ctk.CTkToplevel):
             self._config, self._flag_state, self._installed
         )
 
+    def _config_step_idx(self, step: InstallStep) -> int:
+        """Return the 0-based index of *step* in _config.steps (by identity)."""
+        for i, s in enumerate(self._config.steps):
+            if s is step:
+                return i
+        return -1
+
     def _load_step(self, idx: int):
         # Freeze layout during bulk widget creation
         inner = self._options_scroll._parent_frame
@@ -294,10 +302,13 @@ class FomodDialog(ctk.CTkToplevel):
         # Priority: current session > saved from previous install > computed defaults.
         # Saved selections are merged with auto-detected defaults so that newly
         # installed mods still get their compatibility patches auto-selected.
-        existing = self._all_selections.get(step.name)
+        step_key = str(self._config_step_idx(step))
+        existing = self._all_selections.get(step_key)
         if existing is None:
             defaults = get_default_selections(step, self._flag_state, self._installed)
-            saved = self._saved_selections.get(step.name)
+            # Accept both new index-keyed format and old name-keyed format for
+            # saved selections (backward compatibility with on-disk JSON).
+            saved = self._saved_selections.get(step_key) or self._saved_selections.get(step.name)
             if saved is not None:
                 existing = dict(saved)
                 # Merge: add auto-detected defaults for groups where saved was empty
@@ -397,11 +408,30 @@ class FomodDialog(ctk.CTkToplevel):
         if gtype in ("SelectExactlyOne", "SelectAtMostOne"):
             # Radio buttons — one shared IntVar per group
             # Value -1 = nothing selected (allowed for SelectAtMostOne)
+            plugin_types = [resolve_plugin_type(p, self._flag_state, self._installed)
+                            for p in plugins]
+
             sel_idx = -1
             for i, p in enumerate(plugins):
                 if p.name in selected_set:
                     sel_idx = i
                     break
+
+            # For SelectExactlyOne: if nothing is selected yet, auto-select the
+            # first Required plugin, then first Recommended, then index 0 —
+            # matching MO2 behaviour.
+            if sel_idx == -1 and gtype == "SelectExactlyOne":
+                for i, pt in enumerate(plugin_types):
+                    if pt == "Required":
+                        sel_idx = i
+                        break
+                else:
+                    for i, pt in enumerate(plugin_types):
+                        if pt == "Recommended":
+                            sel_idx = i
+                            break
+                    else:
+                        sel_idx = 0
 
             radio_var = tk.IntVar(value=sel_idx)
 
@@ -418,13 +448,17 @@ class FomodDialog(ctk.CTkToplevel):
                 row += 1
 
             for i, plugin in enumerate(plugins):
+                ptype = plugin_types[i]
+                is_required   = ptype == "Required"
+                is_not_usable = ptype == "NotUsable"
+                locked = is_required or is_not_usable
                 rb = tk.Radiobutton(
                     self._options_scroll,
                     text=f" {plugin.name}", variable=radio_var, value=i,
-                    command=lambda p=plugin, v=radio_var: self._on_radio_change(
-                        group.name, v, plugins
-                    ),
-                    **_radio_style,
+                    command=(None if locked else lambda p=plugin, v=radio_var:
+                             self._on_radio_change(group.name, v, plugins)),
+                    state="disabled" if locked else "normal",
+                    **{**_radio_style, "fg": TEXT_DIM if locked else TEXT_MAIN},
                 )
                 rb.grid(row=row, column=0, sticky="w", padx=24, pady=2)
                 rb.bind("<Enter>", lambda _e, p=plugin: self._update_description_and_image(p))
@@ -440,14 +474,33 @@ class FomodDialog(ctk.CTkToplevel):
             # Checkboxes — one BooleanVar per plugin
             check_vars: list[tk.BooleanVar] = []
             for plugin in plugins:
-                var = tk.BooleanVar(value=(plugin.name in selected_set))
+                ptype = resolve_plugin_type(plugin, self._flag_state, self._installed)
+                is_required   = ptype == "Required"
+                is_not_usable = ptype == "NotUsable"
+                # Required plugins are always checked; NotUsable always unchecked
+                if is_required:
+                    var = tk.BooleanVar(value=True)
+                elif is_not_usable:
+                    var = tk.BooleanVar(value=False)
+                else:
+                    var = tk.BooleanVar(value=(plugin.name in selected_set))
+
+                locked = is_required or is_not_usable
+                locked_style = {
+                    **_check_style,
+                    "fg": TEXT_DIM,
+                    "state": "disabled",
+                    # Show the correct indicator image even when disabled
+                    "image": (self._check_on if is_required else self._check_off),
+                    "selectimage": (self._check_on if is_required else self._check_off),
+                }
                 cb = tk.Checkbutton(
                     self._options_scroll,
                     text=f" {plugin.name}", variable=var,
-                    command=lambda p=plugin, v=var: self._on_check_change(
+                    command=(None if locked else lambda p=plugin, v=var: self._on_check_change(
                         group.name, p, v
-                    ),
-                    **_check_style,
+                    )),
+                    **(locked_style if locked else _check_style),
                 )
                 cb.grid(row=row, column=0, sticky="w", padx=24, pady=2)
                 cb.bind("<Enter>", lambda _e, p=plugin: self._update_description_and_image(p))
@@ -461,17 +514,24 @@ class FomodDialog(ctk.CTkToplevel):
             }
 
         elif gtype == "SelectAll":
-            # Non-interactive — always selected
+            # Non-interactive — always selected; render as locked checked boxes
             for plugin in plugins:
-                lbl = tk.Label(
+                var = tk.BooleanVar(value=True)
+                cb = tk.Checkbutton(
                     self._options_scroll,
-                    text=f"  {plugin.name}",
-                    bg=BG_DEEP, fg=TEXT_DIM, font=FONT_NORMAL,
-                    anchor="w",
+                    text=f" {plugin.name}", variable=var,
+                    **{**_check_style,
+                       "image": self._check_on, "selectimage": self._check_on,
+                       "fg": TEXT_DIM, "state": "disabled"},
                 )
-                lbl.grid(row=row, column=0, sticky="ew", padx=24, pady=2)
-                lbl.bind("<Enter>", lambda _e, p=plugin: self._update_description_and_image(p))
+                cb.grid(row=row, column=0, sticky="w", padx=24, pady=2)
+                cb.bind("<Enter>", lambda _e, p=plugin: self._update_description_and_image(p))
                 row += 1
+
+            self._group_widgets[group.name] = {
+                "type": gtype,
+                "plugins": plugins,
+            }
 
             self._group_widgets[group.name] = {
                 "type": gtype,
@@ -574,7 +634,7 @@ class FomodDialog(ctk.CTkToplevel):
         self._clear_image()
         if img:
             self._current_image = img
-            self._current_image_path = os.path.join(self._mod_root, plugin.image_os_path)
+            self._current_image_path = self._resolve_path_ci(self._mod_root, plugin.image_os_path)
             self._image_label.configure(image=img, text="")
             self._image_label.grid()
         else:
@@ -595,9 +655,11 @@ class FomodDialog(ctk.CTkToplevel):
         Load an image from mod_root/image_os_path.
         Returns a CTkImage scaled to fit the display area, or None on failure.
         Supports any format PIL can read (PNG, DDS, JPG, BMP, etc.).
+        Uses case-insensitive path resolution so Windows-authored FOMOD paths
+        work correctly on Linux.
         """
-        full_path = os.path.join(self._mod_root, image_os_path)
-        if not os.path.isfile(full_path):
+        full_path = self._resolve_path_ci(self._mod_root, image_os_path)
+        if full_path is None:
             return None
         try:
             pil_img = PilImage.open(full_path)
@@ -610,6 +672,29 @@ class FomodDialog(ctk.CTkToplevel):
                                 size=(display_w, display_h))
         except Exception:
             return None
+
+    @staticmethod
+    def _resolve_path_ci(base: str, rel: str) -> Optional[str]:
+        """
+        Walk each component of *rel* under *base* using case-insensitive
+        matching so that Windows-style FOMOD paths (e.g. 'Fomod\\Screens\\x.jpg')
+        resolve correctly on a case-sensitive Linux filesystem.
+        Returns the real absolute path, or None if not found.
+        """
+        current = base
+        for part in rel.replace("\\", "/").split("/"):
+            if not part:
+                continue
+            try:
+                entries = os.listdir(current)
+            except OSError:
+                return None
+            part_lower = part.lower()
+            match = next((e for e in entries if e.lower() == part_lower), None)
+            if match is None:
+                return None
+            current = os.path.join(current, match)
+        return current if os.path.isfile(current) else None
 
     # ------------------------------------------------------------------
     # Selection helpers
@@ -645,7 +730,8 @@ class FomodDialog(ctk.CTkToplevel):
         if not self._visible_steps:
             return
         step = self._visible_steps[self._current_idx]
-        self._all_selections[step.name] = self._get_current_selections()
+        step_key = str(self._config_step_idx(step))
+        self._all_selections[step_key] = self._get_current_selections()
 
     def _first_selected_plugin(self, step: InstallStep,
                                selections: dict[str, list[str]]) -> Optional[Plugin]:
@@ -687,29 +773,61 @@ class FomodDialog(ctk.CTkToplevel):
         self._current_idx -= 1
         self._load_step(self._current_idx)
 
+    def _rebuild_flag_state(self) -> dict[str, str]:
+        """
+        Replay all saved selections in config step order to produce a clean
+        flag state. This avoids stale flags from steps whose selections have
+        since changed (e.g. the user went Back and picked a different option).
+        Keyed by config step index so duplicate step names don't collide.
+        """
+        flag_state: dict[str, str] = {}
+        for i, step in enumerate(self._config.steps):
+            sels = self._all_selections.get(str(i))
+            if sels is None:
+                continue
+            flag_state = update_flags(step, sels, flag_state)
+        return flag_state
+
     def _on_next(self):
         self._save_step_selections()
 
         step = self._visible_steps[self._current_idx]
-        sels = self._all_selections.get(step.name, {})
+        step_key = str(self._config_step_idx(step))
+        sels = self._all_selections.get(step_key, {})
         errors = validate_selections(step, sels)
         if errors:
             self._validation_label.configure(text=errors[0])
             return
         self._validation_label.configure(text="")
 
-        # Apply flags from completed step
-        self._flag_state = update_flags(step, sels, self._flag_state)
+        # Capture the current step object BEFORE refreshing so we can locate
+        # it by identity in the (potentially reordered/resized) new visible list.
+        current_step = step
+
+        # Rebuild flags from scratch so stale flags from previous passes
+        # (e.g. user went Back and changed a selection) don't leak forward.
+        self._flag_state = self._rebuild_flag_state()
         # Re-evaluate visible steps (flag changes may affect visibility)
         self._refresh_visible_steps()
 
-        if self._current_idx >= len(self._visible_steps) - 1:
+        # Find where the step we just completed sits in the refreshed list,
+        # then advance one position from there.  This avoids index drift when
+        # the list grows or shrinks (e.g. a conditional step appearing/disappearing).
+        new_idx = next(
+            (i for i, s in enumerate(self._visible_steps) if s is current_step),
+            self._current_idx,  # fallback: shouldn't happen
+        )
+        if new_idx >= len(self._visible_steps) - 1:
             self._on_finish()
         else:
-            self._current_idx += 1
+            self._current_idx = new_idx + 1
             self._load_step(self._current_idx)
 
     def _on_finish(self):
+        # Emit the index-keyed internal dict directly so duplicate step names
+        # don't collide.  Keys are str(config_step_index).
+        # resolve_files() understands this format; load_step() accepts both
+        # index-keyed (new) and name-keyed (old on-disk JSON) as saved_selections.
         self.result = dict(self._all_selections)
         self.grab_release()
         self.destroy()

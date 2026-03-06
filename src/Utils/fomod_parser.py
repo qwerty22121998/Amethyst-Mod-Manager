@@ -302,12 +302,23 @@ def _parse_install_step(step_el: ET.Element) -> InstallStep:
     name = step_el.get("name", "")
     step = InstallStep(name=name)
 
-    # Optional visibility condition
+    # Optional visibility condition.
+    # Two valid forms exist in the wild:
+    #   1. <visible><dependencies operator="And">…</dependencies></visible>
+    #   2. <visible operator="And"><flagDependency …/></visible>
+    #      (the <visible> element IS the composite dependency)
     visible_el = _find(step_el, "visible")
     if visible_el is not None:
         deps_el = _find(visible_el, "dependencies")
         if deps_el is not None:
             step.visible_condition = _parse_dependency(deps_el)
+        else:
+            # <visible> itself is the composite dependency node
+            operator = visible_el.get("operator", "And")
+            sub_deps = [_parse_dependency(child) for child in visible_el]
+            step.visible_condition = Dependency(
+                dep_type="composite", operator=operator, sub_deps=sub_deps
+            )
 
     # Groups
     groups_el = _find(step_el, "optionalFileGroups")

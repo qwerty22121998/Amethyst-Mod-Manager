@@ -208,8 +208,10 @@ def resolve_files(config: ModuleConfig,
 
     # Build final flag state by replaying all steps in order
     flag_state: dict[str, str] = {}
-    for step in config.steps:
-        step_selections = all_selections.get(step.name, {})
+    for i, step in enumerate(config.steps):
+        # Accept both new index-keyed format (str(i)) and old name-keyed format
+        # (step.name) for backward compatibility with previously saved JSON files.
+        step_selections = all_selections.get(str(i)) or all_selections.get(step.name, {})
         for group in step.groups:
             selected_names = set(step_selections.get(group.name, []))
             for plugin in group.plugins:
