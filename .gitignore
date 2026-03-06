@@ -9,4 +9,4 @@ LOOT/libloot
 .flatpak-builder
 src/appimage/build
 /AUR
-/src/collections_dialog.py # hidden for now
+src/gui/collections_dialog.py
