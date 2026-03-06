@@ -259,13 +259,20 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         elif ext.endswith(".7z"):
             import subprocess
             _7z_done = False
-            try:
-                log_fn("Extracting with py7zr…")
-                with py7zr.SevenZipFile(archive_path, "r") as z:
-                    z.extractall(extract_dir)
-                _7z_done = True
-            except Exception as e7:
-                log_fn(f"py7zr failed ({e7}), retrying with 7z…")
+            # py7zr decompresses entirely into RAM — skip it for large archives
+            # to avoid OOM kills on memory-constrained systems (Steam Deck etc.).
+            _archive_mb = os.path.getsize(archive_path) / (1024 * 1024)
+            _py7zr_limit_mb = 200
+            if _archive_mb <= _py7zr_limit_mb:
+                try:
+                    log_fn("Extracting with py7zr…")
+                    with py7zr.SevenZipFile(archive_path, "r") as z:
+                        z.extractall(extract_dir)
+                    _7z_done = True
+                except Exception as e7:
+                    log_fn(f"py7zr failed ({e7}), retrying with 7z…")
+            else:
+                log_fn(f"Archive is {_archive_mb:.0f} MB — skipping py7zr to avoid OOM, using 7z binary…")
             if not _7z_done:
                 _7z_bin = shutil.which("7zzs") or shutil.which("7z") or shutil.which("7za")
                 if _7z_bin:

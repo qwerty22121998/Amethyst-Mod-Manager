@@ -168,7 +168,14 @@ class ModCard:
                 resp.raise_for_status()
                 img = PilImage.open(io.BytesIO(resp.content)).convert("RGB")
                 resample = PilImage.Resampling.LANCZOS if hasattr(PilImage, "Resampling") else PilImage.LANCZOS  # type: ignore
-                img = img.resize((CARD_IMG_W, CARD_IMG_H), resample)
+                # Scale to cover the slot, then center-crop (no distortion, no letterbox)
+                src_w, src_h = img.size
+                scale = max(CARD_IMG_W / src_w, CARD_IMG_H / src_h)
+                new_w, new_h = int(src_w * scale), int(src_h * scale)
+                img = img.resize((new_w, new_h), resample)
+                x_off = (new_w - CARD_IMG_W) // 2
+                y_off = (new_h - CARD_IMG_H) // 2
+                img = img.crop((x_off, y_off, x_off + CARD_IMG_W, y_off + CARD_IMG_H))
                 photo = ctk.CTkImage(img, img, (CARD_IMG_W, CARD_IMG_H))
             except Exception:
                 photo = None

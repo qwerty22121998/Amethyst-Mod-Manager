@@ -107,14 +107,18 @@ def _find_plugin_paths(
         (found_paths, missing_names)
     """
     found: dict[str, str] = {}  # plugin name → absolute path
+    # Track basenames already added to prevent duplicate filenames (libloot
+    # requires every path to have a unique filename, case-insensitively).
+    found_basenames: set[str] = set()
     names_lower = {n.lower(): n for n in plugin_names}
 
     # 1. Check the game's Data directory
     if game_data_dir.is_dir():
         for name in plugin_names:
             full = game_data_dir / name
-            if full.is_file():
+            if full.is_file() and name.lower() not in found_basenames:
                 found[name] = str(full)
+                found_basenames.add(name.lower())
 
     # 2. For anything still missing, search staging mod folders
     if staging_root and staging_root.is_dir():
@@ -128,8 +132,9 @@ def _find_plugin_paths(
                     if f.is_file() and f.name.lower() in missing_lower:
                         # Map back to the original-cased name
                         orig = names_lower.get(f.name.lower())
-                        if orig and orig not in found:
+                        if orig and orig not in found and f.name.lower() not in found_basenames:
                             found[orig] = str(f)
+                            found_basenames.add(f.name.lower())
 
     # 3. For anything still missing, check the overwrite folder
     #    (staging_root's sibling: Profiles/<game>/overwrite/)
@@ -142,8 +147,9 @@ def _find_plugin_paths(
                 for f in overwrite_dir.iterdir():
                     if f.is_file() and f.name.lower() in missing_lower:
                         orig = names_lower.get(f.name.lower())
-                        if orig and orig not in found:
+                        if orig and orig not in found and f.name.lower() not in found_basenames:
                             found[orig] = str(f)
+                            found_basenames.add(f.name.lower())
 
     found_paths = [found[n] for n in plugin_names if n in found]
     missing_names = [n for n in plugin_names if n not in found]
@@ -190,6 +196,18 @@ def sort_plugins(
             "libloot is not available. "
             "Rebuild it with: ./LOOT/rebuild_libloot.sh"
         )
+
+    # Deduplicate plugin_names case-insensitively: keep first occurrence of each
+    # unique lowercase name. This prevents duplicate paths being generated when
+    # the same plugin appears more than once with different capitalisation.
+    seen_lower: set[str] = set()
+    deduped: list[str] = []
+    for n in plugin_names:
+        nl = n.lower()
+        if nl not in seen_lower:
+            seen_lower.add(nl)
+            deduped.append(n)
+    plugin_names = deduped
 
     if not game_type_attr:
         raise RuntimeError(

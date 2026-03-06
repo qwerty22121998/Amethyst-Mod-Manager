@@ -343,7 +343,6 @@ class TopBar(ctk.CTkFrame):
             state="warning",
             title="Remove Profile",
             body_text=f"Are you sure you want to remove the '{profile}' profile?\n\nThe game will be restored first if this profile is deployed.",
-            body_text=f"Are you sure you want to remove the '{profile}' profile?\n\nThe game will be restored first if this profile is deployed.",
             btn1="Remove",
             btn2="Cancel",
             parent=self.winfo_toplevel(),
@@ -354,7 +353,6 @@ class TopBar(ctk.CTkFrame):
         if game is not None:
             profile_dir = game.get_profile_root() / "profiles" / profile
         else:
-            from Utils.config_paths import get_profiles_dir
             from Utils.config_paths import get_profiles_dir
             profile_dir = get_profiles_dir() / game_name / "profiles" / profile
 

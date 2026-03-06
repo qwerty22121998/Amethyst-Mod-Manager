@@ -23,6 +23,7 @@ from PIL import Image
 from gui.game_helpers import _create_profile, _profiles_for_game
 from gui.install_mod import install_mod_from_archive
 from gui.mod_card import CARD_PAD, make_placeholder_image
+from gui.mod_name_utils import _suggest_mod_names
 from Utils.modlist import write_modlist, ModEntry
 
 # Collections-specific card dimensions (5-column grid)
@@ -179,15 +180,12 @@ class CollectionCard:
             ).pack(padx=8, pady=(2, 0), fill="x")
 
         # Button row
-        btn_frame = ctk.CTkFrame(self.card, fg_color="transparent")
-        btn_frame.pack(padx=10, pady=(6, 8), fill="x", side="bottom")
-
         ctk.CTkButton(
-            btn_frame, text="View",
+            self.card, text="View",
             height=28, fg_color=ACCENT, hover_color=ACCENT_HOV,
             text_color="#ffffff", font=FONT_SMALL,
             command=on_view,
-        ).pack(side="right")
+        ).pack(padx=10, pady=(6, 8), fill="x", side="bottom")
 
     def load_image_async(self, url: str, cache: dict, loading: set, root: tk.Widget):
         """Start async tile image load (same pattern as mod_card.py)."""
@@ -207,13 +205,15 @@ class CollectionCard:
                 r.raise_for_status()
                 from io import BytesIO
                 raw = Image.open(BytesIO(r.content)).convert("RGBA")
-                # Scale to fit within the slot, preserving aspect ratio
-                raw.thumbnail((_COLL_IMG_W, _COLL_IMG_H), Image.LANCZOS)
-                # Composite onto a solid dark background (letterbox)
-                bg = Image.new("RGBA", (_COLL_IMG_W, _COLL_IMG_H), (30, 30, 30, 255))
-                x_off = (_COLL_IMG_W - raw.width) // 2
-                y_off = (_COLL_IMG_H - raw.height) // 2
-                bg.paste(raw, (x_off, y_off), raw)
+                # Scale to cover the slot (zoom), then center-crop
+                src_w, src_h = raw.size
+                scale = max(_COLL_IMG_W / src_w, _COLL_IMG_H / src_h)
+                new_w = int(src_w * scale)
+                new_h = int(src_h * scale)
+                raw = raw.resize((new_w, new_h), Image.LANCZOS)
+                x_off = (new_w - _COLL_IMG_W) // 2
+                y_off = (new_h - _COLL_IMG_H) // 2
+                bg = raw.crop((x_off, y_off, x_off + _COLL_IMG_W, y_off + _COLL_IMG_H))
                 photo = ctk.CTkImage(light_image=bg, dark_image=bg,
                                      size=(_COLL_IMG_W, _COLL_IMG_H))
                 cache[url] = photo
@@ -237,28 +237,24 @@ class CollectionCard:
 # CollectionDetailDialog
 # ---------------------------------------------------------------------------
 
-class CollectionDetailDialog(tk.Toplevel):
+class CollectionDetailDialog(tk.Frame):
     """
     Shows every mod in a collection with file sizes, plus a total size header
-    and an (as-yet non-functional) Install placeholder button.
+    and an Install Collection button. Displayed as an inline overlay frame.
     """
 
     _TV_COLS = ("Order", "Mod Name", "Author", "File", "Size", "Opt")
     _TV_WIDTHS = (50, 250, 120, 200, 80, 40)
 
-    def __init__(self, parent, collection, game_domain: str, api, game=None, app_root=None, log_fn=None):
-        super().__init__(parent)
+    def __init__(self, parent, collection, game_domain: str, api, game=None, app_root=None, log_fn=None, on_close=None):
+        super().__init__(parent, bg=BG_DEEP)
         self._collection = collection
         self._game_domain = game_domain
         self._api = api
         self._game = game
-        self._app_root = app_root  # main Tk app window (not self, which is a Toplevel)
+        self._app_root = app_root
         self._log = log_fn or (lambda *a: None)
-
-        self.title(f"{collection.name} — Mod List")
-        self.geometry("780x640")
-        self.configure(bg=BG_DEEP)
-        self.minsize(600, 400)
+        self._on_close = on_close or self.destroy
 
         self._size_var = tk.StringVar(value="Loading\u2026")
         self._status_var = tk.StringVar(value="Fetching mod list\u2026")
@@ -382,19 +378,21 @@ class CollectionDetailDialog(tk.Toplevel):
         ftr = tk.Frame(self, bg=BG_HEADER, pady=8, bd=0, highlightthickness=0)
         ftr.pack(fill="x", side="bottom")
 
-        tk.Button(
+        ctk.CTkButton(
             ftr, text="Close",
-            bg="#3c3c3c", fg=TEXT_MAIN, activebackground="#505050",
-            font=("Segoe UI", 10), relief="flat", padx=12,
-            command=self.destroy,
-        ).pack(side="right", padx=10)
+            height=30, fg_color="#3c3c3c", hover_color="#505050",
+            text_color=TEXT_MAIN, font=("Segoe UI", 10),
+            border_width=0,
+            command=self._on_close,
+        ).pack(side="right", padx=10, pady=6)
 
-        tk.Button(
+        ctk.CTkButton(
             ftr, text="Install Collection",
-            bg="#2d7a2d", fg="#ffffff", activebackground="#3a9e3a",
-            font=("Segoe UI", 10, "bold"), relief="flat", padx=12,
+            height=30, fg_color="#2d7a2d", hover_color="#3a9e3a",
+            text_color="#ffffff", font=("Segoe UI", 10, "bold"),
+            border_width=0,
             command=self._on_install_collection,
-        ).pack(side="right", padx=(10, 0))
+        ).pack(side="right", padx=(10, 0), pady=6)
 
     # ------------------------------------------------------------------
     # Mod-list fetch
@@ -574,6 +572,7 @@ class CollectionDetailDialog(tk.Toplevel):
         schema_mods: list[dict] = collection_schema.get("mods", [])
         schema_file_id_to_pos: dict[int, int] = {}
         schema_pos_to_name: dict[int, str] = {}  # collection.json logical name
+        schema_file_id_to_logical: dict[int, str] = {}  # file_id → logicalFilename
         fomod_by_file_id: dict[int, dict] = {}   # file_id → saved_selections dict
         for pos, schema_mod in enumerate(schema_mods):
             src = schema_mod.get("source") or {}
@@ -582,6 +581,8 @@ class CollectionDetailDialog(tk.Toplevel):
                 fid = int(fid)
                 schema_file_id_to_pos[fid] = pos
                 schema_pos_to_name[pos] = schema_mod.get("name") or ""
+                logical = src.get("logicalFilename") or schema_mod.get("name") or ""
+                schema_file_id_to_logical[fid] = logical
                 choices = schema_mod.get("choices") or {}
                 if choices.get("type") == "fomod":
                     fomod_by_file_id[fid] = _fomod_choices_from_collection(choices)
@@ -596,6 +597,30 @@ class CollectionDetailDialog(tk.Toplevel):
         # ------------------------------------------------------------------
         # Step 2: Install each mod, tracking the folder names in order
         # ------------------------------------------------------------------
+        # Pre-scan staging dir:
+        #   already_installed_by_fid : file_id → folder name (from meta.ini fileid)
+        #   staging_lower_map        : lower(folder_name) → actual folder name
+        # Used together to skip mods already installed in a previous (partial) run.
+        already_installed_by_fid: dict[int, str] = {}  # file_id → staging folder name
+        staging_lower_map: dict[str, str] = {}          # lower(name) → actual name
+        if staging_path.exists():
+            import configparser as _cp
+            for mod_dir in staging_path.iterdir():
+                if not mod_dir.is_dir():
+                    continue
+                staging_lower_map[mod_dir.name.lower()] = mod_dir.name
+                meta_ini = mod_dir / "meta.ini"
+                if not meta_ini.is_file():
+                    continue
+                try:
+                    _parser = _cp.ConfigParser()
+                    _parser.read(str(meta_ini), encoding="utf-8")
+                    fid_str = _parser.get("General", "fileid", fallback="").strip()
+                    if fid_str and fid_str != "0":
+                        already_installed_by_fid[int(fid_str)] = mod_dir.name
+                except Exception:
+                    pass
+
         # Maps collection.json position (or fallback index) → installed folder name
         install_order: list[tuple[int, str]] = []  # (sort_key, folder_name)
 
@@ -608,6 +633,34 @@ class CollectionDetailDialog(tk.Toplevel):
                 skipped += 1
                 continue
 
+            # Skip mods already installed from a previous (possibly partial) run.
+            # Check 1: fileid in meta.ini matches exactly
+            existing_folder: str = ""
+            if mod.file_id in already_installed_by_fid:
+                existing_folder = already_installed_by_fid[mod.file_id]
+            else:
+                # Check 2: try every name candidate the installer might use as folder name
+                # (logicalFilename, schema name, GraphQL mod_name — all run through
+                #  _suggest_mod_names so we test every stripped variant).
+                logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
+                schema_name = schema_pos_to_name.get(schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
+                candidates: list[str] = []
+                for raw in (logical, schema_name, mod.mod_name or ""):
+                    if raw:
+                        for s in _suggest_mod_names(raw):
+                            if s and s not in candidates:
+                                candidates.append(s)
+                for candidate in candidates:
+                    key = candidate.lower()
+                    if key in staging_lower_map:
+                        existing_folder = staging_lower_map[key]
+                        break
+            if existing_folder:
+                self._log(f"Collection install: '{mod.mod_name}' already installed as '{existing_folder}' — skipping")
+                install_order.append((_sort_key(mod), existing_folder))
+                installed += 1
+                continue
+
             sort_key = _sort_key(mod)
             n = installed + skipped + 1
             try:
@@ -617,16 +670,69 @@ class CollectionDetailDialog(tk.Toplevel):
             except Exception:
                 break
 
+            # Create a progress popup on the main thread
+            mod_panel = getattr(app, "_mod_panel", None)
+            dl_cancel = None
+            if mod_panel is not None:
+                _cancel_ready = threading.Event()
+                _cancel_holder: list = [None]
+
+                def _create_popup(mn=mod.mod_name, i=n, t=total):
+                    try:
+                        ce = mod_panel.get_download_cancel_event()
+                        mod_panel.show_download_progress(
+                            f"[{i}/{t}] {mn}", cancel=ce
+                        )
+                        _cancel_holder[0] = ce
+                    except Exception:
+                        pass
+                    finally:
+                        _cancel_ready.set()
+
+                try:
+                    self.after(0, _create_popup)
+                except Exception:
+                    _cancel_ready.set()
+                _cancel_ready.wait(timeout=5)
+                dl_cancel = _cancel_holder[0]
+
+            def _progress_cb(cur: int, tot: int, _ce=dl_cancel):
+                if mod_panel is None or _ce is None:
+                    return
+                try:
+                    mod_panel.after(
+                        0,
+                        lambda c=cur, t=tot: mod_panel.update_download_progress(
+                            c, t, cancel=_ce
+                        ),
+                    )
+                except Exception:
+                    pass
+
             try:
                 result = downloader.download_file(
                     game_domain=self._game_domain,
                     mod_id=mod.mod_id,
                     file_id=mod.file_id,
+                    progress_cb=_progress_cb,
+                    cancel=dl_cancel,
                 )
             except Exception as exc:
                 self._log(f"Collection install: download failed for '{mod.mod_name}': {exc}")
                 skipped += 1
+                if dl_cancel is not None and mod_panel is not None:
+                    try:
+                        mod_panel.after(0, lambda ce=dl_cancel: mod_panel.hide_download_progress(cancel=ce))
+                    except Exception:
+                        pass
                 continue
+
+            # Close the progress popup now that download is done
+            if dl_cancel is not None and mod_panel is not None:
+                try:
+                    mod_panel.after(0, lambda ce=dl_cancel: mod_panel.hide_download_progress(cancel=ce))
+                except Exception:
+                    pass
 
             if not result.success or not result.file_path:
                 self._log(f"Collection install: download failed for '{mod.mod_name}'")
@@ -665,6 +771,12 @@ class CollectionDetailDialog(tk.Toplevel):
                 done_event.set()
 
             done_event.wait(timeout=600)  # 10 min max per mod (FOMOD + extract)
+
+            # Remove the downloaded archive now that it has been installed
+            try:
+                Path(archive_path).unlink(missing_ok=True)
+            except Exception as _del_exc:
+                self._log(f"Collection install: could not remove archive '{archive_path}': {_del_exc}")
 
             # Detect what folder was created
             new_folder: str = ""
@@ -970,11 +1082,24 @@ class CollectionsDialog(tk.Frame):
         self._load_images()
 
     def _open_detail(self, collection):
-        CollectionDetailDialog(
+        self._close_detail()
+        panel = CollectionDetailDialog(
             self, collection=collection,
             game_domain=self._game_domain, api=self._api,
             game=self._game, app_root=self._app_root, log_fn=self._log,
+            on_close=self._close_detail,
         )
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._detail_panel = panel
+
+    def _close_detail(self):
+        panel = getattr(self, "_detail_panel", None)
+        if panel is not None:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+            self._detail_panel = None
 
     def _regrid_cards(self):
         total_card_w = self._cols * _COLL_W + (self._cols - 1) * CARD_PAD

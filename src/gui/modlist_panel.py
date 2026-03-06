@@ -326,11 +326,13 @@ class ModListPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def load_game(self, game, profile: str = "default") -> None:
+        _collections_was_open = getattr(self, "_collections_panel", None) is not None
         if game is None:
             self._game = None
             self._modlist_path = None
             self._ignored_missing_reqs = set()
             self._reload()
+            self._close_collections()
             if hasattr(self, "_restore_backup_btn"):
                 self._restore_backup_btn.configure(state="disabled")
             return
@@ -358,6 +360,9 @@ class ModListPanel(ctk.CTkFrame):
         self._reload()
         if hasattr(self, "_restore_backup_btn"):
             self._restore_backup_btn.configure(state="normal")
+        # If the collections panel was open, re-open it for the new game
+        if _collections_was_open:
+            self._on_collections()
 
     def reload_after_install(self):
         self._reload()
