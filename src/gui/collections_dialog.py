@@ -256,6 +256,213 @@ class CollectionCard:
 
 
 # ---------------------------------------------------------------------------
+# _OptionalModsDialog
+# ---------------------------------------------------------------------------
+
+class _OptionalModsDialog(ctk.CTkToplevel):
+    """Modal dialog that lists optional mods with checkboxes (all checked by default).
+
+    Show before installing a collection so the user can deselect mods they
+    do not want.  After ``wait_window()`` inspect:
+
+    * ``dialog.result is None``  → user cancelled; abort the install.
+    * ``dialog.result`` (set)    → ``file_id`` values of optional mods to **skip**.
+    """
+
+    _ROW_H = 30
+
+    def __init__(self, parent, optional_mods: list):
+        super().__init__(parent)
+        self.title("Optional Mods")
+        self.resizable(True, True)
+        self.configure(fg_color=BG_DEEP)
+
+        self.result = None          # None = cancelled; set = file_ids to skip
+        self._optional_mods = optional_mods
+        self._vars: dict[int, tk.BooleanVar] = {}  # file_id → BooleanVar (True = include)
+
+        self._build_ui()
+
+        # Size & centre on parent.
+        # Use the actual requisition height so nothing is clipped.
+        self.update_idletasks()
+        w  = 540
+        h  = self.winfo_reqheight()
+        px = parent.winfo_rootx() + (parent.winfo_width()  - w) // 2
+        py = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        self.geometry(f"{w}x{h}+{px}+{py}")
+        self.minsize(380, 220)
+
+        self.grab_set()
+        self.focus_force()
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+    # ------------------------------------------------------------------
+    def _build_ui(self):
+        _MAX_LIST_H = 400
+
+        # --- Header ---
+        hdr = tk.Frame(self, bg=BG_HEADER, pady=6, bd=0, highlightthickness=0)
+        hdr.pack(fill="x", side="top")
+        tk.Label(
+            hdr, text="Optional Mods",
+            bg=BG_HEADER, fg=TEXT_MAIN,
+            font=("Segoe UI", 12, "bold"), anchor="w",
+        ).pack(side="left", padx=14)
+
+        # --- Subtitle ---
+        tk.Label(
+            self,
+            text=(f"{len(self._optional_mods)} optional mod(s) found. "
+                  "Uncheck any you do not want installed:"),
+            bg=BG_DEEP, fg=TEXT_DIM,
+            font=FONT_SMALL, anchor="w",
+        ).pack(fill="x", padx=12, pady=(6, 2))
+
+        # --- Footer (packed BEFORE the expanding list so it is never hidden) ---
+        ftr = tk.Frame(self, bg=BG_HEADER, pady=0, bd=0, highlightthickness=0)
+        ftr.pack(fill="x", side="bottom")
+
+        ctk.CTkButton(
+            ftr, text="Cancel",
+            height=30, fg_color="#3c3c3c", hover_color="#505050",
+            text_color=TEXT_MAIN, font=("Segoe UI", 10),
+            border_width=0,
+            command=self._on_cancel,
+        ).pack(side="right", padx=10, pady=8)
+
+        ctk.CTkButton(
+            ftr, text="Install",
+            height=30, fg_color="#2d7a2d", hover_color="#3a9e3a",
+            text_color="#ffffff", font=("Segoe UI", 10, "bold"),
+            border_width=0,
+            command=self._on_ok,
+        ).pack(side="right", padx=(0, 4), pady=8)
+
+        ctk.CTkButton(
+            ftr, text="Deselect All",
+            height=30, fg_color=BG_PANEL, hover_color=BG_HEADER,
+            text_color=TEXT_DIM, font=("Segoe UI", 10),
+            border_width=0,
+            command=self._deselect_all,
+        ).pack(side="left", padx=(4, 0), pady=8)
+
+        ctk.CTkButton(
+            ftr, text="Select All",
+            height=30, fg_color=BG_PANEL, hover_color=BG_HEADER,
+            text_color=TEXT_DIM, font=("Segoe UI", 10),
+            border_width=0,
+            command=self._select_all,
+        ).pack(side="left", padx=(10, 4), pady=8)
+
+        # --- Scrollable list (packed last so it fills whatever remains) ---
+        list_frame = tk.Frame(self, bg=BG_DEEP, bd=0, highlightthickness=0)
+        list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+
+        # Give the canvas an explicit height so winfo_reqheight() is meaningful
+        canvas_h = min(len(self._optional_mods) * self._ROW_H + 4, _MAX_LIST_H)
+        canvas = tk.Canvas(
+            list_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
+            yscrollincrement=1, height=canvas_h,
+        )
+        vsb = tk.Scrollbar(
+            list_frame, orient="vertical", command=canvas.yview,
+            bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+            highlightthickness=0, bd=0,
+        )
+        canvas.configure(yscrollcommand=vsb.set)
+
+        inner = tk.Frame(canvas, bg=BG_DEEP, bd=0, highlightthickness=0)
+        canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_inner_resize(_e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            canvas.itemconfigure(canvas_window, width=canvas.winfo_width())
+
+        def _on_canvas_resize(e):
+            canvas.itemconfigure(canvas_window, width=e.width)
+
+        inner.bind("<Configure>", _on_inner_resize)
+        canvas.bind("<Configure>", _on_canvas_resize)
+
+        # Scroll-wheel helpers (Linux Button-4/5 + Windows/macOS MouseWheel)
+        def _scroll_up(_e):   canvas.yview_scroll(-3, "units")
+        def _scroll_down(_e): canvas.yview_scroll(3, "units")
+        def _on_wheel(e):
+            canvas.yview_scroll(-3 if getattr(e, "delta", 0) > 0 else 3, "units")
+
+        def _bind_scroll(w):
+            w.bind("<Button-4>",   _scroll_up)
+            w.bind("<Button-5>",   _scroll_down)
+            w.bind("<MouseWheel>", _on_wheel)
+
+        for w in (canvas, vsb, inner, list_frame, self):
+            _bind_scroll(w)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        # --- Rows ---
+        for i, mod in enumerate(self._optional_mods):
+            var = tk.BooleanVar(value=True)
+            self._vars[mod.file_id] = var
+
+            row_bg = BG_ROW if i % 2 == 0 else BG_PANEL
+            row = tk.Frame(inner, bg=row_bg, bd=0, highlightthickness=0,
+                           height=self._ROW_H)
+            row.pack(fill="x")
+            row.pack_propagate(False)
+
+            cb = tk.Checkbutton(
+                row, variable=var,
+                bg=row_bg, fg=TEXT_MAIN,
+                activebackground=row_bg, activeforeground=TEXT_MAIN,
+                selectcolor=BG_DEEP,
+                bd=0, highlightthickness=0, cursor="hand2",
+            )
+            cb.pack(side="left", padx=(8, 0))
+
+            name_text = mod.mod_name or mod.file_name or "(Unknown)"
+            tk.Label(
+                row, text=name_text,
+                bg=row_bg, fg=TEXT_MAIN,
+                font=FONT_NORMAL, anchor="w",
+            ).pack(side="left", padx=(4, 4))
+
+            if mod.mod_author:
+                tk.Label(
+                    row, text=f"by {mod.mod_author}",
+                    bg=row_bg, fg=TEXT_DIM,
+                    font=FONT_SMALL, anchor="w",
+                ).pack(side="left", padx=(0, 8))
+
+            # Bind scrollwheel to every child so it works anywhere in the row
+            _bind_scroll(row)
+            for child in row.winfo_children():
+                _bind_scroll(child)
+
+    # ------------------------------------------------------------------
+    def _on_ok(self):
+        # file_ids whose checkbox was unchecked → skip them
+        self.result = {fid for fid, var in self._vars.items() if not var.get()}
+        self.grab_release()
+        self.destroy()
+
+    def _on_cancel(self):
+        self.result = None
+        self.grab_release()
+        self.destroy()
+
+    def _select_all(self):
+        for var in self._vars.values():
+            var.set(True)
+
+    def _deselect_all(self):
+        for var in self._vars.values():
+            var.set(False)
+
+
+# ---------------------------------------------------------------------------
 # CollectionDetailDialog
 # ---------------------------------------------------------------------------
 
@@ -584,6 +791,19 @@ class CollectionDetailDialog(tk.Frame):
             self._status_var.set("Mod list not loaded yet — please wait.")
             return
 
+        # --- Optional mods selection dialog ---
+        optional_mods = [m for m in mods if m.optional]
+        if optional_mods:
+            dlg = _OptionalModsDialog(self.winfo_toplevel(), optional_mods)
+            self.wait_window(dlg)
+            if dlg.result is None:
+                # User cancelled — abort the install
+                return
+            if dlg.result:
+                # dlg.result is the set of file_ids to skip
+                skip_ids = dlg.result
+                mods = [m for m in mods if not m.optional or m.file_id not in skip_ids]
+
         # Sanitise collection name → profile name
         raw = self._collection.name or self._collection.slug or "Collection"
         profile_name = re.sub(r"[^\w\s\-]", "", raw).strip().replace(" ", "_")[:64] or "Collection"
@@ -694,14 +914,36 @@ class CollectionDetailDialog(tk.Frame):
         #   already_installed_by_fid : file_id → folder name (from meta.ini fileid)
         #   staging_lower_map        : lower(folder_name) → actual folder name
         # Used together to skip mods already installed in a previous (partial) run.
+        #
+        # IMPORTANT: staging_path is the *shared* staging directory used by all
+        # profiles for a game.  We must restrict the name-based staging_lower_map
+        # to only the mods that are explicitly listed in *this* profile's
+        # modlist.txt — otherwise mods installed for unrelated profiles will
+        # produce false-positive "already installed" matches and be silently
+        # skipped.  The file_id exact-match (already_installed_by_fid) is safe
+        # to populate from all folders, because a file_id collision across
+        # different mod pages is essentially impossible.
         already_installed_by_fid: dict[int, str] = {}  # file_id → staging folder name
         staging_lower_map: dict[str, str] = {}          # lower(name) → actual name
+
+        # Build the set of mod folder names that are actually in this profile.
+        _profile_mod_names: set[str] = set()
+        if modlist_path.is_file():
+            try:
+                from Utils.modlist import read_modlist
+                for entry in read_modlist(modlist_path):
+                    _profile_mod_names.add(entry.name.lower())
+            except Exception:
+                pass
+
+        import configparser as _cp
         if staging_path.exists():
-            import configparser as _cp
             for mod_dir in staging_path.iterdir():
                 if not mod_dir.is_dir():
                     continue
-                staging_lower_map[mod_dir.name.lower()] = mod_dir.name
+                # Name-based map: only include folders belonging to this profile.
+                if mod_dir.name.lower() in _profile_mod_names:
+                    staging_lower_map[mod_dir.name.lower()] = mod_dir.name
                 meta_ini = mod_dir / "meta.ini"
                 if not meta_ini.is_file():
                     continue
@@ -816,6 +1058,7 @@ class CollectionDetailDialog(tk.Frame):
                     progress_cb=_progress_cb,
                     cancel=dl_cancel,
                     known_file_name=mod.file_name or "",
+                    expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
                 )
             except Exception as exc:
                 self._log(f"Collection install: download failed for '{mod.mod_name}': {exc}")
@@ -850,101 +1093,126 @@ class CollectionDetailDialog(tk.Frame):
                 list(_pool.map(_download_one, to_download))
 
         # ------------------------------------------------------------------
-        # Step 2b: Install downloaded archives sequentially (main thread)
+        # Step 2b: Install downloaded archives in parallel worker threads.
         # ------------------------------------------------------------------
-        for seq_idx, mod in enumerate(to_download, 1):
-            if not self.winfo_exists():
-                break
+        # headless=True suppresses all GUI dialogs and per-mod modlist writes;
+        # the collection manages modlist/plugins itself after all installs finish.
+        # _INSTALL_WORKERS parallel extractions run at once — this keeps all CPU
+        # cores and the NVMe busy without too much RAM pressure from py7zr.
+        _INSTALL_WORKERS = 4
 
+        # Count uses per physical archive path so we only delete it after the
+        # last consumer finishes.  Two separate collection entries can reference
+        # the same physical archive (same file_id, or different file_ids whose
+        # cached-archive lookup resolved to the same file on disk).
+        _archive_use_count: dict[str, int] = {}
+        for _m in to_download:
+            _r = _dl_results.get(_m.file_id) if _m.file_id else None
+            if _r and _r.success and _r.file_path:
+                _key = str(_r.file_path)
+                _archive_use_count[_key] = _archive_use_count.get(_key, 0) + 1
+
+        _install_lock = threading.Lock()
+        _install_counters = {"installed": 0, "skipped": 0, "done": 0}
+        _install_results: dict[int, str] = {}  # file_id → installed folder name
+
+        def _install_one(mod):
             result = _dl_results.get(mod.file_id)
             if result is None or not result.success or not result.file_path:
                 self._log(f"Collection install: download failed for '{mod.mod_name}'")
-                skipped += 1
-                continue
+                with _install_lock:
+                    _install_counters["skipped"] += 1
+                    _install_counters["done"] += 1
+                return
 
-            sort_key = _sort_key(mod)
-            try:
-                self.after(0, lambda m=mod, i=seq_idx, t=_dl_total: self._status_var.set(
-                    f"Installing {i}/{t}: {m.mod_name}\u2026"
-                ))
-            except Exception:
-                break
-
-            # Snapshot staging dir to detect the newly-installed folder
-            before_folders: set[str] = set()
-            if staging_path.exists():
-                try:
-                    before_folders = {p.name for p in staging_path.iterdir() if p.is_dir()}
-                except Exception:
-                    pass
-
-            # Install on the main thread, wait for it to finish
-            done_event = threading.Event()
             archive_path = str(result.file_path)
             auto_fomod = fomod_by_file_id.get(mod.file_id)
 
-            def _do_install(ap=archive_path, cm=mod, af=auto_fomod, gd=self._game_domain):
-                try:
-                    # Build metadata from the collection's own fields so
-                    # install_mod_from_archive doesn't need extra API calls.
-                    try:
-                        _pmeta = build_meta_from_download(
-                            game_domain=gd,
-                            mod_id=cm.mod_id,
-                            file_id=cm.file_id,
-                            archive_name=cm.file_name or "",
-                        )
-                        _pmeta.nexus_name = cm.mod_name or ""
-                        _pmeta.author = cm.mod_author or ""
-                        _pmeta.version = cm.version or ""
-                    except Exception:
-                        _pmeta = None
-                    install_mod_from_archive(
-                        ap, self, self._log, self._game,
-                        fomod_auto_selections=af,
-                        prebuilt_meta=_pmeta,
-                    )
-                except Exception as exc:
-                    self._log(f"Collection install: install failed for '{cm.mod_name}': {exc}")
-                finally:
-                    done_event.set()
-
+            # Build prebuilt metadata so no extra API calls are needed.
             try:
-                self.after(0, _do_install)
+                _pmeta = build_meta_from_download(
+                    game_domain=self._game_domain,
+                    mod_id=mod.mod_id,
+                    file_id=mod.file_id,
+                    archive_name=mod.file_name or "",
+                )
+                _pmeta.nexus_name = mod.mod_name or ""
+                _pmeta.author = mod.mod_author or ""
+                _pmeta.version = mod.version or ""
             except Exception:
-                done_event.set()
+                _pmeta = None
 
-            done_event.wait(timeout=600)  # 10 min max per mod (FOMOD + extract)
+            folder_name = install_mod_from_archive(
+                archive_path, self, self._log, self._game,
+                fomod_auto_selections=auto_fomod,
+                prebuilt_meta=_pmeta,
+                profile_dir=profile_dir,
+                headless=True,
+            )
 
-            # Remove the downloaded archive now that it has been installed
+            with _install_lock:
+                if folder_name:
+                    _install_results[mod.file_id] = folder_name
+                    _install_counters["installed"] += 1
+                else:
+                    _install_counters["skipped"] += 1
+                _install_counters["done"] += 1
+                done_so_far = _install_counters["done"]
+
+                # Delete archive once all consumers of this path are done.
+                if archive_path in _archive_use_count:
+                    _archive_use_count[archive_path] -= 1
+                    if _archive_use_count[archive_path] == 0:
+                        try:
+                            Path(archive_path).unlink(missing_ok=True)
+                        except Exception as _del_exc:
+                            self._log(
+                                f"Collection install: could not remove archive "
+                                f"'{archive_path}': {_del_exc}"
+                            )
+
+            # Update progress bar and mark row green on the main thread.
             try:
-                Path(archive_path).unlink(missing_ok=True)
-            except Exception as _del_exc:
-                self._log(f"Collection install: could not remove archive '{archive_path}': {_del_exc}")
-
-            # Detect what folder was created
-            new_folder: str = ""
-            if staging_path.exists():
-                try:
-                    after_folders = {p.name for p in staging_path.iterdir() if p.is_dir()}
-                    new_dirs = after_folders - before_folders
-                    if new_dirs:
-                        new_folder = next(iter(new_dirs))
-                except Exception:
-                    pass
-            if not new_folder:
-                # Fallback: use the mod name from collection.json or GraphQL
-                new_folder = schema_pos_to_name.get(sort_key) or mod.mod_name
-
-            install_order.append((sort_key, new_folder))
-            installed += 1
-
-            # Update the row colour to green on the main thread
-            if mod.file_id:
+                self.after(0, lambda d=done_so_far, t=_dl_total: self._status_var.set(
+                    f"Installing: {d}/{t} complete\u2026"
+                ))
+            except Exception:
+                pass
+            if mod.file_id and folder_name:
                 try:
                     self.after(0, lambda fid=mod.file_id: self._mark_row_installed(fid))
                 except Exception:
                     pass
+
+        if to_download:
+            try:
+                self.after(0, lambda n=_dl_total, w=_INSTALL_WORKERS: self._status_var.set(
+                    f"Installing {n} mod(s) — up to {w} at a time\u2026"
+                ))
+            except Exception:
+                pass
+            # Sort smallest archives first so workers stay busy and large mods
+            # don't block the queue.  Any mod that needs a manual FOMOD dialog
+            # will still serialize correctly via the _fomod_dialog_lock — running
+            # small non-interactive mods first means the FOMOD prompts typically
+            # appear after the bulk of parallel work is already done.
+            _to_install = sorted(to_download, key=lambda m: getattr(m, "size_bytes", 0) or 0)
+            with _cf.ThreadPoolExecutor(max_workers=_INSTALL_WORKERS) as _install_pool:
+                list(_install_pool.map(_install_one, _to_install))
+
+        installed += _install_counters["installed"]
+        skipped  += _install_counters["skipped"]
+
+        # Build install_order from parallel results.
+        for mod in to_download:
+            sort_key = _sort_key(mod)
+            folder = (
+                _install_results.get(mod.file_id)
+                or schema_pos_to_name.get(sort_key)
+                or mod.mod_name
+            )
+            if mod.file_id in _install_results:
+                install_order.append((sort_key, folder))
 
         # ------------------------------------------------------------------
         # Step 3: Write modlist.txt in collection-defined order
