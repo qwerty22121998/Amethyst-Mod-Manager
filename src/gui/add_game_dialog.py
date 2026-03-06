@@ -707,8 +707,24 @@ class AddGameDialog(ctk.CTkToplevel):
         if not confirm.confirmed:
             return
 
-        from Utils.deploy import remove_deployed_files
-        removed = remove_deployed_files(target_dir)
+        from Utils.deploy import remove_deployed_files, restore_filemap_from_root
+        removed = 0
+
+        # For root-deploy games (Cyberpunk, Witcher 3, etc.) that use
+        # deploy_filemap_to_root(), prefer removing by the deployment log first.
+        # This works even when the staging files have been deleted (st_nlink
+        # drops to 1 so the heuristic in remove_deployed_files() misses them).
+        # It also restores any vanilla-file backups from filemap_backup/.
+        if hasattr(self._game, "get_effective_filemap_path"):
+            try:
+                filemap_path = self._game.get_effective_filemap_path()
+                removed += restore_filemap_from_root(filemap_path, target_dir)
+            except Exception:
+                pass
+
+        # Heuristic fallback: catch any remaining hardlinks/symlinks not in
+        # the log (e.g. Root_Folder files, or pre-log deploys).
+        removed += remove_deployed_files(target_dir)
 
         if hasattr(self._game, "post_clean_game_folder"):
             self._game.post_clean_game_folder()

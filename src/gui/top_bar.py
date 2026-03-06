@@ -342,7 +342,7 @@ class TopBar(ctk.CTkFrame):
         alert = CTkAlert(
             state="warning",
             title="Remove Profile",
-            body_text=f"Are you sure you want to remove the '{profile}' profile?\n\nThis will delete modlist.txt and plugins.txt for this profile.",
+            body_text=f"Are you sure you want to remove the '{profile}' profile?\n\nThe game will be restored first if this profile is deployed.",
             btn1="Remove",
             btn2="Cancel",
             parent=self.winfo_toplevel(),
@@ -353,7 +353,30 @@ class TopBar(ctk.CTkFrame):
         if game is not None:
             profile_dir = game.get_profile_root() / "profiles" / profile
         else:
+            from Utils.config_paths import get_profiles_dir
             profile_dir = get_profiles_dir() / game_name / "profiles" / profile
+
+        # Restore deployed mod files before deleting the profile so we don't
+        # leave orphaned mod files in the game folder.  Point the game at this
+        # profile so get_effective_filemap_path() resolves correctly.
+        if game is not None and game.is_configured():
+            game.set_active_profile_dir(profile_dir)
+            try:
+                if hasattr(game, "restore"):
+                    game.restore()
+            except Exception:
+                pass
+            try:
+                from Utils.deploy import restore_root_folder
+                root_folder_dir = game.get_profile_root() / "Root_Folder"
+                game_root = game.get_game_path()
+                if root_folder_dir.is_dir() and game_root:
+                    restore_root_folder(root_folder_dir, game_root)
+            except Exception:
+                pass
+            # Clear stale reference; _reload_mod_panel will set it correctly.
+            game.set_active_profile_dir(None)
+
         if profile_dir.is_dir():
             shutil.rmtree(profile_dir)
         self._log(f"Profile '{profile}' removed.")
