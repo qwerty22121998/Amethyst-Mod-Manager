@@ -262,8 +262,11 @@ class CollectionDetailDialog(tk.Frame):
         self._download_link_path: str = ""
         self._schema_order: dict = {}
 
+        self._reset_btn = None  # created in _build_ui; shown only when profile exists
+
         self._build_ui()
         self._fetch()
+        self.after(100, self._update_reset_btn_visibility)  # check after widget is placed
 
     # ------------------------------------------------------------------
     def _build_ui(self):
@@ -393,6 +396,16 @@ class CollectionDetailDialog(tk.Frame):
             border_width=0,
             command=self._on_install_collection,
         ).pack(side="right", padx=(10, 0), pady=6)
+
+        self._reset_btn = ctk.CTkButton(
+            ftr, text="Reset Load Order",
+            height=30, fg_color="#5a3a00", hover_color="#7a5200",
+            text_color="#ffffff", font=("Segoe UI", 10),
+            border_width=0,
+            command=self._on_reset_load_order,
+        )
+        # Packed (shown) only when the collection profile already exists;
+        # see _update_reset_btn_visibility()
 
     # ------------------------------------------------------------------
     # Mod-list fetch
@@ -858,6 +871,161 @@ class CollectionDetailDialog(tk.Frame):
             f"Switch to profile '{profile_name}' to use it."
         )
         self._refresh_profile_menu()
+        self._update_reset_btn_visibility()
+
+    # ------------------------------------------------------------------
+    # Reset load order
+    # ------------------------------------------------------------------
+    def _get_profile_dir(self) -> "Path | None":
+        """Return the profile directory for this collection, or None if it doesn't exist."""
+        raw = self._collection.name or self._collection.slug or "Collection"
+        profile_name = re.sub(r"[^\w\s\-]", "", raw).strip().replace(" ", "_")[:64] or "Collection"
+        game = self._game
+        try:
+            profiles_root = game.get_profile_root()
+        except AttributeError:
+            from Utils.config_paths import get_profiles_dir
+            profiles_root = get_profiles_dir() / (game.name if game else "")
+        profile_dir = profiles_root / "profiles" / profile_name
+        return profile_dir if profile_dir.is_dir() else None
+
+    def _update_reset_btn_visibility(self):
+        """Show/hide the Reset Load Order button based on whether the profile exists."""
+        if self._reset_btn is None:
+            return
+        try:
+            if self._get_profile_dir() is not None:
+                self._reset_btn.pack(side="left", padx=10, pady=6)
+            else:
+                self._reset_btn.pack_forget()
+        except Exception:
+            pass
+
+    def _on_reset_load_order(self):
+        """Show confirmation then launch background reset thread."""
+        profile_dir = self._get_profile_dir()
+        if profile_dir is None:
+            self._status_var.set("Profile not found — install the collection first.")
+            return
+        if not self._download_link_path:
+            self._status_var.set("Collection manifest URL not loaded yet — please wait.")
+            return
+        self._status_var.set("Resetting load order from collection manifest…")
+        threading.Thread(
+            target=self._run_reset_load_order,
+            args=(profile_dir,),
+            daemon=True,
+        ).start()
+
+    def _run_reset_load_order(self, profile_dir: Path):
+        """Background: re-fetch collection.json and rewrite modlist.txt + plugins.txt."""
+        import configparser
+        try:
+            self.after(0, lambda: self._status_var.set("Downloading collection manifest…"))
+            cj = self._api.get_collection_archive_json(self._download_link_path)
+
+            # Build file_id → collection position map
+            fid_to_pos: dict = {}
+            for pos, m in enumerate(cj.get("mods", [])):
+                fid = (m.get("source") or {}).get("fileId")
+                if fid is not None:
+                    fid_to_pos[int(fid)] = pos
+
+            # Staging dir for a profile-specific-mods profile is profile_dir/mods
+            staging_path = profile_dir / "mods"
+            if not staging_path.is_dir():
+                self.after(0, lambda: self._status_var.set(
+                    "No mods folder in profile — has the collection been installed?"
+                ))
+                return
+
+            # Scan each mod folder for meta.ini → file_id → collection position
+            ordered: list[tuple[int, str]] = []  # (position, folder_name)
+            unordered: list[str] = []
+            for folder in staging_path.iterdir():
+                if not folder.is_dir():
+                    continue
+                meta = folder / "meta.ini"
+                fid = None
+                if meta.exists():
+                    try:
+                        cp = configparser.ConfigParser(strict=False)
+                        cp.read(meta, encoding="utf-8")
+                        raw_fid = (
+                            cp.get("General", "fileid", fallback=None)
+                            or cp.get("general", "fileid", fallback=None)
+                        )
+                        if raw_fid:
+                            fid = int(raw_fid)
+                    except Exception:
+                        pass
+                if fid is not None and fid in fid_to_pos:
+                    ordered.append((fid_to_pos[fid], folder.name))
+                else:
+                    unordered.append(folder.name)
+
+            ordered.sort(key=lambda x: x[0])
+            # Highest priority first (reversed collection order → first in modlist.txt)
+            modlist_entries = [
+                ModEntry(name=name, enabled=True, locked=False)
+                for _, name in reversed(ordered)
+            ] + [
+                ModEntry(name=name, enabled=True, locked=False)
+                for name in unordered
+            ]
+
+            modlist_path = profile_dir / "modlist.txt"
+            if modlist_entries:
+                try:
+                    write_modlist(modlist_path, modlist_entries)
+                    self._log(f"Reset load order: wrote modlist.txt with {len(modlist_entries)} entries")
+                except Exception as exc:
+                    self._log(f"Reset load order: failed to write modlist.txt: {exc}")
+
+            # Re-write plugins.txt from collection.json
+            schema_plugins: list = cj.get("plugins", [])
+            if schema_plugins:
+                try:
+                    lines = []
+                    for plugin in schema_plugins:
+                        name = plugin.get("name", "")
+                        enabled = plugin.get("enabled", True)
+                        lines.append(("*" if enabled else "") + name)
+                    plugins_path = profile_dir / "plugins.txt"
+                    plugins_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                    self._log(f"Reset load order: wrote plugins.txt with {len(lines)} plugins")
+                except Exception as exc:
+                    self._log(f"Reset load order: failed to write plugins.txt: {exc}")
+
+            msg = (
+                f"Load order reset — {len(ordered)} mods ordered"
+                + (f", {len(unordered)} unmatched (kept at bottom)." if unordered else ".")
+            )
+            self.after(0, lambda: self._status_var.set(msg))
+            self.after(0, self._refresh_panels_after_reset)
+
+        except Exception as exc:
+            self._log(f"Reset load order failed: {exc}")
+            self.after(0, lambda: self._status_var.set(f"Reset failed: {exc}"))
+
+    def _refresh_panels_after_reset(self):
+        """Reload the modlist and plugin panels so they reflect the newly written files."""
+        app = self._app_root
+        try:
+            mod_panel = getattr(app, "_mod_panel", None)
+            if mod_panel is not None:
+                mod_panel.reload_after_install()
+        except Exception as exc:
+            self._log(f"Reset load order: could not refresh mod panel: {exc}")
+        try:
+            pp = getattr(app, "_plugin_panel", None)
+            if pp is not None:
+                pp_path = getattr(pp, "_plugins_path", None)
+                pp_exts = getattr(pp, "_plugin_extensions", None)
+                if pp_path and pp_exts:
+                    pp.load_plugins(pp_path, pp_exts)
+        except Exception as exc:
+            self._log(f"Reset load order: could not refresh plugin panel: {exc}")
 
 
 # ---------------------------------------------------------------------------
