@@ -693,6 +693,104 @@ def restore_data_core(
 
 
 # ---------------------------------------------------------------------------
+# Undeploy — remove a mod's deployed files from the game directory
+# ---------------------------------------------------------------------------
+
+def undeploy_mod_files(
+    mod_names: list[str],
+    deploy_dir: "Path | None",
+    game_root: "Path | None",
+    index_path: Path,
+    log_fn=None,
+) -> int:
+    """Remove any files belonging to the given mods from the game's deploy
+    directory and/or game root, using the modindex.txt to find them.
+
+    Call this *before* deleting the staging folders so that hardlinks/copies
+    that are still sitting in the game directory are cleaned up.  Without this
+    step, restore_data_core() would classify the leftover files as
+    runtime-generated and move them to overwrite/ as a false positive.
+
+    mod_names  — list of mod folder names to undeploy
+    deploy_dir — the game's mod data directory (e.g. <game_path>/Data/).
+                 May be None if the game has no separate data dir.
+    game_root  — the game's install root (used for root-deployed files).
+                 May be None if unknown / game not configured.
+    index_path — path to modindex.txt (typically <profile_root>/modindex.txt)
+    log_fn     — optional logging callable
+
+    Returns the total number of files removed.
+    """
+    _log = log_fn or (lambda _: None)
+
+    # Load the index; nothing to do if it is absent.
+    try:
+        from Utils.filemap import read_mod_index
+        index = read_mod_index(index_path)
+    except Exception:
+        index = None
+    if not index:
+        return 0
+
+    removed = 0
+    dirs_to_prune: set[Path] = set()
+
+    for mod_name in mod_names:
+        entry = index.get(mod_name)
+        if entry is None:
+            continue
+        normal_files, root_files = entry
+
+        # Normal files — deployed files live inside deploy_dir.
+        if deploy_dir is not None and normal_files:
+            for rel_str in normal_files.values():
+                target = deploy_dir / rel_str
+                if not _path_under_root(target, deploy_dir):
+                    _log(f"  SKIP (path traversal): {rel_str}")
+                    continue
+                if target.is_file() or target.is_symlink():
+                    try:
+                        target.unlink()
+                        removed += 1
+                        dirs_to_prune.add(target.parent)
+                    except OSError as exc:
+                        _log(f"  WARN: could not remove deployed file {rel_str}: {exc}")
+
+        # Root files — deployed files live inside game_root.
+        if game_root is not None and root_files:
+            for rel_str in root_files.values():
+                target = game_root / rel_str
+                if not _path_under_root(target, game_root):
+                    _log(f"  SKIP (path traversal): {rel_str}")
+                    continue
+                if target.is_file() or target.is_symlink():
+                    try:
+                        target.unlink()
+                        removed += 1
+                        dirs_to_prune.add(target.parent)
+                    except OSError as exc:
+                        _log(f"  WARN: could not remove root-deployed file {rel_str}: {exc}")
+
+    # Prune empty directories left behind (deepest first).
+    roots = set()
+    if deploy_dir is not None:
+        roots.add(deploy_dir)
+    if game_root is not None:
+        roots.add(game_root)
+    for d in sorted(dirs_to_prune, key=lambda x: len(x.parts), reverse=True):
+        if d in roots:
+            continue
+        try:
+            d.rmdir()  # Only removes if empty
+        except OSError:
+            pass
+
+    if removed:
+        _log(f"  Undeployed {removed} file(s) for {len(mod_names)} mod(s).")
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # Root-deploy — filemap-driven deploy/restore directly into the game root
 # ---------------------------------------------------------------------------
 
