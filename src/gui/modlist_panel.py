@@ -1206,7 +1206,7 @@ class ModListPanel(ctk.CTkFrame):
                     else:
                         custom_color = self._sep_colors.get(entry.name)
                         base_bg = custom_color if custom_color else BG_SEP
-                        txt_col = TEXT_SEP
+                        txt_col = _theme.contrasting_text_color(base_bg) if custom_color else TEXT_SEP
 
                     if is_sel_row:
                         row_bg = BG_SELECT
@@ -1240,12 +1240,13 @@ class ModListPanel(ctk.CTkFrame):
                     left_edge  = 32 if is_root_folder else (20 if not is_synthetic else 8)
                     text_pad   = 6
                     label_hw   = len(label) * 4 + text_pad
+                    sep_line_col = txt_col if (custom_color if not is_synthetic else False) else BORDER
                     c.coords(self._pool_sep_line_l[s],
                              left_edge, y_mid, mid_x - label_hw, y_mid)
-                    c.itemconfigure(self._pool_sep_line_l[s], fill=BORDER, state="normal")
+                    c.itemconfigure(self._pool_sep_line_l[s], fill=sep_line_col, state="normal")
                     c.coords(self._pool_sep_line_r[s],
                              mid_x + label_hw, y_mid, right_edge, y_mid)
-                    c.itemconfigure(self._pool_sep_line_r[s], fill=BORDER, state="normal")
+                    c.itemconfigure(self._pool_sep_line_r[s], fill=sep_line_col, state="normal")
 
                     # Collapse icon (real separators only)
                     if not is_synthetic:

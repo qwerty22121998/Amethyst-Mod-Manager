@@ -32,6 +32,24 @@ BORDER     = "#444444"
 RED_BTN    = "#a83232"
 RED_HOV    = "#c43c3c"
 
+# ---------------------------------------------------------------------------
+# Contrast helper
+# ---------------------------------------------------------------------------
+def contrasting_text_color(hex_bg: str) -> str:
+    """Return '#111111' or '#eeeeee' (dark/light) based on the luminance of
+    *hex_bg* (e.g. '#3a7bd5') so text always stays readable."""
+    try:
+        hex_bg = hex_bg.lstrip("#")
+        r, g, b = (int(hex_bg[i:i+2], 16) / 255.0 for i in (0, 2, 4))
+        # Convert sRGB to linear light (WCAG 2 formula)
+        def _lin(c: float) -> float:
+            return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+        lum = 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+        # Threshold: use dark text on light backgrounds, light text on dark
+        return "#111111" if lum > 0.179 else "#eeeeee"
+    except Exception:
+        return TEXT_SEP
+
 # Highlight colours
 plugin_separator = "#A45500"
 plugin_mod = "#A45500"
