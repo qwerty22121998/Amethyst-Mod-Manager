@@ -49,7 +49,7 @@ from gui.theme import (
 )
 
 PAGE_SIZE    = 20
-_SUMMARY_MAX = 80
+_SUMMARY_MAX = 200
 
 
 def _fmt_size(n_bytes: int) -> str:
@@ -119,13 +119,13 @@ class CollectionCard:
         self._collection = collection
         self._img_label: Optional[ctk.CTkLabel] = None
 
-        # Outer card frame
-        self.card = ctk.CTkFrame(
+        # Outer card frame — fixed size, content clips if too long.
+        self.card = tk.Frame(
             parent,
-            width=_COLL_W, height=420,
-            fg_color=BG_PANEL,
-            border_color=BORDER, border_width=1,
-            corner_radius=8,
+            width=_COLL_W, height=480,
+            bg=BG_PANEL,
+            highlightbackground=BORDER,
+            highlightthickness=1,
         )
         self.card.pack_propagate(False)
         self.card.grid_propagate(False)
@@ -157,11 +157,9 @@ class CollectionCard:
             command=on_view,
         ).place(relx=0.5, rely=0.5, anchor="center")
 
-        # Fixed-height text area — prevents overflow from pushing the button around
-        # Card=420, image=240+9px padding, button=44 → text area ≈ 127px
-        text_frame = tk.Frame(self.card, bg=BG_PANEL, height=127)
+        # Text area — fills width, grows to fit its content
+        text_frame = tk.Frame(self.card, bg=BG_PANEL)
         text_frame.pack(fill="x")
-        text_frame.pack_propagate(False)
 
         # Name
         name_text = col.name or f"Collection {col.id}"
@@ -198,16 +196,7 @@ class CollectionCard:
                 wraplength=_COLL_W - 16, justify="left", anchor="w",
             ).pack(padx=8, pady=(2, 0), fill="x")
 
-        # (btn_frame already packed above)
-        btn_frame.pack(side="bottom", fill="x")
-        btn_frame.pack_propagate(False)
-        ctk.CTkButton(
-            btn_frame, text="View",
-            width=_COLL_W - 20, height=28,
-            fg_color=ACCENT, hover_color=ACCENT_HOV,
-            text_color="#ffffff", font=FONT_SMALL,
-            command=on_view,
-        ).place(relx=0.5, rely=0.5, anchor="center")
+
 
     def load_image_async(self, url: str, cache: dict, loading: set, root: tk.Widget):
         """Start async tile image load (same pattern as mod_card.py)."""
