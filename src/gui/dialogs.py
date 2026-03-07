@@ -603,7 +603,9 @@ class GamePickerPanel(tk.Frame):
 
     def _on_canvas_configure(self, event):
         self._canvas.itemconfig(self._inner_id, width=event.width)
-        self._regrid_cards()
+        if hasattr(self, '_regrid_after_id') and self._regrid_after_id:
+            self.after_cancel(self._regrid_after_id)
+        self._regrid_after_id = self.after(150, self._regrid_cards)
 
     def _regrid_cards(self):
         canvas_w = self._canvas.winfo_width() or (

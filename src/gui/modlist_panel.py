@@ -236,6 +236,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filemap_after_id: str | None = None  # after() handle for debounce timer
         self._filemap_rescan_index: bool = False  # True if next rebuild should regenerate modindex.txt first
         self._redraw_after_id: str | None = None  # after_idle handle for scroll-debounce
+        self._canvas_resize_after_id: str | None = None  # after() handle for resize-debounce
 
         # Drag state
         self._drag_idx:      int = -1      # entry index being dragged (stays fixed during drag)
@@ -1872,8 +1873,14 @@ class ModListPanel(ctk.CTkFrame):
             return lambda i: i
 
     def _on_canvas_resize(self, event):
-        self._layout_columns(event.width)
-        self._update_header(event.width)
+        if self._canvas_resize_after_id is not None:
+            self.after_cancel(self._canvas_resize_after_id)
+        self._canvas_resize_after_id = self.after(150, lambda w=event.width: self._apply_canvas_resize(w))
+
+    def _apply_canvas_resize(self, width: int):
+        self._canvas_resize_after_id = None
+        self._layout_columns(width)
+        self._update_header(width)
         self._redraw()
 
     def _schedule_redraw(self) -> None:

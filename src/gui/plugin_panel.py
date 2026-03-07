@@ -2675,8 +2675,13 @@ class PluginPanel(ctk.CTkFrame):
 
     def _on_pcanvas_resize(self, event):
         self._pcanvas_w = event.width
-        self._layout_plugin_cols(event.width)
-        self._update_plugin_header(event.width)
+        if hasattr(self, '_pcanvas_resize_after_id') and self._pcanvas_resize_after_id:
+            self.after_cancel(self._pcanvas_resize_after_id)
+        self._pcanvas_resize_after_id = self.after(150, lambda w=event.width: self._apply_pcanvas_resize(w))
+
+    def _apply_pcanvas_resize(self, width: int):
+        self._layout_plugin_cols(width)
+        self._update_plugin_header(width)
         _truncate_cache.clear()
         self._schedule_predraw()
 
