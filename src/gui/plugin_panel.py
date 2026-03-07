@@ -344,6 +344,9 @@ class PluginPanel(ctk.CTkFrame):
         "tes4dump64.exe",
         "tes5dump.exe",
         "tes5dump64.exe",
+        "7z.exe",
+        "ffdec_orig.bat",
+        "xdelta.exe"
     })
 
     def refresh_exe_list(self):
@@ -477,7 +480,8 @@ class PluginPanel(ctk.CTkFrame):
             self._update_run_exe_btn(None)
             return
         exe_path = self._exe_paths[idx]
-        self._exe_args_var.set(self._load_exe_args(exe_path.name))
+        loaded_args = self._load_exe_args(exe_path.name)
+        self._exe_args_var.set(self._apply_profile_output_to_args(exe_path.name, loaded_args))
         self._update_run_exe_btn(exe_path)
 
     def _update_run_exe_btn(self, exe_path: "Path | None") -> None:
@@ -698,6 +702,43 @@ class PluginPanel(ctk.CTkFrame):
             return data.get(exe_name, "")
         except (OSError, ValueError):
             return ""
+
+    def _apply_profile_output_to_args(self, exe_name: str, args_str: str) -> str:
+        """If the active profile uses profile-specific mods, rewrite the output
+        path in *args_str* so it points at the profile's effective overwrite
+        folder. Returns the string unchanged for standard profiles."""
+        import re
+        game = self._game
+        if game is None:
+            return args_str
+        active_dir = getattr(game, "_active_profile_dir", None)
+        if active_dir is None:
+            return args_str
+        try:
+            from gui.game_helpers import profile_uses_specific_mods  # type: ignore
+            if not profile_uses_specific_mods(active_dir):
+                return args_str
+        except Exception:
+            return args_str
+        from Utils.exe_args_builder import EXE_PROFILES, _to_wine_path  # type: ignore
+        profile_def = EXE_PROFILES.get(exe_name)
+        if profile_def is None or not profile_def.output_flag:
+            return args_str
+        new_path = _to_wine_path(game.get_effective_overwrite_path())
+        flag_re = re.escape(profile_def.output_flag)
+        # Replace flagged argument (quoted path first, then unquoted token)
+        result = re.sub(
+            rf'({flag_re}\s*)"[^"]*"',
+            lambda m: f'{m.group(1)}"{new_path}"',
+            args_str,
+        )
+        if result == args_str:
+            result = re.sub(
+                rf'({flag_re}\s*)(\S+)',
+                lambda m: f'{m.group(1)}"{new_path}"',
+                args_str,
+            )
+        return result
 
     def _on_configure_exe(self):
         """Open the Configure dialog for the selected exe."""
@@ -951,8 +992,14 @@ class PluginPanel(ctk.CTkFrame):
             env.setdefault("SteamGameId", steam_id)
 
         import shlex
+        # Re-apply profile-specific output substitution at launch time so the
+        # correct path is used even if the profile changed after the exe was
+        # selected in the dropdown.
+        runtime_args_str = self._apply_profile_output_to_args(
+            exe_path.name, self._exe_args_var.get()
+        )
         try:
-            extra_args = shlex.split(self._exe_args_var.get())
+            extra_args = shlex.split(runtime_args_str)
         except ValueError as e:
             self._log(f"Run EXE: invalid arguments — {e}")
             return
