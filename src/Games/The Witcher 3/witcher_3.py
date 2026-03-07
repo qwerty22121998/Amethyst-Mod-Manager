@@ -645,10 +645,25 @@ class Witcher3(BaseGame):
             )
             _log(f"Restore complete. {removed} file(s) removed{vanilla_msg}.")
 
-        # Preserve _MergedFiles folders so they survive the restore
+        # Preserve _MergedFiles folders so they survive the restore.
+        # If the active profile uses profile-specific mods, store them inside
+        # the profile directory so they don't bleed across profiles.
         mods_dir = game_path / "mods"
         if mods_dir.is_dir():
-            merged_dir = self.get_profile_root() / "mods" / "Merged_Mods" / "mods"
+            profile_specific = False
+            if self._active_profile_dir is not None:
+                try:
+                    from gui.game_helpers import profile_uses_specific_mods  # type: ignore
+                    profile_specific = profile_uses_specific_mods(self._active_profile_dir)
+                except Exception:
+                    pass
+
+            if profile_specific:
+                merged_base = self._active_profile_dir
+            else:
+                merged_base = self.get_profile_root()
+
+            merged_dir = merged_base / "mods" / "Merged_Mods" / "mods"
             merged_dir.mkdir(parents=True, exist_ok=True)
             for folder in mods_dir.iterdir():
                 if folder.is_dir() and "_MergedFiles" in folder.name:
