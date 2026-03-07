@@ -63,6 +63,48 @@ class Fallout_3(BaseGame):
     @property
     def mod_folder_strip_prefixes(self) -> set[str]:
         return {"Data"}
+    
+    @property
+    def mod_required_top_level_folders(self) -> set[str]:
+        return {"skse",
+                "textures",
+                "sound",
+                "meshes",
+                "mcm",
+                "scripts",
+                "interface",
+                "lightplacer",
+                "mapmarkers",
+                "music",
+                "nemesis_engine",
+                "seq",
+                "shadercache",
+                "shaders",
+                "grass",
+                "video",
+                "source",
+                "calientetools",
+                "data",
+                "f4se",
+                "materials",
+                "tools",
+                "nvse",
+                "config",
+                "menus",
+                "fose",
+                }
+
+    @property
+    def mod_auto_strip_until_required(self) -> bool:
+        return True
+
+    @property
+    def mod_required_file_types(self) -> set[str]:
+        return {".esp", ".esl", ".esm"}
+
+    @property
+    def mod_install_as_is_if_no_match(self) -> bool:
+        return True
 
     @property
     def loot_sort_enabled(self) -> bool:

@@ -155,6 +155,102 @@ def _try_auto_strip_top_level(
     return (file_list, False)
 
 
+def _check_mod_top_level_file_types(
+    file_list: list[tuple[str, str, bool]],
+    required_exts: set[str],
+) -> bool:
+    """Return True if at least one top-level file (no sub-folder) has a required extension."""
+    exts_lower = {e.lower() for e in required_exts}
+    for _, dst_rel, is_folder in file_list:
+        if is_folder:
+            continue
+        dst_rel = dst_rel.replace("\\", "/").strip("/")
+        if "/" not in dst_rel:
+            ext = Path(dst_rel).suffix.lower()
+            if ext in exts_lower:
+                return True
+    return False
+
+
+def _try_auto_strip_for_file_types(
+    file_list: list[tuple[str, str, bool]],
+    required_exts: set[str],
+    max_strip_depth: int = 5,
+) -> tuple[list[tuple[str, str, bool]], bool]:
+    """
+    Try stripping leading path segments until at least one top-level file has a
+    required extension.  Returns (new_file_list, True) if successful, otherwise
+    (original file_list, False).
+    """
+    if _check_mod_top_level_file_types(file_list, required_exts):
+        return (file_list, True)
+    exts_lower = {e.lower() for e in required_exts}
+    for strip_depth in range(1, max_strip_depth + 1):
+        new_list: list[tuple[str, str, bool]] = []
+        has_required = False
+        for src_rel, dst_rel, is_folder in file_list:
+            parts = dst_rel.replace("\\", "/").strip("/").split("/")
+            if len(parts) <= strip_depth:
+                continue
+            new_dst = "/".join(parts[strip_depth:])
+            if not is_folder and len(parts) == strip_depth + 1:
+                ext = Path(new_dst).suffix.lower()
+                if ext in exts_lower:
+                    has_required = True
+            new_list.append((src_rel, new_dst, is_folder))
+        if has_required and new_list:
+            return (new_list, True)
+    return (file_list, False)
+
+
+def _check_mod_top_level_file_types(
+    file_list: list[tuple[str, str, bool]],
+    required_exts: set[str],
+) -> bool:
+    """Return True if at least one top-level file (no sub-folder) has a required extension."""
+    exts_lower = {e.lower() for e in required_exts}
+    for _, dst_rel, is_folder in file_list:
+        if is_folder:
+            continue
+        dst_rel = dst_rel.replace("\\", "/").strip("/")
+        if "/" not in dst_rel:
+            ext = Path(dst_rel).suffix.lower()
+            if ext in exts_lower:
+                return True
+    return False
+
+
+def _try_auto_strip_for_file_types(
+    file_list: list[tuple[str, str, bool]],
+    required_exts: set[str],
+    max_strip_depth: int = 5,
+) -> tuple[list[tuple[str, str, bool]], bool]:
+    """
+    Try stripping leading path segments until at least one top-level file has a
+    required extension.  Returns (new_file_list, True) if successful, otherwise
+    (original file_list, False).
+    """
+    if _check_mod_top_level_file_types(file_list, required_exts):
+        return (file_list, True)
+    exts_lower = {e.lower() for e in required_exts}
+    for strip_depth in range(1, max_strip_depth + 1):
+        new_list: list[tuple[str, str, bool]] = []
+        has_required = False
+        for src_rel, dst_rel, is_folder in file_list:
+            parts = dst_rel.replace("\\", "/").strip("/").split("/")
+            if len(parts) <= strip_depth:
+                continue
+            new_dst = "/".join(parts[strip_depth:])
+            if not is_folder and len(parts) == strip_depth + 1:
+                ext = Path(new_dst).suffix.lower()
+                if ext in exts_lower:
+                    has_required = True
+            new_list.append((src_rel, new_dst, is_folder))
+        if has_required and new_list:
+            return (new_list, True)
+    return (file_list, False)
+
+
 def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -> None:
     """Write the current datetime as the ``installed`` key in meta.ini if not
     already present.  Also write ``installationFile`` if *installation_file* is
@@ -562,28 +658,37 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             log_fn(f"Auto-prefixed mod files under '{install_prefix}/' (where needed).")
 
         required = getattr(game, "mod_required_top_level_folders", set())
+        required_file_types = getattr(game, "mod_required_file_types", set())
+        auto_strip = getattr(game, "mod_auto_strip_until_required", False)
+        install_as_is = getattr(game, "mod_install_as_is_if_no_match", False)
         did_auto_strip = False
         if required and not _check_mod_top_level(file_list, required):
-            if getattr(game, "mod_auto_strip_until_required", False):
+            if auto_strip:
                 file_list, did_auto_strip = _try_auto_strip_top_level(file_list, required)
                 if did_auto_strip:
                     log_fn("Auto-stripped top-level folder(s) so mod matches expected structure.")
+            if not did_auto_strip and required_file_types:
+                if _check_mod_top_level_file_types(file_list, required_file_types):
+                    did_auto_strip = True
+                    log_fn("Mod contains recognised top-level file type(s) — skipping prefix check.")
+                elif auto_strip:
+                    file_list, did_auto_strip = _try_auto_strip_for_file_types(file_list, required_file_types)
+                    if did_auto_strip:
+                        log_fn("Auto-stripped top-level folder(s) to expose recognised file type(s).")
             if not did_auto_strip:
-                if headless:
-                    # In headless mode we can't ask the user — proceed with
-                    # whatever structure the archive has and log a warning.
-                    log_fn(f"Warning: '{mod_name}' structure not matched — installing as-is.")
+                if install_as_is:
+                    log_fn("Mod structure unrecognised — installing as-is (no prefix applied).")
                 else:
                     dlg = _SetPrefixDialog(parent_window, required, file_list)
                     parent_window.wait_window(dlg)
                     if dlg.result is None:
                         log_fn("Install cancelled — mod structure not mapped.")
-                        return None
+                        return
                     action, prefix = dlg.result
                     if action == "prefix" and prefix:
                         prefix = prefix.strip().strip("/").replace("\\", "/")
                         file_list = [(s, f"{prefix}/{d}", f) for s, d, f in file_list]
-                        log_fn(f"Remapped mod files under '{prefix}'.")
+                        log_fn(f"Remapped mod files under '{prefix}/'.")
 
         post_strip_prefixes = getattr(game, "mod_folder_strip_prefixes_post", set())
         if post_strip_prefixes:

@@ -226,6 +226,36 @@ class BaseGame(ABC):
         return False
 
     @property
+    def mod_required_file_types(self) -> set[str]:
+        """
+        File extensions (e.g. {".esp", ".esm", ".esl"}) that are recognised as
+        valid top-level content for this game's mods.  Checked as a fallback
+        when mod_required_top_level_folders fails: if the mod contains a file
+        with one of these extensions directly at its root (or can be stripped
+        down to one), the folder-structure check is skipped.
+
+        mod_auto_strip_until_required also applies here — if enabled, leading
+        folder segments are stripped until a qualifying file sits at the top
+        level.
+
+        Return an empty set (the default) to disable this fallback.
+        """
+        return set()
+
+    @property
+    def mod_install_as_is_if_no_match(self) -> bool:
+        """
+        When True, if both mod_required_top_level_folders and
+        mod_required_file_types checks fail for a mod, the mod is installed
+        as-is without stripping any folders and without showing the prefix
+        dialog.  Use this for games where some mods have a predictable
+        structure and others are completely free-form.
+
+        When False (the default), the prefix dialog is shown instead.
+        """
+        return False
+
+    @property
     def mod_staging_requires_subdir(self) -> bool:
         """
         When True, each mod's staging folder must contain a named subdirectory
