@@ -86,7 +86,7 @@ from Utils.filemap import (
     OVERWRITE_NAME,
     ROOT_FOLDER_NAME,
 )
-from Utils.deploy import deploy_root_folder, restore_root_folder, LinkMode, load_per_mod_strip_prefixes
+from Utils.deploy import deploy_root_folder, restore_root_folder, LinkMode, load_per_mod_strip_prefixes, undeploy_mod_files
 from Utils.modlist import (
     ModEntry,
     read_modlist,
@@ -2546,9 +2546,19 @@ class ModListPanel(ctk.CTkFrame):
         if self._modlist_path is not None:
             # Staging path is <profiles_root>/<game>/mods/<mod_name>
             staging = self._staging_root / entry.name
+            index_path = self._staging_root.parent / "modindex.txt"
+            # Remove deployed files from the game directory before deleting the
+            # staging folder so restore_data_core() doesn't misidentify the
+            # leftover hardlinks/copies as runtime-generated files.
+            if self._game is not None:
+                undeploy_mod_files(
+                    [entry.name],
+                    self._game.get_mod_data_path(),
+                    self._game.get_game_path(),
+                    index_path,
+                )
             if staging.is_dir():
                 shutil.rmtree(staging)
-            index_path = self._staging_root.parent / "modindex.txt"
             remove_from_mod_index(index_path, [entry.name])
         # Remove from lists
         self._entries.pop(idx)
@@ -2617,16 +2627,27 @@ class ModListPanel(ctk.CTkFrame):
             entry = self._entries[i]
             if entry.is_separator:
                 continue
-            # Delete the mod folder from staging
             if staging_root is not None:
-                staging = staging_root / entry.name
-                if staging.is_dir():
-                    shutil.rmtree(staging)
                 removed_names.append(entry.name)
             self._entries.pop(i)
             self._check_buttons.pop(i)
             self._check_vars.pop(i)
         if index_path is not None and removed_names:
+            # Remove deployed files from the game directory before deleting the
+            # staging folders so restore_data_core() doesn't misidentify the
+            # leftover hardlinks/copies as runtime-generated files.
+            if self._game is not None:
+                undeploy_mod_files(
+                    removed_names,
+                    self._game.get_mod_data_path(),
+                    self._game.get_game_path(),
+                    index_path,
+                )
+            # Now delete staging folders and update the index.
+            for name in removed_names:
+                staging = staging_root / name
+                if staging.is_dir():
+                    shutil.rmtree(staging)
             remove_from_mod_index(index_path, removed_names)
         self._sel_idx = -1
         self._sel_set = set()
