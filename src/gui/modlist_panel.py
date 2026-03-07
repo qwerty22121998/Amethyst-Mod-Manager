@@ -236,6 +236,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filemap_after_id: str | None = None  # after() handle for debounce timer
         self._filemap_rescan_index: bool = False  # True if next rebuild should regenerate modindex.txt first
         self._redraw_after_id: str | None = None  # after_idle handle for scroll-debounce
+        self._canvas_resize_after_id: str | None = None  # after() handle for resize-debounce
 
         # Drag state
         self._drag_idx:      int = -1      # entry index being dragged (stays fixed during drag)
@@ -1205,7 +1206,7 @@ class ModListPanel(ctk.CTkFrame):
                     else:
                         custom_color = self._sep_colors.get(entry.name)
                         base_bg = custom_color if custom_color else BG_SEP
-                        txt_col = TEXT_SEP
+                        txt_col = _theme.contrasting_text_color(base_bg) if custom_color else TEXT_SEP
 
                     if is_sel_row:
                         row_bg = BG_SELECT
@@ -1239,12 +1240,13 @@ class ModListPanel(ctk.CTkFrame):
                     left_edge  = 32 if is_root_folder else (20 if not is_synthetic else 8)
                     text_pad   = 6
                     label_hw   = len(label) * 4 + text_pad
+                    sep_line_col = txt_col if (custom_color if not is_synthetic else False) else BORDER
                     c.coords(self._pool_sep_line_l[s],
                              left_edge, y_mid, mid_x - label_hw, y_mid)
-                    c.itemconfigure(self._pool_sep_line_l[s], fill=BORDER, state="normal")
+                    c.itemconfigure(self._pool_sep_line_l[s], fill=sep_line_col, state="normal")
                     c.coords(self._pool_sep_line_r[s],
                              mid_x + label_hw, y_mid, right_edge, y_mid)
-                    c.itemconfigure(self._pool_sep_line_r[s], fill=BORDER, state="normal")
+                    c.itemconfigure(self._pool_sep_line_r[s], fill=sep_line_col, state="normal")
 
                     # Collapse icon (real separators only)
                     if not is_synthetic:
@@ -1872,8 +1874,14 @@ class ModListPanel(ctk.CTkFrame):
             return lambda i: i
 
     def _on_canvas_resize(self, event):
-        self._layout_columns(event.width)
-        self._update_header(event.width)
+        if self._canvas_resize_after_id is not None:
+            self.after_cancel(self._canvas_resize_after_id)
+        self._canvas_resize_after_id = self.after(150, lambda w=event.width: self._apply_canvas_resize(w))
+
+    def _apply_canvas_resize(self, width: int):
+        self._canvas_resize_after_id = None
+        self._layout_columns(width)
+        self._update_header(width)
         self._redraw()
 
     def _schedule_redraw(self) -> None:

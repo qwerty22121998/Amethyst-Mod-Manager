@@ -296,6 +296,12 @@ class DownloadsPanel:
         if new_w == self._canvas_w:
             return
         self._canvas_w = new_w
+        # Debounce: defer the expensive redraw until resizing stops
+        if hasattr(self, '_resize_after_id') and self._resize_after_id:
+            self._canvas.after_cancel(self._resize_after_id)
+        self._resize_after_id = self._canvas.after(150, self._apply_resize)
+
+    def _apply_resize(self):
         # Buttons must be repositioned when the width changes
         self._canvas.delete("all")
         self._place_buttons()
