@@ -629,7 +629,7 @@ def restore_data_core(
         modindex_lower: set[str] = set()
         try:
             from Utils.filemap import read_mod_index
-            _index = read_mod_index(overwrite_dir.parent / "modindex.txt")
+            _index = read_mod_index(overwrite_dir.parent / "modindex.bin")
             if _index:
                 for _mod_name, (_normal, _root) in _index.items():
                     modindex_lower.update(_normal.keys())
@@ -657,11 +657,11 @@ def restore_data_core(
             rescued += 1
         if rescued:
             _log(f"  Rescued {rescued} runtime-created file(s) → overwrite/.")
-            # Update modindex.txt so the next build_filemap call immediately
+            # Update modindex.bin so the next build_filemap call immediately
             # sees the rescued files under [Overwrite] without a full rescan.
             try:
                 from Utils.filemap import update_mod_index, read_mod_index, OVERWRITE_NAME
-                index_path = overwrite_dir.parent / "modindex.txt"
+                index_path = overwrite_dir.parent / "modindex.bin"
                 existing = read_mod_index(index_path) or {}
                 existing_normal, existing_root = existing.get(OVERWRITE_NAME, ({}, {}))
                 # Walk overwrite_dir to build the complete current file list.
@@ -704,7 +704,7 @@ def undeploy_mod_files(
     log_fn=None,
 ) -> int:
     """Remove any files belonging to the given mods from the game's deploy
-    directory and/or game root, using the modindex.txt to find them.
+    directory and/or game root, using the modindex.bin to find them.
 
     Call this *before* deleting the staging folders so that hardlinks/copies
     that are still sitting in the game directory are cleaned up.  Without this
@@ -716,7 +716,7 @@ def undeploy_mod_files(
                  May be None if the game has no separate data dir.
     game_root  — the game's install root (used for root-deployed files).
                  May be None if unknown / game not configured.
-    index_path — path to modindex.txt (typically <profile_root>/modindex.txt)
+    index_path — path to modindex.bin (typically <profile_root>/modindex.bin)
     log_fn     — optional logging callable
 
     Returns the total number of files removed.

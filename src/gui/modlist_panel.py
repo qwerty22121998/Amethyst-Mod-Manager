@@ -234,7 +234,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filemap_pending: bool = False   # True while a background rebuild is running
         self._filemap_dirty:   bool = False   # True if another rebuild was requested while one was running
         self._filemap_after_id: str | None = None  # after() handle for debounce timer
-        self._filemap_rescan_index: bool = False  # True if next rebuild should regenerate modindex.txt first
+        self._filemap_rescan_index: bool = False  # True if next rebuild should regenerate modindex.bin first
         self._redraw_after_id: str | None = None  # after_idle handle for scroll-debounce
         self._canvas_resize_after_id: str | None = None  # after() handle for resize-debounce
 
@@ -2715,7 +2715,7 @@ class ModListPanel(ctk.CTkFrame):
         if self._modlist_path is not None:
             # Staging path is <profiles_root>/<game>/mods/<mod_name>
             staging = self._staging_root / entry.name
-            index_path = self._staging_root.parent / "modindex.txt"
+            index_path = self._staging_root.parent / "modindex.bin"
             # Remove deployed files from the game directory before deleting the
             # staging folder so restore_data_core() doesn't misidentify the
             # leftover hardlinks/copies as runtime-generated files.
@@ -2787,7 +2787,7 @@ class ModListPanel(ctk.CTkFrame):
         index_path = None
         if self._modlist_path is not None:
             staging_root = self._staging_root
-            index_path = self._staging_root.parent / "modindex.txt"
+            index_path = self._staging_root.parent / "modindex.bin"
         removed_names: list[str] = []
         # Remove from highest index first to avoid shifting
         for i in sorted(indices, reverse=True):
@@ -4520,7 +4520,7 @@ class ModListPanel(ctk.CTkFrame):
                         ))
                 if rescan_index:
                     rebuild_mod_index(
-                        output.parent / "modindex.txt",
+                        output.parent / "modindex.bin",
                         staging,
                         strip_prefixes=strip_prefixes,
                         per_mod_strip_prefixes=self._mod_strip_prefixes,
