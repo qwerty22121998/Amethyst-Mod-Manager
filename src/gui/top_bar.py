@@ -148,13 +148,16 @@ class TopBar(ctk.CTkFrame):
         self._profile_menu.pack(side="left", padx=(0, 4))
 
         # Install Mod button
+        self._disable_extract = False
         _install_mod_icon = load_icon("install.png", size=(30, 30))
-        ctk.CTkButton(
+        self._install_mod_btn = ctk.CTkButton(
             self, text="Install Mod", width=100, height=32, font=FONT_BOLD,
             image=_install_mod_icon, compound="left",
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_install_mod
-        ).pack(side="left", padx=(0, 8))
+        )
+        self._install_mod_btn.pack(side="left", padx=(0, 8))
+        self._install_mod_btn.bind("<Button-3>", self._on_install_mod_right_click)
 
         # Deploy button
         _deploy_icon = load_icon("deploy.png", size=(30, 30))
@@ -775,6 +778,33 @@ class TopBar(ctk.CTkFrame):
         self._set_deploy_buttons_enabled(False)
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _on_install_mod_right_click(self, event):
+        menu = tk.Menu(self, tearoff=0, bg="#2b2b2b", fg="white",
+                       activebackground=ACCENT, activeforeground="white",
+                       relief="flat", bd=1)
+        label = ("✓ Disable Extract (active)" if self._disable_extract
+                 else "Disable Extract")
+        menu.add_command(label=label, command=self._toggle_disable_extract)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _toggle_disable_extract(self):
+        self._disable_extract = not self._disable_extract
+        if self._disable_extract:
+            self._install_mod_btn.configure(
+                text="Install Mod [no extract]",
+                fg_color="#7a5a00", hover_color="#a07800",
+            )
+            self._log("Install Mod: extraction disabled — archives will be moved as-is.")
+        else:
+            self._install_mod_btn.configure(
+                text="Install Mod",
+                fg_color=ACCENT, hover_color=ACCENT_HOV,
+            )
+            self._log("Install Mod: extraction re-enabled.")
+
     def _on_install_mod(self):
         def _on_file_picked(path: str) -> None:
             if not path:
@@ -786,7 +816,8 @@ class TopBar(ctk.CTkFrame):
             self._log(f"Installing: {os.path.basename(path)}")
             app = self.winfo_toplevel()
             mod_panel = getattr(app, "_mod_panel", None)
-            install_mod_from_archive(path, app, self._log, game, mod_panel)
+            install_mod_from_archive(path, app, self._log, game, mod_panel,
+                                     disable_extract=self._disable_extract)
 
         pick_file_mod_archive("Select Mod Archive", lambda p: self.after(0, lambda: _on_file_picked(p)))
 
