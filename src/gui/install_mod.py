@@ -222,6 +222,32 @@ def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -
             parser.write(fh)
 
 
+def _expand_folders_for_dialog(
+    file_list: list[tuple[str, str, bool]], src_root: str
+) -> list[tuple[str, str, bool]]:
+    """
+    Expand any is_folder=True entries into individual file entries so the
+    _SelectFilesDialog can show real files instead of opaque folder names.
+    """
+    result = []
+    root = Path(src_root)
+    for src_rel, dst_rel, is_folder in file_list:
+        if not is_folder:
+            result.append((src_rel, dst_rel, False))
+            continue
+        src_dir = root / src_rel if src_rel else root
+        if not src_dir.is_dir():
+            result.append((src_rel, dst_rel, True))  # fallback: keep as-is
+            continue
+        for entry in sorted(src_dir.rglob("*")):
+            if entry.is_file():
+                file_src_rel = str(entry.relative_to(root))
+                rel_to_src = entry.relative_to(src_dir)
+                file_dst_rel = str(Path(dst_rel) / rel_to_src) if dst_rel else str(rel_to_src)
+                result.append((file_src_rel, file_dst_rel, False))
+    return result
+
+
 def _resolve_direct_files(extract_dir: str) -> list[tuple[str, str, bool]]:
     """
     For a non-FOMOD archive, return every file as a (src, dst, is_folder)
@@ -576,13 +602,14 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 replace_all = True
 
         if replace_selected_only:
-            sel_dialog = _SelectFilesDialog(parent_window, file_list)
+            expanded = _expand_folders_for_dialog(file_list, mod_root)
+            sel_dialog = _SelectFilesDialog(parent_window, expanded)
             parent_window.wait_window(sel_dialog)
             if sel_dialog.result is None:
                 log_fn("Install cancelled — no files selected.")
                 return
             chosen = sel_dialog.result
-            file_list = [(s, d, f) for s, d, f in file_list if d in chosen]
+            file_list = [(s, d, f) for s, d, f in expanded if d in chosen]
             log_fn(f"Replace selected: {len(file_list)} file(s) chosen.")
 
         strip_prefixes = getattr(game, "mod_folder_strip_prefixes", set())

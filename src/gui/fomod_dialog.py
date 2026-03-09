@@ -289,6 +289,8 @@ class FomodDialog(ctk.CTkToplevel):
         inner.grid_propagate(False)
 
         self._clear_options_panel()
+        # Reset scroll to top when changing pages
+        self._scroll_canvas.yview_moveto(0)
         step = self._visible_steps[idx]
         self._group_widgets = {}
 
