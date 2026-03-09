@@ -25,7 +25,7 @@ from gui.mod_name_utils import _strip_title_metadata, _suggest_mod_names
 from Utils.fomod_parser import detect_fomod, parse_module_config
 from Utils.fomod_installer import resolve_files
 from Utils.config_paths import get_fomod_selections_path
-from Utils.plugins import read_plugins, append_plugin
+from Utils.plugins import read_plugins, append_plugin, read_loadorder, write_loadorder, PluginEntry
 from Utils.modlist import prepend_mod, ensure_mod_preserving_position
 from Utils.filemap import _scan_dir, update_mod_index
 from Nexus.nexus_meta import write_meta, resolve_nexus_meta_for_archive
@@ -505,11 +505,9 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
 
             installed_files: set[str] = set()
             if mod_panel is not None and mod_panel._modlist_path is not None:
-                plugins_path = mod_panel._modlist_path.parent / "plugins.txt"
-                if plugins_path.is_file():
-                    for entry in read_plugins(plugins_path):
-                        if entry.enabled:
-                            installed_files.add(entry.name.lower())
+                loadorder_path = mod_panel._modlist_path.parent / "loadorder.txt"
+                for name in read_loadorder(loadorder_path):
+                    installed_files.add(name.lower())
 
             if fomod_auto_selections is not None:
                 # Collection install: use the author's pre-chosen options,
@@ -704,15 +702,23 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         plugin_exts = getattr(game, "plugin_extensions", [])
         if plugin_exts and mod_panel is not None and mod_panel._modlist_path is not None:
             plugins_path = mod_panel._modlist_path.parent / "plugins.txt"
+            loadorder_path = mod_panel._modlist_path.parent / "loadorder.txt"
             exts_lower = {ext.lower() for ext in plugin_exts}
-            added = 0
+            new_plugins: list[str] = []
             if dest_root.is_dir():
                 for entry in dest_root.iterdir():
                     if entry.is_file() and entry.suffix.lower() in exts_lower:
                         append_plugin(plugins_path, entry.name, enabled=True)
-                        added += 1
-            if added:
-                log_fn(f"plugins.txt: added {added} plugin(s) from '{mod_name}'.")
+                        new_plugins.append(entry.name)
+            if new_plugins:
+                existing_lo = read_loadorder(loadorder_path)
+                existing_lo_lower = {n.lower() for n in existing_lo}
+                for name in new_plugins:
+                    if name.lower() not in existing_lo_lower:
+                        existing_lo.append(name)
+                        existing_lo_lower.add(name.lower())
+                write_loadorder(loadorder_path, [PluginEntry(name=n, enabled=True) for n in existing_lo])
+                log_fn(f"plugins.txt / loadorder.txt: added {len(new_plugins)} plugin(s) from '{mod_name}'.")
 
         if mod_panel is not None and mod_panel._modlist_path is not None:
             modlist_path = mod_panel._modlist_path
