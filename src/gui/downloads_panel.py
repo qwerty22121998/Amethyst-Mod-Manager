@@ -185,6 +185,7 @@ class DownloadsPanel:
                 font=FONT_SMALL,
                 bd=0,
                 cursor="hand2",
+                highlightthickness=0,
                 command=lambda p=fpath: self._on_install(p),
             )
             self._btn_widgets.append(btn)

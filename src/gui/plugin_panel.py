@@ -2448,6 +2448,16 @@ class PluginPanel(ctk.CTkFrame):
             self._plugin_entries = vanilla_prepend + mod_entries
 
         self._check_all_masters()
+
+        # Sync loadorder.txt: prune removed entries and append new ones
+        known_lower = {e.name.lower() for e in self._plugin_entries}
+        lo_lower = {n.lower() for n in saved_order}
+        pruned_lo = [n for n in saved_order if n.lower() in known_lower]
+        new_entries = [e.name for e in self._plugin_entries if e.name.lower() not in lo_lower]
+        final_lo = pruned_lo + new_entries
+        if final_lo != saved_order:
+            write_loadorder(loadorder_path, [PluginEntry(name=n, enabled=True) for n in final_lo])
+
         self._predraw()
 
     def _save_plugins(self) -> None:

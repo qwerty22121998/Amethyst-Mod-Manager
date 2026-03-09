@@ -304,11 +304,28 @@ class FomodDialog(ctk.CTkToplevel):
             # saved selections (backward compatibility with on-disk JSON).
             saved = self._saved_selections.get(step_key) or self._saved_selections.get(step.name)
             if saved is not None:
-                existing = dict(saved)
-                # Merge: add auto-detected defaults for groups where saved was empty
+                existing = {}
+                group_map = {g.name: g for g in step.groups}
                 for group_name, default_plugins in defaults.items():
-                    if not existing.get(group_name) and default_plugins:
-                        existing[group_name] = default_plugins
+                    saved_plugins = saved.get(group_name, [])
+                    group = group_map.get(group_name)
+                    if group and saved_plugins:
+                        # Drop any saved plugin whose type is NotUsable
+                        plugin_type_map = {
+                            p.name: resolve_plugin_type(p, self._flag_state, self._installed)
+                            for p in group.plugins
+                        }
+                        filtered = [
+                            p for p in saved_plugins
+                            if plugin_type_map.get(p, "Optional") != "NotUsable"
+                        ]
+                        # If filtering left the group invalid, use computed defaults
+                        if not filtered and saved_plugins:
+                            existing[group_name] = default_plugins
+                        else:
+                            existing[group_name] = filtered
+                    else:
+                        existing[group_name] = saved_plugins or default_plugins
             else:
                 existing = defaults
 
@@ -358,11 +375,15 @@ class FomodDialog(ctk.CTkToplevel):
         canvas = self._scroll_canvas
 
         def _on_scroll(event):
-            # Only scroll if pointer is within the options scroll widget
-            sx = self._options_scroll.winfo_rootx()
-            sy = self._options_scroll.winfo_rooty()
-            sw = self._options_scroll.winfo_width()
-            sh = self._options_scroll.winfo_height()
+            try:
+                if not self._options_scroll.winfo_exists():
+                    return
+                sx = self._options_scroll.winfo_rootx()
+                sy = self._options_scroll.winfo_rooty()
+                sw = self._options_scroll.winfo_width()
+                sh = self._options_scroll.winfo_height()
+            except Exception:
+                return
             if sx <= event.x_root < sx + sw and sy <= event.y_root < sy + sh:
                 direction = -1 if event.num == 4 else 1
                 canvas.yview("scroll", direction, "units")

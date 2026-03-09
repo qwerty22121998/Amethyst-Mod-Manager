@@ -409,27 +409,23 @@ class App(ctk.CTk):
                 log(f"Nexus: Switched to game '{matched_game[0]}'")
 
         def _worker():
-            # Fetch mod + file info in parallel with the download for metadata
+            # Fetch mod + file info in a single GraphQL call for metadata
             mod_info = None
             file_info = None
             try:
-                mod_info = self._nexus_api.get_mod(link.game_domain, link.mod_id)
+                mod_info, file_info = self._nexus_api.get_mod_and_file_info_graphql(
+                    link.game_domain, link.mod_id, link.file_id)
                 # Update the progress bar label with the actual mod name
                 if mod_panel and mod_info:
                     self.after(0, lambda: mod_panel.show_download_progress(
                         f"Downloading: {mod_info.name}", cancel=cancel_event))
-                files_resp = self._nexus_api.get_mod_files(link.game_domain, link.mod_id)
-                for f in files_resp.files:
-                    if f.file_id == link.file_id:
-                        file_info = f
-                        break
             except Exception as exc:
-                log_fn = lambda m=str(exc): self.after(0, lambda: log(
+                self.after(0, lambda m=str(exc): log(
                     f"Nexus: Could not fetch mod info ({m}) — metadata will be partial."))
-                log_fn()
 
             result = self._nexus_downloader.download_from_nxm(
                 link,
+                known_file_name=file_info.file_name if file_info else "",
                 progress_cb=lambda cur, total: self.after(
                     0, lambda c=cur, t=total: (
                         mod_panel.update_download_progress(c, t, cancel=cancel_event)
