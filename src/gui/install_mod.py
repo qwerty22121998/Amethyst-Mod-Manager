@@ -328,7 +328,9 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                              on_installed=None,
                              fomod_auto_selections: "dict | None" = None,
                              prebuilt_meta=None,
-                             disable_extract: bool = False) -> None:
+                             disable_extract: bool = False,
+                             profile_dir=None,
+                             headless: bool = False) -> None:
     """
     Extract archive to a temp directory, detect FOMOD, run the wizard if
     present, then copy the resolved files into the game's mod staging area.
