@@ -1366,20 +1366,23 @@ class ModListPanel(ctk.CTkFrame):
                      if 0 <= self._sel_idx < len(self._entries) else None)
 
         # Pre-compute separator highlight sets
-        conflict_sep_indices: set[int] = set()
+        conflict_sep_higher: set[int] = set()  # green — wins over selected
+        conflict_sep_lower:  set[int] = set()  # red   — loses to selected
         if sel_entry and not sel_entry.is_separator:
             sel_name = sel_entry.name
-            conflict_mods = (self._overrides.get(sel_name, set())
-                             | self._overridden_by.get(sel_name, set()))
-            for cm in conflict_mods:
+            for cm in self._overrides.get(sel_name, set()):
                 si = self._sep_idx_for_mod(cm)
                 if si >= 0:
-                    conflict_sep_indices.add(si)
+                    conflict_sep_higher.add(si)
+            for cm in self._overridden_by.get(sel_name, set()):
+                si = self._sep_idx_for_mod(cm)
+                if si >= 0:
+                    conflict_sep_lower.add(si)
         elif sel_entry and sel_entry.name == OVERWRITE_NAME:
             for cm in self._overrides.get(OVERWRITE_NAME, set()):
                 si = self._sep_idx_for_mod(cm)
                 if si >= 0:
-                    conflict_sep_indices.add(si)
+                    conflict_sep_lower.add(si)
 
         highlighted_sep_idx: int = -1
         if self._highlighted_mod:
@@ -1420,8 +1423,10 @@ class ModListPanel(ctk.CTkFrame):
 
                     if is_sel_row:
                         row_bg = BG_SELECT
-                    elif not is_synthetic and i in conflict_sep_indices:
-                        row_bg = conflict_separator
+                    elif not is_synthetic and i in conflict_sep_higher:
+                        row_bg = conflict_higher
+                    elif not is_synthetic and i in conflict_sep_lower:
+                        row_bg = conflict_lower
                     elif not is_synthetic and i == highlighted_sep_idx:
                         row_bg = plugin_separator
                     else:
