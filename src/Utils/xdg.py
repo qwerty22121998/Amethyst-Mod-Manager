@@ -20,7 +20,6 @@ from __future__ import annotations
 import os
 import subprocess
 import threading
-import webbrowser
 from pathlib import Path
 from typing import Callable
 
@@ -72,11 +71,4 @@ def xdg_open(path: str | Path, log_fn: Callable[[str], None] | None = None) -> N
 
 
 def open_url(url: str, log_fn: Callable[[str], None] | None = None) -> None:
-    """Open *url* in the user's default browser.
-
-    Tries ``webbrowser.open`` first; if it returns False (no browser found or
-    non-standard browser not in Python's registry), falls back to ``xdg-open``
-    so that the OS default handler is used instead.
-    """
-    if not webbrowser.open(url):
-        xdg_open(url, log_fn=log_fn)
+    xdg_open(url, log_fn=log_fn)
