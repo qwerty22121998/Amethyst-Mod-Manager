@@ -805,12 +805,19 @@ class CTkPopupMenu(ctk.CTkToplevel):
             if not self._alive[0] or not self.winfo_exists():
                 return
             try:
+                if self._active_sub[0] is not None:
+                    try:
+                        if self._active_sub[0].winfo_exists():
+                            return
+                    except Exception:
+                        pass
+
                 f = self.focus_get()
                 if f is None:
                     # On Wayland/Hyprland, hovering child widgets can cause
                     # focus_get() to return None temporarily. Guard against
                     # false dismissal by checking if the pointer is still
-                    # inside this popup (or its active submenu).
+                    # inside this popup.
                     try:
                         px, py = self.winfo_pointerxy()
                         wx = self.winfo_rootx()
@@ -819,13 +826,6 @@ class CTkPopupMenu(ctk.CTkToplevel):
                         wh = self.winfo_height()
                         if wx <= px <= wx + ww and wy <= py <= wy + wh:
                             return
-                        if self._active_sub[0] is not None:
-                            sx = self._active_sub[0].winfo_rootx()
-                            sy = self._active_sub[0].winfo_rooty()
-                            sw = self._active_sub[0].winfo_width()
-                            sh = self._active_sub[0].winfo_height()
-                            if sx <= px <= sx + sw and sy <= py <= sy + sh:
-                                return
                     except Exception:
                         pass
                     self._withdraw()
