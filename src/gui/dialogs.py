@@ -1958,14 +1958,17 @@ class _OverwritesDialog(tk.Toplevel):
 # ---------------------------------------------------------------------------
 
 class OverwritesPanel(ctk.CTkFrame):
-    """Inline panel (overlays _mod_panel_container) showing conflict details."""
+    """Full-width overlay (spans mod list + plugin panel) showing conflict
+    details for a single mod across three side-by-side panes."""
 
     def __init__(self, parent, mod_name: str,
                  files_win: list[tuple[str, str]],
                  files_lose: list[tuple[str, str]],
+                 files_no_conflict: list[str] | None = None,
                  on_done=None):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
         self._on_done = on_done or (lambda p: None)
+        files_no_conflict = files_no_conflict or []
 
         # Title bar
         title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=36)
@@ -1982,50 +1985,61 @@ class OverwritesPanel(ctk.CTkFrame):
         ).pack(side="right", padx=4)
         ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-        # Body
+        # Body — left column has win+lose stacked, right column has no-conflicts
         body = tk.Frame(self, bg=BG_DEEP)
         body.pack(fill="both", expand=True)
         body.grid_rowconfigure(0, weight=1)
-        body.grid_rowconfigure(1, weight=1)
         body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
 
-        self._build_pane(
-            body, row=0, col=0,
+        left = tk.Frame(body, bg=BG_DEEP)
+        left.grid(row=0, column=0, sticky="nsew")
+        left.grid_rowconfigure(0, weight=1)
+        left.grid_rowconfigure(1, weight=1)
+        left.grid_columnconfigure(0, weight=1)
+
+        self._build_two_col_pane(
+            left, row=0, col=0,
             header=f"Files overriding others  ({len(files_win)})",
             header_color="#98c379",
             col0_title="File path",
             col1_title="Mod(s) beaten",
             rows=files_win,
+            pady=(8, 4),
         )
-        self._build_pane(
-            body, row=1, col=0,
+        self._build_two_col_pane(
+            left, row=1, col=0,
             header=f"Files overridden by others  ({len(files_lose)})",
             header_color="#e06c75",
             col0_title="File path",
             col1_title="Winning mod",
             rows=files_lose,
+            pady=(4, 8),
+        )
+        self._build_one_col_pane(
+            body, row=0, col=1,
+            header=f"Files with no conflicts  ({len(files_no_conflict)})",
+            header_color="#61afef",
+            col0_title="File path",
+            rows=files_no_conflict,
         )
 
         footer = tk.Frame(self, bg=BG_PANEL, height=44)
         footer.pack(fill="x")
         footer.pack_propagate(False)
         tk.Frame(footer, bg=BORDER, height=1).pack(side="top", fill="x")
-        tk.Button(
+        ctk.CTkButton(
             footer, text="Close",
-            bg=BG_HEADER, fg=TEXT_MAIN, activebackground=BG_HOVER,
-            relief="flat", font=("Segoe UI", 11),
-            padx=16, pady=3, cursor="hand2",
+            fg_color="#c0392b", hover_color="#a93226",
+            text_color=TEXT_MAIN, font=FONT_BOLD,
+            width=80, height=28,
             command=self._on_close,
         ).pack(side="right", padx=12, pady=6)
 
-    def _build_pane(self, body, row, col, header, header_color,
-                    col0_title, col1_title, rows):
+    def _build_two_col_pane(self, body, row, col, header, header_color,
+                             col0_title, col1_title, rows, pady=8):
         outer = tk.Frame(body, bg=BG_PANEL)
-        outer.grid(
-            row=row, column=col, sticky="nsew",
-            padx=8,
-            pady=(8 if row == 0 else 4, 4 if row == 0 else 8),
-        )
+        outer.grid(row=row, column=col, sticky="nsew", padx=8, pady=pady)
         outer.grid_rowconfigure(1, weight=1)
         outer.grid_columnconfigure(0, weight=1)
 
@@ -2040,7 +2054,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
 
-        uid = f"OvPanel{row}{id(self)}"
+        uid = f"OvPanel{row}{col}{id(self)}"
         style = ttk.Style()
         style.configure(f"{uid}.Treeview",
                         background=BG_DEEP, foreground=TEXT_MAIN,
@@ -2080,8 +2094,65 @@ class OverwritesPanel(ctk.CTkFrame):
         if not rows:
             tv.insert("", "end", text="(none)", values=("",))
 
+    def _build_one_col_pane(self, body, row, col, header, header_color,
+                             col0_title, rows):
+        outer = tk.Frame(body, bg=BG_PANEL)
+        outer.grid(row=row, column=col, sticky="nsew", padx=(4, 8), pady=8)
+        outer.grid_rowconfigure(1, weight=1)
+        outer.grid_columnconfigure(0, weight=1)
+
+        tk.Label(
+            outer, text=header,
+            bg=BG_PANEL, fg=header_color,
+            font=("Segoe UI", 10, "bold"), anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
+
+        tree_frame = tk.Frame(outer, bg=BG_DEEP)
+        tree_frame.grid(row=1, column=0, sticky="nsew")
+        tree_frame.grid_rowconfigure(0, weight=1)
+        tree_frame.grid_columnconfigure(0, weight=1)
+
+        uid = f"NcPanel{col}{id(self)}"
+        style = ttk.Style()
+        style.configure(f"{uid}.Treeview",
+                        background=BG_DEEP, foreground=TEXT_MAIN,
+                        fieldbackground=BG_DEEP, rowheight=20,
+                        font=("Segoe UI", 9))
+        style.configure(f"{uid}.Treeview.Heading",
+                        background=BG_HEADER, foreground=TEXT_SEP,
+                        font=("Segoe UI", 9, "bold"), relief="flat")
+        style.map(f"{uid}.Treeview",
+                  background=[("selected", BG_SELECT)],
+                  foreground=[("selected", TEXT_MAIN)])
+
+        tv = ttk.Treeview(
+            tree_frame,
+            columns=(),
+            show="tree",
+            style=f"{uid}.Treeview",
+            selectmode="browse",
+        )
+        tv.heading("#0", text=col0_title, anchor="w")
+        tv.column("#0", minwidth=180, stretch=True)
+
+        vsb = tk.Scrollbar(tree_frame, orient="vertical", command=tv.yview,
+                           bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+                           highlightthickness=0, bd=0)
+        tv.configure(yscrollcommand=vsb.set)
+        tv.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        tv.bind("<Button-4>", lambda e: tv.yview_scroll(-3, "units"))
+        tv.bind("<Button-5>", lambda e: tv.yview_scroll( 3, "units"))
+
+        for path in rows:
+            tv.insert("", "end", text=path)
+        if not rows:
+            tv.insert("", "end", text="(none)")
+
     def _on_close(self):
         self._on_done(self)
+
+
 # VRAMr preset picker
 # ---------------------------------------------------------------------------
 class _VRAMrPresetDialog(ctk.CTkToplevel):

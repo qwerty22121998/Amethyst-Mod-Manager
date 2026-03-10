@@ -1018,13 +1018,15 @@ class App(ctk.CTk):
 
     # -- Conflicts panel (overlays mod list) --------------------------------
 
-    def show_conflicts_panel(self, mod_name, files_win, files_lose):
+    def show_conflicts_panel(self, mod_name, files_win, files_lose,
+                             files_no_conflict=None):
         from gui.dialogs import OverwritesPanel
         self._show_plugin_overlay(
             "_conflicts_panel",
             lambda: OverwritesPanel(
-                self._mod_panel_container,
+                self._main_frame,
                 mod_name=mod_name, files_win=files_win, files_lose=files_lose,
+                files_no_conflict=files_no_conflict,
                 on_done=lambda p: self._hide_plugin_overlay("_conflicts_panel"),
             ),
         )
