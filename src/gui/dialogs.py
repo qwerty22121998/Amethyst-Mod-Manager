@@ -3347,8 +3347,9 @@ class ExeConfigPanel(ctk.CTkFrame):
 
 class _ReplaceModDialog(ctk.CTkToplevel):
     """Modal dialog shown when installing a mod whose name already exists.
-    result: "all" | "selected" | "cancel"
+    result: "all" | "selected" | "rename" | "cancel"
     selected_files: set[str] — always None here; populated by caller if "selected"
+    new_name: str | None — set when result == "rename"
     """
 
     def __init__(self, parent, mod_name: str):
@@ -3361,6 +3362,11 @@ class _ReplaceModDialog(ctk.CTkToplevel):
 
         self.result: str = "cancel"
         self.selected_files: set[str] | None = None
+        self.new_name: str | None = None
+
+        self._mod_name = mod_name
+        self._rename_frame: ctk.CTkFrame | None = None
+        self._rename_var: tk.StringVar | None = None
 
         self._build(mod_name)
 
@@ -3390,8 +3396,30 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             anchor="w",
         ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 12))
 
+        # Rename row (hidden until "Rename" is clicked)
+        self._rename_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self._rename_frame.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self._rename_frame.grid_columnconfigure(0, weight=1)
+        self._rename_frame.grid_remove()
+
+        self._rename_var = tk.StringVar(value=mod_name)
+        rename_entry = ctk.CTkEntry(
+            self._rename_frame, textvariable=self._rename_var,
+            font=FONT_NORMAL, fg_color=BG_PANEL, text_color=TEXT_MAIN,
+            border_color=BORDER,
+        )
+        rename_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
+        rename_entry.bind("<Return>", lambda _e: self._on_rename_confirm())
+        self._rename_entry = rename_entry
+
+        ctk.CTkButton(
+            self._rename_frame, text="Confirm", width=80, height=28, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_rename_confirm,
+        ).grid(row=0, column=1)
+
         bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
-        bar.grid(row=2, column=0, sticky="ew")
+        bar.grid(row=3, column=0, sticky="ew")
         bar.grid_propagate(False)
         ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(
             side="top", fill="x"
@@ -3401,6 +3429,11 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_cancel,
         ).pack(side="right", padx=(4, 12), pady=12)
+        ctk.CTkButton(
+            bar, text="Rename", width=90, height=28, font=FONT_NORMAL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_rename,
+        ).pack(side="right", padx=4, pady=12)
         ctk.CTkButton(
             bar, text="Replace Selected", width=130, height=28, font=FONT_NORMAL,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
@@ -3418,6 +3451,28 @@ class _ReplaceModDialog(ctk.CTkToplevel):
         x = owner.winfo_rootx() + (owner.winfo_width() - w) // 2
         y = owner.winfo_rooty() + (owner.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _on_rename(self):
+        if self._rename_frame is None:
+            return
+        self._rename_frame.grid()
+        self.update_idletasks()
+        w, h = 460, self.winfo_reqheight()
+        owner = self.master
+        x = owner.winfo_rootx() + (owner.winfo_width() - w) // 2
+        y = owner.winfo_rooty() + (owner.winfo_height() - h) // 2
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        self._rename_entry.focus_set()
+        self._rename_entry.select_range(0, "end")
+
+    def _on_rename_confirm(self):
+        name = self._rename_var.get().strip() if self._rename_var else ""
+        if not name or name == self._mod_name:
+            return
+        self.result = "rename"
+        self.new_name = name
+        self.grab_release()
+        self.destroy()
 
     def _on_all(self):
         self.result = "all"

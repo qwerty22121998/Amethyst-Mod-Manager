@@ -346,7 +346,11 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 if replace_dialog.result == "cancel":
                     log_fn(f"Install cancelled — '{mod_name}' already exists.")
                     return
-                if replace_dialog.result == "all":
+                if replace_dialog.result == "rename":
+                    mod_name = replace_dialog.new_name
+                    dest_root = game.get_effective_mod_staging_path() / mod_name
+                    was_existing_mod = False
+                elif replace_dialog.result == "all":
                     def _force_remove(func, path, _exc):
                         os.chmod(path, 0o700)
                         func(path)
@@ -606,7 +610,10 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             if replace_dialog.result == "cancel":
                 log_fn(f"Install cancelled — '{mod_name}' already exists.")
                 return
-            if replace_dialog.result == "selected":
+            if replace_dialog.result == "rename":
+                mod_name = replace_dialog.new_name
+                dest_root = game.get_effective_mod_staging_path() / mod_name
+            elif replace_dialog.result == "selected":
                 replace_selected_only = True
             elif replace_dialog.result == "all":
                 replace_all = True
