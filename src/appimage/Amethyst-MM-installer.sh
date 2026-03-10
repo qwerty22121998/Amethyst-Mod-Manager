@@ -10,6 +10,7 @@ set -e
 REPO="ChrisDKN/Amethyst-Mod-Manager"
 BASE_URL="https://raw.githubusercontent.com/${REPO}/main"
 ICON_URL="${BASE_URL}/src/icons/title-bar.png"
+RELEASES_API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 
 # ~/Applications: not standard on all distros; we create it (common on Steam Deck)
 APPLICATIONS_DIR="${HOME}/Applications"
@@ -26,20 +27,19 @@ DESKTOP_NAME="amethyst-mod-manager.desktop"
 echo "Amethyst Mod Manager installer"
 echo "=============================="
 
-# Discover latest AppImage version from GitHub repo root
+# Discover latest AppImage from GitHub Releases
 echo "Checking for latest version..."
-API_URL="https://api.github.com/repos/${REPO}/contents/"
 if command -v curl &>/dev/null; then
-    JSON="$(curl -sL "$API_URL")"
+    JSON="$(curl -sL "$RELEASES_API_URL")"
 else
-    JSON="$(wget -qO- "$API_URL")"
+    JSON="$(wget -qO- "$RELEASES_API_URL")"
 fi
-LATEST_VERSION="$(echo "$JSON" | grep -o '"name" *: *"AmethystModManager-[^"]*\.AppImage"' | sed -n 's/.*AmethystModManager-\([0-9][0-9.]*\)-x86_64\.AppImage.*/\1/p' | sort -V | tail -1)"
-if [ -z "$LATEST_VERSION" ]; then
-    echo "Error: Could not find any AmethystModManager-*-x86_64.AppImage in the repository." >&2
+LATEST_VERSION="$(echo "$JSON" | grep -o '"tag_name" *: *"[^"]*"' | sed 's/.*: *"v\{0,1\}\([^"]*\)"/\1/' | head -1)"
+APPIMAGE_URL="$(echo "$JSON" | grep -o '"browser_download_url" *: *"[^"]*\.AppImage"' | sed 's/.*: *"\([^"]*\)"/\1/' | head -1)"
+if [ -z "$APPIMAGE_URL" ]; then
+    echo "Error: Could not find an AppImage asset in the latest release." >&2
     exit 1
 fi
-APPIMAGE_URL="${BASE_URL}/AmethystModManager-${LATEST_VERSION}-x86_64.AppImage"
 echo "Latest version: ${LATEST_VERSION}"
 echo ""
 
