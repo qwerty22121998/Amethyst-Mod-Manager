@@ -559,6 +559,8 @@ class AddGameDialog(ctk.CTkToplevel):
         """Open a folder picker so the user can locate the prefix manually."""
         def _apply(chosen: Optional[Path]):
             if chosen:
+                if chosen.name.lower() != "pfx" and (chosen / "pfx").is_dir():
+                    chosen = chosen / "pfx"
                 self._set_prefix(chosen, status="found")
                 self._prefix_status_label.configure(
                     text="Prefix folder selected manually.", text_color=TEXT_OK
@@ -1227,6 +1229,8 @@ class ReconfigureGamePanel(ctk.CTkFrame):
     def _on_browse_prefix(self):
         def _apply(chosen: Optional[Path]):
             if chosen:
+                if chosen.name.lower() != "pfx" and (chosen / "pfx").is_dir():
+                    chosen = chosen / "pfx"
                 self._set_prefix(chosen, status="found")
                 self._prefix_status_label.configure(
                     text="Prefix folder selected manually.", text_color=TEXT_OK
