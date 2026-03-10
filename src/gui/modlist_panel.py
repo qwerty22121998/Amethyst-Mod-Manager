@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import threading
 
-from Utils.xdg import xdg_open
+from Utils.xdg import xdg_open, open_url
 import tkinter as tk
 import tkinter.messagebox
 import tkinter.ttk as ttk
@@ -86,7 +86,7 @@ from Utils.filemap import (
     OVERWRITE_NAME,
     ROOT_FOLDER_NAME,
 )
-from Utils.deploy import deploy_root_folder, restore_root_folder, LinkMode, load_per_mod_strip_prefixes, undeploy_mod_files
+from Utils.deploy import deploy_root_folder, restore_root_folder, LinkMode, load_per_mod_strip_prefixes, undeploy_mod_files, restore_custom_deploy_backup_for_path
 from Utils.modlist import (
     ModEntry,
     read_modlist,
@@ -99,13 +99,13 @@ from Utils.plugins import (
     read_disabled_plugins, write_disabled_plugins,
     read_plugins, write_plugins, PluginEntry,
     read_loadorder, write_loadorder,
+    read_excluded_mod_files,
 )
 from Utils.profile_backup import create_backup
 from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
 from gui.collections_dialog import CollectionsDialog
 from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
 from Nexus.nexus_update_checker import check_for_updates
-import webbrowser
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +146,7 @@ class ModListPanel(ctk.CTkFrame):
         self._install_extensions: set[str] = set()
         self._root_deploy_folders: set[str] = set()
         self._staging_requires_subdir: bool = False
+        self._normalize_folder_case: bool = True
         self._root_folder_enabled: bool = True
         self._conflict_map:  dict[str, int]      = {}  # mod_name → CONFLICT_* constant
 
@@ -245,6 +246,7 @@ class ModListPanel(ctk.CTkFrame):
         self._drag_moved:    bool = False
         self._drag_is_block: bool = False   # True when dragging a separator+its mods
         self._drag_block:    list  = []     # snapshot of (entry, cb, var) at mousedown
+        self._drag_sel_indices: list[int] = []  # actual entry indices for sparse multi-select drag
         self._drag_cursor_y: int  = 0      # raw widget-space Y during drag (for ghost)
         self._drag_slot:     int  = -1     # last computed insertion slot (in vis-without-drag space)
         self._drag_target_slot: int = -1   # same as _drag_slot, kept for clarity in release handler
@@ -359,6 +361,7 @@ class ModListPanel(ctk.CTkFrame):
         self._install_extensions = getattr(game, "mod_install_extensions", set())
         self._root_deploy_folders = getattr(game, "mod_root_deploy_folders", set())
         self._staging_requires_subdir = getattr(game, "mod_staging_requires_subdir", False)
+        self._normalize_folder_case = getattr(game, "normalize_folder_case", True)
         self._conflict_ignore_filenames = getattr(game, "conflict_ignore_filenames", set())
         # Load ignored missing-requirements list (one mod name per line)
         ignored_path = profile_dir / "ignored_missing_requirements.txt"
@@ -1333,8 +1336,13 @@ class ModListPanel(ctk.CTkFrame):
         drag_indices: set[int] = set()
         if dragging:
             if self._drag_is_block and self._drag_block:
-                drag_indices = set(range(self._drag_idx,
-                                         self._drag_idx + len(self._drag_block)))
+                if self._drag_sel_indices:
+                    # Sparse multi-select drag — use actual recorded indices
+                    drag_indices = set(self._drag_sel_indices)
+                else:
+                    # Contiguous block (separator drag)
+                    drag_indices = set(range(self._drag_idx,
+                                             self._drag_idx + len(self._drag_block)))
             else:
                 drag_indices = {self._drag_idx}
 
@@ -1866,7 +1874,10 @@ class ModListPanel(ctk.CTkFrame):
         slot = self._drag_target_slot
         blk_size = len(self._drag_block) if self._drag_is_block else 1
         vis = self._visible_indices
-        drag_set = set(range(self._drag_idx, self._drag_idx + blk_size))
+        if self._drag_sel_indices:
+            drag_set = set(self._drag_sel_indices)
+        else:
+            drag_set = set(range(self._drag_idx, self._drag_idx + blk_size))
         vis_without_drag = [i for i in vis if i not in drag_set]
 
         if slot >= len(vis_without_drag):
@@ -2314,6 +2325,7 @@ class ModListPanel(ctk.CTkFrame):
         self._drag_after_id = None
         self._drag_pending = False
 
+        sel_indices: list[int] = []
         # If multiple items are selected and the dragged item is in the selection,
         # treat the whole selection as the drag block (sorted by entry index).
         if len(self._sel_set) > 1 and idx in self._sel_set and not is_block:
@@ -2322,6 +2334,8 @@ class ModListPanel(ctk.CTkFrame):
                 (self._entries[i], None, self._check_vars[i])
                 for i in sorted_sel
             ]
+            # Remember the actual (possibly sparse) indices for correct removal later
+            sel_indices = sorted_sel
             # Anchor the drag at the first selected index
             idx = sorted_sel[0]
             is_block = True
@@ -2334,6 +2348,7 @@ class ModListPanel(ctk.CTkFrame):
         self._drag_target_slot = -1
         self._drag_is_block = is_block
         self._drag_block = block
+        self._drag_sel_indices = sel_indices  # empty list = contiguous block (separator drag)
 
     def _sep_block_range(self, sep_idx: int) -> range:
         """Return the range of indices [sep_idx, end) belonging to this separator block.
@@ -2412,7 +2427,10 @@ class ModListPanel(ctk.CTkFrame):
         # mods are already excluded from this list so we only subtract the
         # *visible* portion of the dragged block (usually just 1 — the separator).
         vis = self._compute_visible_indices()
-        drag_set = set(range(self._drag_idx, self._drag_idx + blk_size))
+        if self._drag_sel_indices:
+            drag_set = set(self._drag_sel_indices)
+        else:
+            drag_set = set(range(self._drag_idx, self._drag_idx + blk_size))
         drag_vis_count = sum(1 for i in drag_set if i in set(vis))
         n_rendered = len(vis) - drag_vis_count
 
@@ -2436,13 +2454,25 @@ class ModListPanel(ctk.CTkFrame):
             slot = self._drag_target_slot
             blk_size = len(self._drag_block) if self._drag_is_block else 1
             vis = self._compute_visible_indices()
-            drag_set = set(range(self._drag_idx, self._drag_idx + blk_size))
+            if self._drag_sel_indices:
+                drag_set = set(self._drag_sel_indices)
+            else:
+                drag_set = set(range(self._drag_idx, self._drag_idx + blk_size))
             vis_without_drag = [i for i in vis if i not in drag_set]
 
             if self._drag_is_block:
-                del self._entries[self._drag_idx:self._drag_idx + blk_size]
-                del self._check_buttons[self._drag_idx:self._drag_idx + blk_size]
-                del self._check_vars[self._drag_idx:self._drag_idx + blk_size]
+                if self._drag_sel_indices:
+                    # Sparse multi-select: remove entries at their actual indices
+                    # (highest index first to preserve lower indices during removal)
+                    for i in sorted(self._drag_sel_indices, reverse=True):
+                        self._entries.pop(i)
+                        self._check_buttons.pop(i)
+                        self._check_vars.pop(i)
+                else:
+                    # Contiguous block (separator drag)
+                    del self._entries[self._drag_idx:self._drag_idx + blk_size]
+                    del self._check_buttons[self._drag_idx:self._drag_idx + blk_size]
+                    del self._check_vars[self._drag_idx:self._drag_idx + blk_size]
 
                 if slot >= len(vis_without_drag):
                     insert_at = len(self._entries)
@@ -2459,6 +2489,10 @@ class ModListPanel(ctk.CTkFrame):
                     self._check_buttons.insert(insert_at + j, cb)
                     self._check_vars.insert(insert_at + j, var)
                 self._drag_idx = insert_at
+                # Update selection to the moved block's new positions
+                if self._drag_sel_indices:
+                    self._sel_set = set(range(insert_at, insert_at + len(self._drag_block)))
+                    self._sel_idx = insert_at
             else:
                 entry = self._entries.pop(self._drag_idx)
                 cb    = self._check_buttons.pop(self._drag_idx)
@@ -2496,6 +2530,7 @@ class ModListPanel(ctk.CTkFrame):
         self._drag_slot  = -1
         self._drag_target_slot = -1
         self._drag_is_block = False
+        self._drag_sel_indices = []
         self._redraw()
         self._update_info()
 
@@ -2734,6 +2769,43 @@ class ModListPanel(ctk.CTkFrame):
                 if self._modlist_path is not None:
                     menu.add_command(f"Remove selected ({count})",
                         lambda: self._remove_selected_mods(toggleable))
+                # Move all selected mods to a separator
+                sel_sep_names = [e.name for e in self._entries
+                                 if e.is_separator and e.name != OVERWRITE_NAME
+                                 and e.name != ROOT_FOLDER_NAME]
+                if sel_sep_names:
+                    menu.add_submenu(f"Move selected to separator",
+                        lambda: self._show_separator_picker_multi(toggleable, sel_sep_names,
+                            parent_dismiss=menu._withdraw, parent_popup=menu))
+                # Open Nexus pages for all selected mods that have a mod_id
+                if self._staging_root is not None:
+                    _nexus_urls: list[str] = []
+                    app = self.winfo_toplevel()
+                    _cur_game = _GAMES.get(getattr(
+                        getattr(app, "_topbar", None), "_game_var", tk.StringVar()).get(), None)
+                    for _ti in toggleable:
+                        _tname = self._entries[_ti].name
+                        _meta_path = self._staging_root / _tname / "meta.ini"
+                        if _meta_path.is_file():
+                            try:
+                                _tmeta = read_meta(_meta_path)
+                                if _tmeta.mod_id > 0:
+                                    _tdomain = (
+                                        _cur_game.nexus_game_domain
+                                        if _cur_game and _cur_game.nexus_game_domain
+                                        else _tmeta.nexus_page_url.split("/mods/")[0].rsplit("/", 1)[-1]
+                                        if "/mods/" in _tmeta.nexus_page_url
+                                        else _tmeta.game_domain
+                                    )
+                                    _nexus_urls.append(
+                                        f"https://www.nexusmods.com/{_tdomain}/mods/{_tmeta.mod_id}"
+                                    )
+                            except Exception:
+                                pass
+                    if _nexus_urls:
+                        _urls_cap = list(_nexus_urls)
+                        menu.add_command(f"Open on Nexus ({len(_urls_cap)})",
+                            lambda u=_urls_cap: self._open_nexus_pages(u))
 
         menu.popup(x, y)
 
@@ -2841,6 +2913,16 @@ class ModListPanel(ctk.CTkFrame):
                 self._sel_idx = -1
             elif self._sel_idx > idx:
                 self._sel_idx -= 1
+            # If this separator had a custom deploy location, restore any
+            # backed-up originals for that path immediately.
+            _deploy_info = self._sep_deploy_paths.pop(sname, None)
+            if _deploy_info:
+                self._save_sep_deploy_paths()
+                _custom_path_str = _deploy_info.get("path", "")
+                if _custom_path_str and self._filemap_path is not None:
+                    restore_custom_deploy_backup_for_path(
+                        self._filemap_path, Path(_custom_path_str)
+                    )
             self._save_modlist()
             self._rebuild_filemap()
             self._redraw()
@@ -3292,6 +3374,131 @@ class ModListPanel(ctk.CTkFrame):
         popup.wm_deiconify()
 
         return popup
+
+    def _show_separator_picker_multi(self, indices: list[int], sep_names: list[str],
+                                     parent_dismiss=None,
+                                     parent_popup=None) -> tk.Toplevel:
+        """Like _show_separator_picker but moves all mods at `indices` to the chosen separator."""
+        popup = tk.Toplevel(self._canvas)
+        popup.wm_withdraw()
+        popup.wm_overrideredirect(True)
+        popup.configure(bg=BORDER)
+        cx, cy = popup.winfo_pointerxy()
+
+        _alive = [True]
+
+        def _dismiss(_event=None):
+            if _alive[0]:
+                _alive[0] = False
+                popup.destroy()
+
+        def _pick(sep_name: str):
+            if _alive[0]:
+                _alive[0] = False
+                popup.destroy()
+                if parent_dismiss:
+                    parent_dismiss()
+                self._move_selected_to_separator(indices, sep_name)
+
+        displays = [
+            name[:-len("_separator")] if name.endswith("_separator") else name
+            for name in sep_names
+        ]
+
+        ROW_H      = 30
+        MAX_ROWS   = 20
+        FONT       = ("Segoe UI", 11)
+        PAD_X      = 24
+
+        tmp = tk.Label(popup, font=FONT, text="")
+        tmp.update_idletasks()
+        import tkinter.font as tkfont
+        fnt = tkfont.Font(font=FONT)
+        max_text_w = max((fnt.measure(d) for d in displays), default=100)
+        tmp.destroy()
+        popup_w = max_text_w + PAD_X * 2
+
+        needs_scroll = len(sep_names) > MAX_ROWS
+        visible_rows = min(len(sep_names), MAX_ROWS)
+        popup_h      = visible_rows * ROW_H
+
+        outer = tk.Frame(popup, bg=BORDER, bd=0)
+        outer.pack(padx=1, pady=1)
+
+        if needs_scroll:
+            canvas = tk.Canvas(outer, bg=BG_PANEL, bd=0, highlightthickness=0,
+                               width=popup_w, height=popup_h)
+            vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview,
+                               bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+                               highlightthickness=0, bd=0)
+            canvas.configure(yscrollcommand=vsb.set)
+            canvas.pack(side="left", fill="both", expand=True)
+            vsb.pack(side="right", fill="y")
+            inner = tk.Frame(canvas, bg=BG_PANEL, bd=0)
+            canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+            def _on_inner_resize(e):
+                canvas.configure(scrollregion=canvas.bbox("all"))
+                canvas.itemconfigure(canvas_window, width=canvas.winfo_width())
+            inner.bind("<Configure>", _on_inner_resize)
+
+            def _on_wheel(evt):
+                if getattr(evt, "delta", 0) > 0:
+                    canvas.yview_scroll(-3, "units")
+                else:
+                    canvas.yview_scroll(3, "units")
+
+            def _bind_scroll(widget):
+                widget.bind("<Button-4>", lambda e: canvas.yview_scroll(-3, "units"))
+                widget.bind("<Button-5>", lambda e: canvas.yview_scroll(3, "units"))
+                widget.bind("<MouseWheel>", _on_wheel)
+
+            for w in (canvas, vsb, inner, outer, popup):
+                _bind_scroll(w)
+        else:
+            inner = tk.Frame(outer, bg=BG_PANEL, bd=0, width=popup_w)
+            inner.pack(fill="both", expand=True)
+
+        for name, display in zip(sep_names, displays):
+            btn = tk.Label(
+                inner, text=display, anchor="w",
+                bg=BG_PANEL, fg=TEXT_MAIN,
+                font=FONT,
+                padx=12, pady=5, cursor="hand2",
+                width=0,
+            )
+            btn.pack(fill="x")
+            btn.bind("<ButtonRelease-1>", lambda _e, n=name: _pick(n))
+            btn.bind("<Enter>", lambda _e, b=btn: b.configure(bg=BG_SELECT))
+            btn.bind("<Leave>", lambda _e, b=btn: b.configure(bg=BG_PANEL))
+            if needs_scroll:
+                _bind_scroll(btn)
+
+        popup.update_idletasks()
+        pw = popup.winfo_reqwidth()
+        ph = popup.winfo_reqheight()
+        _app_tl = self.winfo_toplevel()
+        app_right  = _app_tl.winfo_rootx() + _app_tl.winfo_width()
+        app_bottom = _app_tl.winfo_rooty() + _app_tl.winfo_height()
+        if parent_popup is not None:
+            px = parent_popup.winfo_rootx() + parent_popup.winfo_width()
+            py = cy - ph // 2
+        else:
+            px = cx
+            py = cy
+        px = min(px, app_right - pw)
+        py = min(py, app_bottom - ph)
+        px = max(px, 0)
+        py = max(py, 0)
+        popup.wm_geometry(f"+{px}+{py}")
+        popup.wm_deiconify()
+
+        return popup
+
+    def _open_nexus_pages(self, urls: list[str]) -> None:
+        """Open multiple Nexus Mods pages, one tab per mod."""
+        for url in urls:
+            self._open_nexus_page(url)
 
     def _show_disable_plugins_dialog(self, mod_name: str, plugin_files: list[str]) -> None:
         """Open the Disable Plugins panel/dialog for a mod and save results."""
@@ -3763,6 +3970,61 @@ class ModListPanel(ctk.CTkFrame):
                                    max(len(self._entries) * self.ROW_H,
                                        self._canvas.winfo_height()))
 
+    def _move_selected_to_separator(self, indices: list[int], sep_name: str):
+        """Move all mods at the given indices to directly below the named separator, grouped together."""
+        # Snapshot the entries to move (in list order)
+        to_move = []
+        for i in sorted(indices):
+            if 0 <= i < len(self._entries):
+                to_move.append((self._entries[i], self._check_vars[i]))
+        if not to_move:
+            return
+
+        # Remove them from the list (highest index first to preserve lower indices)
+        for i in sorted(indices, reverse=True):
+            if 0 <= i < len(self._entries):
+                self._entries.pop(i)
+                self._check_buttons.pop(i)
+                self._check_vars.pop(i)
+
+        # Find separator after removals
+        sep_idx = next(
+            (i for i, e in enumerate(self._entries)
+             if e.is_separator and e.name == sep_name),
+            None,
+        )
+        if sep_idx is None:
+            # Separator was removed (shouldn't happen), put items back at end
+            for entry, var in to_move:
+                self._entries.append(entry)
+                self._check_buttons.append(None)
+                self._check_vars.append(var)
+            self._save_modlist()
+            self._rebuild_filemap()
+            self._redraw()
+            self._update_info()
+            return
+
+        # Insert all mods directly below the separator, preserving their relative order
+        dest = sep_idx + 1
+        for j, (entry, var) in enumerate(to_move):
+            self._entries.insert(dest + j, entry)
+            self._check_buttons.insert(dest + j, None)
+            self._check_vars.insert(dest + j, var)
+
+        # Update selection to the moved block
+        self._sel_set = set(range(dest, dest + len(to_move)))
+        self._sel_idx = dest
+        self._save_modlist()
+        self._rebuild_filemap()
+        self._redraw()
+        self._update_info()
+
+        # Scroll the destination into view
+        self._canvas.yview_moveto(dest * self.ROW_H /
+                                   max(len(self._entries) * self.ROW_H,
+                                       self._canvas.winfo_height()))
+
     def _open_ini(self, path: Path):
         """Open an .ini file in the user's default text editor via xdg-open."""
         try:
@@ -3816,7 +4078,7 @@ class ModListPanel(ctk.CTkFrame):
     def _open_nexus_page(self, url: str) -> None:
         """Open a Nexus Mods page in the default browser."""
         if url:
-            webbrowser.open(url)
+            open_url(url)
             self._log(f"Nexus: Opened {url}")
 
     def _show_missing_reqs(self, mod_name: str, dep_names: list[str]) -> None:
@@ -3973,10 +4235,6 @@ class ModListPanel(ctk.CTkFrame):
         except Exception as exc:
             self._log(f"Nexus: Could not read metadata — {exc}")
             return
-        if meta.latest_file_id <= 0:
-            self._log(f"Nexus: No update info for {mod_name} — run Check Updates first.")
-            return
-
         game_name = app._topbar._game_var.get()
         game = _GAMES.get(game_name)
         if game is None or not game.is_configured():
@@ -4007,29 +4265,50 @@ class ModListPanel(ctk.CTkFrame):
                 files_url = f"https://www.nexusmods.com/{game_domain}/mods/{meta.mod_id}?tab=files"
                 def _fallback():
                     mod_panel.hide_download_progress(cancel=cancel_event)
-                    webbrowser.open(files_url)
+                    open_url(files_url)
                     log_fn(f"Nexus: Premium required for direct download.")
                     log_fn(f"Nexus: Opened files page — click \"Download with Mod Manager\" there.")
                 app.after(0, _fallback)
                 return
 
             # Premium user — direct download
+            if not meta.mod_id:
+                app.after(0, lambda: log_fn(f"Nexus: No mod ID in metadata for {mod_name}."))
+                app.after(0, lambda: mod_panel.hide_download_progress(cancel=cancel_event))
+                return
+
             mod_info = None
             file_info = None
+            latest_file_id = meta.latest_file_id
             try:
                 mod_info = api.get_mod(game_domain, meta.mod_id)
                 files_resp = api.get_mod_files(game_domain, meta.mod_id)
-                for f in files_resp.files:
-                    if f.file_id == meta.latest_file_id:
-                        file_info = f
-                        break
-            except Exception:
-                pass
+                if latest_file_id <= 0:
+                    # No cached update info — pick the newest main/update file
+                    candidates = [f for f in files_resp.files if (f.category_name or "").upper() in ("MAIN", "UPDATE")] or files_resp.files
+                    if candidates:
+                        best = max(candidates, key=lambda f: f.uploaded_timestamp)
+                        latest_file_id = best.file_id
+                        file_info = best
+                else:
+                    for f in files_resp.files:
+                        if f.file_id == latest_file_id:
+                            file_info = f
+                            break
+            except Exception as exc:
+                app.after(0, lambda: log_fn(f"Nexus: Could not fetch mod files — {exc}"))
+                app.after(0, lambda: mod_panel.hide_download_progress(cancel=cancel_event))
+                return
+
+            if latest_file_id <= 0:
+                app.after(0, lambda: log_fn(f"Nexus: No files found for {mod_name} on Nexus."))
+                app.after(0, lambda: mod_panel.hide_download_progress(cancel=cancel_event))
+                return
 
             result = downloader.download_file(
                 game_domain=game_domain,
                 mod_id=meta.mod_id,
-                file_id=meta.latest_file_id,
+                file_id=latest_file_id,
                 progress_cb=lambda cur, total: app.after(
                     0, lambda c=cur, t=total: mod_panel.update_download_progress(c, t, cancel=cancel_event)
                 ),
@@ -4056,7 +4335,7 @@ class ModListPanel(ctk.CTkFrame):
                         new_meta = build_meta_from_download(
                             game_domain=game_domain,
                             mod_id=meta.mod_id,
-                            file_id=meta.latest_file_id,
+                            file_id=latest_file_id,
                             archive_name=result.file_name,
                             mod_info=mod_info,
                             file_info=file_info,
@@ -4645,9 +4924,17 @@ class ModListPanel(ctk.CTkFrame):
         root_deploy_folders = self._root_deploy_folders
         rescan_index        = self._filemap_rescan_index
         staging_requires_subdir = self._staging_requires_subdir
+        normalize_folder_case   = self._normalize_folder_case
         self._filemap_rescan_index = False
         disabled_plugins    = read_disabled_plugins(modlist_path.parent / "disabled_plugins.json")
         self._disabled_plugins_map = disabled_plugins
+        _exc_path           = modlist_path.parent / "excluded_mod_files.json"
+        _exc_raw            = read_excluded_mod_files(_exc_path)
+        excluded_mod_files  = {k: set(v) for k, v in _exc_raw.items()} if _exc_raw else None
+        if excluded_mod_files:
+            total_exc = sum(len(v) for v in excluded_mod_files.values())
+            self.after(0, lambda n=total_exc, p=_exc_path: self._log(
+                f"Filemap: excluding {n} file(s) from {p}"))
 
         def _worker():
             nonlocal rescan_index
@@ -4668,6 +4955,7 @@ class ModListPanel(ctk.CTkFrame):
                         per_mod_strip_prefixes=self._mod_strip_prefixes,
                         allowed_extensions=install_extensions or None,
                         root_deploy_folders=root_deploy_folders or None,
+                        normalize_folder_case=normalize_folder_case,
                     )
                 count, conflict_map, overrides, overridden_by = build_filemap(
                     modlist_path, staging, output,
@@ -4677,6 +4965,8 @@ class ModListPanel(ctk.CTkFrame):
                     root_deploy_folders=root_deploy_folders or None,
                     disabled_plugins=disabled_plugins or None,
                     conflict_ignore_filenames=self._conflict_ignore_filenames or None,
+                    excluded_mod_files=excluded_mod_files or None,
+                    normalize_folder_case=normalize_folder_case,
                 )
                 _game = getattr(self, "_game", None)
                 if _game is not None:

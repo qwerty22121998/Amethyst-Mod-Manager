@@ -275,6 +275,32 @@ def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -
             parser.write(fh)
 
 
+def _expand_folders_for_dialog(
+    file_list: list[tuple[str, str, bool]], src_root: str
+) -> list[tuple[str, str, bool]]:
+    """
+    Expand any is_folder=True entries into individual file entries so the
+    _SelectFilesDialog can show real files instead of opaque folder names.
+    """
+    result = []
+    root = Path(src_root)
+    for src_rel, dst_rel, is_folder in file_list:
+        if not is_folder:
+            result.append((src_rel, dst_rel, False))
+            continue
+        src_dir = root / src_rel if src_rel else root
+        if not src_dir.is_dir():
+            result.append((src_rel, dst_rel, True))  # fallback: keep as-is
+            continue
+        for entry in sorted(src_dir.rglob("*")):
+            if entry.is_file():
+                file_src_rel = str(entry.relative_to(root))
+                rel_to_src = entry.relative_to(src_dir)
+                file_dst_rel = str(Path(dst_rel) / rel_to_src) if dst_rel else str(rel_to_src)
+                result.append((file_src_rel, file_dst_rel, False))
+    return result
+
+
 def _resolve_direct_files(extract_dir: str) -> list[tuple[str, str, bool]]:
     """
     For a non-FOMOD archive, return every file as a (src, dst, is_folder)
@@ -581,7 +607,7 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                     try:
                         with open(sel_path, "w", encoding="utf-8") as f:
                             json.dump(final_selections, f, indent=2)
-                    except Exception:
+                    except OSError:
                         pass
             else:
                 log_fn("FOMOD installer detected — opening wizard...")
@@ -594,36 +620,23 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                             with open(sel_path, "r", encoding="utf-8") as f:
                                 saved_selections = json.load(f)
                             log_fn("Restored previous FOMOD selections.")
-                        except Exception:
+                        except (OSError, ValueError):
                             saved_selections = None
 
-                # Acquire the global FOMOD lock so only one dialog is ever
-                # visible at a time (important during parallel collection installs).
-                # Also marshal dialog creation to the main Tk thread so it is
-                # safe to call from a background worker thread.
-                _result_holder: list = [None]
-                _dialog_done = threading.Event()
+                dialog = FomodDialog(parent_window, config, mod_root,
+                                     installed_files=installed_files,
+                                     saved_selections=saved_selections)
+                parent_window.wait_window(dialog)
+                if dialog.result is None:
+                    log_fn("FOMOD install cancelled.")
+                    return
 
-                def _show_dialog(
-                    _pw=parent_window, _cfg=config, _mr=mod_root,
-                    _if=installed_files, _ss=saved_selections,
-                    _gn=game_name, _mn=mod_name,
-                    _rh=_result_holder, _ev=_dialog_done,
-                ):
+                if game_name:
+                    sel_path = get_fomod_selections_path(game_name, mod_name)
                     try:
-                        dlg = FomodDialog(_pw, _cfg, _mr,
-                                          installed_files=_if,
-                                          saved_selections=_ss)
-                        _pw.wait_window(dlg)
-                        _rh[0] = dlg.result
-                        if dlg.result is not None and _gn:
-                            _sp = get_fomod_selections_path(_gn, _mn)
-                            try:
-                                with open(_sp, "w", encoding="utf-8") as _f:
-                                    json.dump(dlg.result, _f, indent=2)
-                            except Exception:
-                                pass
-                    except Exception:
+                        with open(sel_path, "w", encoding="utf-8") as f:
+                            json.dump(dialog.result, f, indent=2)
+                    except OSError:
                         pass
                     finally:
                         _ev.set()
@@ -675,13 +688,14 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                     replace_all = True
 
         if replace_selected_only:
-            sel_dialog = _SelectFilesDialog(parent_window, file_list)
+            expanded = _expand_folders_for_dialog(file_list, mod_root)
+            sel_dialog = _SelectFilesDialog(parent_window, expanded)
             parent_window.wait_window(sel_dialog)
             if sel_dialog.result is None:
                 log_fn("Install cancelled — no files selected.")
                 return None
             chosen = sel_dialog.result
-            file_list = [(s, d, f) for s, d, f in file_list if d in chosen]
+            file_list = [(s, d, f) for s, d, f in expanded if d in chosen]
             log_fn(f"Replace selected: {len(file_list)} file(s) chosen.")
 
         strip_prefixes = getattr(game, "mod_folder_strip_prefixes", set())
@@ -803,9 +817,15 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             _, normal_files, root_files = _scan_dir(
                 mod_name, str(dest_root), _strip, _exts, _root,
             )
-            _index_path = modlist_path.parent.parent.parent / "modindex.bin"
-            update_mod_index(_index_path, mod_name, normal_files, root_files)
-        except Exception:
+            if mod_panel is not None and mod_panel._modlist_path is not None:
+                _ml = mod_panel._modlist_path
+            else:
+                _ml = game.get_profile_root() / "profiles" / "default" / "modlist.txt"
+            _index_path = _ml.parent / "modindex.bin"
+            _norm_case = getattr(game, "normalize_folder_case", True)
+            update_mod_index(_index_path, mod_name, normal_files, root_files,
+                             normalize_folder_case=_norm_case)
+        except (OSError, ValueError, KeyError):
             pass  # non-fatal — next rebuild will fall back to a full rescan
 
         plugin_exts = getattr(game, "plugin_extensions", [])
@@ -845,7 +865,7 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 write_meta(meta_path, prebuilt_meta)
                 log_fn(f"Nexus: Saved metadata for '{mod_name}' "
                        f"(mod {prebuilt_meta.mod_id})")
-            except Exception:
+            except OSError:
                 pass
         elif _game_domain and _archive.is_file():
             def _detect_meta():

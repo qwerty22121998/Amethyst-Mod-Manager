@@ -54,6 +54,8 @@ def read_modlist(modlist_path: Path) -> list[ModEntry]:
             continue
         prefix = line[0]
         name = line[1:]
+        if not name:
+            continue
         if prefix == "+":
             entries.append(ModEntry(name=name, enabled=True, locked=False,
                                     is_separator=_is_separator(name)))

@@ -41,7 +41,7 @@ import secrets
 import threading
 import time
 import urllib.parse
-import webbrowser
+from Utils.xdg import open_url
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -355,7 +355,7 @@ class NexusOAuthClient:
         auth_url = f"{_AUTHORIZE_URL}?{params}"
         self._on_status("Opening browser — please authorise in Nexus Mods...")
         app_log(f"OAuth: opening auth URL")
-        webbrowser.open(auth_url)
+        open_url(auth_url)
 
         # 3. Wait for callback (5-minute timeout)
         self._on_status("Waiting for browser authorisation...")

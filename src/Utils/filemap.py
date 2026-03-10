@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from pathlib import Path
 
 import msgpack
@@ -62,6 +63,7 @@ _INDEX_VERSION = 3
 # Avoids re-parsing the ~5 MB index file on every filemap rebuild.
 _IndexCache = dict[str, tuple[dict[str, str], dict[str, str]]]
 _index_cache: tuple[str, float, _IndexCache] | None = None  # (path, mtime, data)
+_index_cache_lock = threading.Lock()
 
 
 def _scan_dir(
@@ -281,8 +283,9 @@ def read_mod_index(
         mtime = index_path.stat().st_mtime
     except OSError:
         return None
-    if _index_cache is not None and _index_cache[0] == path_str and _index_cache[1] == mtime:
-        return _index_cache[2]
+    with _index_cache_lock:
+        if _index_cache is not None and _index_cache[0] == path_str and _index_cache[1] == mtime:
+            return _index_cache[2]
     try:
         with index_path.open("rb") as f:
             data = msgpack.unpack(f, raw=False)
@@ -297,20 +300,24 @@ def read_mod_index(
             index[mod_name] = (normal, root)
     except Exception:
         return None
-    _index_cache = (path_str, mtime, index)
+    with _index_cache_lock:
+        _index_cache = (path_str, mtime, index)
     return index
 
 
 def _write_mod_index(
     index_path: Path,
     index: dict[str, tuple[dict[str, str], dict[str, str]]],
+    normalize_folder_case: bool = True,
 ) -> None:
     """Normalize paths, write the full index atomically, then update the cache."""
     global _index_cache
     # Normalize folder-case across all mods before writing so build_filemap
     # can skip the normalize step entirely on every rebuild.
-    _normalize_folder_cases({name: normal for name, (normal, _) in index.items()})
-    _normalize_folder_cases({name: root   for name, (_, root)   in index.items() if root})
+    # Skip when the game requires case-sensitive folder names (e.g. Stardew Valley).
+    if normalize_folder_case:
+        _normalize_folder_cases({name: normal for name, (normal, _) in index.items()})
+        _normalize_folder_cases({name: root   for name, (_, root)   in index.items() if root})
     index_path.parent.mkdir(parents=True, exist_ok=True)
     mods = []
     for mod_name, (normal, root) in index.items():
@@ -330,11 +337,12 @@ def _write_mod_index(
             pass
         raise
     # Update the in-memory cache to match what was just written.
-    try:
-        mtime = index_path.stat().st_mtime
-        _index_cache = (str(index_path), mtime, index)
-    except OSError:
-        _index_cache = None
+    with _index_cache_lock:
+        try:
+            mtime = index_path.stat().st_mtime
+            _index_cache = (str(index_path), mtime, index)
+        except OSError:
+            _index_cache = None
 
 
 def update_mod_index(
@@ -342,6 +350,7 @@ def update_mod_index(
     mod_name: str,
     normal_files: dict[str, str],
     root_files: dict[str, str],
+    normalize_folder_case: bool = True,
 ) -> None:
     """Add or replace a single mod's entry in the index.
 
@@ -350,10 +359,14 @@ def update_mod_index(
     """
     index = read_mod_index(index_path) or {}
     index[mod_name] = (normal_files, root_files)
-    _write_mod_index(index_path, index)
+    _write_mod_index(index_path, index, normalize_folder_case=normalize_folder_case)
 
 
-def remove_from_mod_index(index_path: Path, mod_names: list[str]) -> None:
+def remove_from_mod_index(
+    index_path: Path,
+    mod_names: list[str],
+    normalize_folder_case: bool = True,
+) -> None:
     """Remove one or more mods from the index and rewrite it atomically.
 
     Call this after deleting mod folders from staging.
@@ -370,7 +383,7 @@ def remove_from_mod_index(index_path: Path, mod_names: list[str]) -> None:
             del index[name]
             changed = True
     if changed:
-        _write_mod_index(index_path, index)
+        _write_mod_index(index_path, index, normalize_folder_case=normalize_folder_case)
 
 
 def rebuild_mod_index(
@@ -380,6 +393,7 @@ def rebuild_mod_index(
     per_mod_strip_prefixes: dict[str, list[str]] | None = None,
     allowed_extensions: set[str] | None = None,
     root_deploy_folders: set[str] | None = None,
+    normalize_folder_case: bool = True,
 ) -> None:
     """Scan every mod folder under staging_root and rewrite the full index.
 
@@ -433,7 +447,7 @@ def rebuild_mod_index(
         name, normal, root = fut.result()
         index[name] = (normal, root)
 
-    _write_mod_index(index_path, index)
+    _write_mod_index(index_path, index, normalize_folder_case=normalize_folder_case)
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +464,8 @@ def build_filemap(
     root_deploy_folders: set[str] | None = None,
     disabled_plugins: dict[str, list[str]] | None = None,
     conflict_ignore_filenames: set[str] | None = None,
+    excluded_mod_files: dict[str, set[str]] | None = None,
+    normalize_folder_case: bool = True,
 ) -> tuple[int, dict[str, int], dict[str, set[str]], dict[str, set[str]]]:
     """
     Build filemap.txt from the current modlist.
@@ -474,6 +490,11 @@ def build_filemap(
     conflict_ignore_filenames — lowercase filenames (not paths) excluded from
     conflict tracking.  Files still appear in the filemap but do not count
     toward a mod's conflict status.  Pass None or an empty set to disable.
+
+    excluded_mod_files — dict mapping mod name to a set of lowercase rel_key
+    paths that should be excluded from the filemap for that mod.  Excluded
+    files are treated as if the mod does not have them, so the next
+    lower-priority mod that has the same file wins instead.
 
     Returns:
         (count, conflict_map, overrides, overridden_by)
@@ -500,6 +521,7 @@ def build_filemap(
             per_mod_strip_prefixes=per_mod_strip_prefixes,
             allowed_extensions=allowed_extensions,
             root_deploy_folders=root_deploy_folders,
+            normalize_folder_case=normalize_folder_case,
         )
         index = read_mod_index(index_path) or {}
 
@@ -520,13 +542,18 @@ def build_filemap(
     filemap_winner: dict[str, str] = {}
     mod_files: dict[str, set[str]] = {}
 
+    # Build per-mod excluded-file sets for fast lookup (lowercase rel_keys)
+    _excluded: dict[str, set[str]] = excluded_mod_files or {}
+
     # Merge in priority order so higher-priority mods overwrite lower ones
     for name in priority_order:
         files = raw.get(name)
         if not files:
             continue
-        mod_files[name] = set(files.keys())
-        for rel_key in files:
+        exc = _excluded.get(name)
+        active_keys = set(files.keys()) if not exc else {k for k in files if k not in exc}
+        mod_files[name] = active_keys
+        for rel_key in active_keys:
             filemap_winner[rel_key] = name
 
     # Rebuild filemap using the normalised (canonical) rel_str for the destination

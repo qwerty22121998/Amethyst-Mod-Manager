@@ -47,31 +47,39 @@ def _ensure_masterlist(
     download_url: str = "",
     log_fn=None,
 ) -> None:
-    """Ensure a masterlist exists in the config dir.
+    """Ensure a masterlist exists in the config dir, always fetching the latest.
 
     Resolution order:
-      1. Already present in config dir — nothing to do.
-      2. Copy from the bundled LOOT/data/ directory.
-      3. Download from the provided URL.
+      1. Download from the provided URL (always attempted to get latest version).
+         Falls back to the existing cached file if the download fails.
+      2. If no URL or download fails and no cached file: copy from bundled data dir.
     """
     _log = log_fn or (lambda _: None)
     dest = _DATA_DIR / filename
+
+    # Always try to download the latest version if a URL is provided
+    if download_url:
+        tmp = dest.with_suffix(".tmp")
+        _log(f"Fetching latest {filename}...")
+        try:
+            urllib.request.urlretrieve(download_url, tmp)
+            tmp.replace(dest)
+            _log(f"Updated {filename}.")
+            return
+        except Exception as exc:
+            _log(f"Could not fetch {filename}: {exc} — using cached copy.")
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+
+    # Fall through: use cached file if it exists
     if dest.is_file():
         return
-    # Try bundled copy first
+
+    # Last resort: copy from bundled data dir
     src = _BUNDLED_DATA_DIR / filename
     if src.is_file():
         shutil.copy2(src, dest)
         _log(f"Copied bundled {filename} to config dir.")
-        return
-    # Download if a URL was provided
-    if download_url:
-        _log(f"Downloading {filename}...")
-        try:
-            urllib.request.urlretrieve(download_url, dest)
-            _log(f"Downloaded {filename} successfully.")
-        except Exception as exc:
-            _log(f"Failed to download {filename}: {exc}")
 
 
 def _masterlist_filename(game_type_attr: str) -> str:

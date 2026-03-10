@@ -11,7 +11,7 @@ Allows the user to:
 from __future__ import annotations
 
 import threading
-import webbrowser
+from Utils.xdg import open_url
 from typing import Callable, Optional
 
 import customtkinter as ctk
@@ -850,7 +850,7 @@ class NexusSettingsPanel(ctk.CTkFrame):
     def _on_open_nexus(self):
         domain = self._game_domain_getter()
         if domain:
-            webbrowser.open(f"https://www.nexusmods.com/games/{domain}")
+            open_url(f"https://www.nexusmods.com/games/{domain}")
 
     # -- Show/hide key -------------------------------------------------------
 

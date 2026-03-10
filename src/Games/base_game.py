@@ -264,6 +264,22 @@ class BaseGame(ABC):
         return False
 
     @property
+    def normalize_folder_case(self) -> bool:
+        """
+        When True (the default), folder segments that differ only in case across
+        mods are unified to a single canonical casing (most-uppercase wins).
+        This is correct for case-insensitive games (Windows/Bethesda etc.) where
+        ``Scripts/`` and ``scripts/`` are the same directory.
+
+        Set to False for games whose mod loader runs on a case-sensitive file
+        system and respects the exact folder names provided by mod authors
+        (e.g. Stardew Valley on Linux, where ``Music/`` and ``music/`` are
+        different directories).  When False, folder names in the filemap are
+        left exactly as each mod provides them — no cross-mod unification.
+        """
+        return True
+
+    @property
     def mod_staging_requires_subdir(self) -> bool:
         """
         When True, each mod's staging folder must contain a named subdirectory

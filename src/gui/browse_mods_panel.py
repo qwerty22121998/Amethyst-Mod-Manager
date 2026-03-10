@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-import webbrowser
+from Utils.xdg import open_url
 from dataclasses import dataclass
 from typing import Callable, Optional
 
@@ -299,7 +299,7 @@ class BrowseModsPanel:
         url = f"https://www.nexusmods.com/{entry.domain_name}/mods/{entry.mod_id}"
         card = ModCard(
             self._inner, entry,
-            on_view=lambda u=url: webbrowser.open(u),
+            on_view=lambda u=url: open_url(u),
             on_install=lambda e=entry: self._install_fn(e),
             on_right_click=lambda event, e=entry, u=url: self._show_context_menu(event, e, u),
         )
@@ -747,7 +747,7 @@ class BrowseModsPanel:
             )
         menu = self._context_menu
         menu.clear()
-        menu.add_command("Open on Nexus", lambda: webbrowser.open(url))
+        menu.add_command("Open on Nexus", lambda: open_url(url))
         menu.add_command("Install Mod", lambda: self._install_fn(entry))
         menu.add_separator()
         menu.add_command("Track Mod", lambda: self._track_mod(entry))

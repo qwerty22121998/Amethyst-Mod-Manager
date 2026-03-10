@@ -16,7 +16,7 @@ import subprocess
 import tarfile
 import tempfile
 import threading
-import webbrowser
+from Utils.xdg import open_url
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -266,7 +266,7 @@ class FalloutDowngradeWizard(ctk.CTkToplevel):
             self._body, text="Open Nexus Mods Page", width=220, height=36,
             font=FONT_BOLD,
             fg_color="#da8e35", hover_color="#e5a04a", text_color="white",
-            command=lambda: webbrowser.open(_NEXUS_URL),
+            command=lambda: open_url(_NEXUS_URL),
         ).pack(pady=(0, 20))
 
         ctk.CTkButton(

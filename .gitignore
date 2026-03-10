@@ -1,11 +1,9 @@
 *.cpython-313.pyc
 .claude/settings.local.json
 .vscode/settings.json
-TodoList.txt
-Games/BepInEx/__pycache__/BepInEx.cpython-313.pyc
-LOOT/libloot
 .venv
 .venv-flatpak
 .flatpak-builder
 src/appimage/build
 /AUR
+src/LOOT/loot.cpython-313-x86_64-linux-gnu.so

@@ -258,21 +258,29 @@ def check_for_updates(
                 return
 
             for meta in metas:
-                installed_category = (
-                    next(
-                        (f.category_name for f in files_resp.files if f.file_id == meta.file_id),
-                        None,
-                    )
+                installed_file = (
+                    next((f for f in files_resp.files if f.file_id == meta.file_id), None)
                     if meta.file_id > 0
-                    else "MAIN"
+                    else None
                 )
-                category_files = (
-                    [f for f in files_resp.files if f.category_name == installed_category]
-                    if installed_category
-                    else files_resp.files
-                ) or files_resp.files
+                installed_name = installed_file.name if installed_file else None
 
-                latest = max(category_files, key=lambda f: f.uploaded_timestamp)
+                # Find candidates with the exact same display name (all versions of that file)
+                if installed_name:
+                    name_matches = [f for f in files_resp.files if f.name == installed_name]
+                else:
+                    name_matches = []
+
+                if name_matches:
+                    latest = max(name_matches, key=lambda f: f.uploaded_timestamp)
+                else:
+                    # Can't identify the exact file — flag for browser fallback
+                    latest = max(files_resp.files, key=lambda f: f.uploaded_timestamp) if files_resp.files else None
+
+                if latest is None:
+                    continue
+
+                exact_name_match = bool(name_matches)
 
                 install_date = _parse_install_date(meta)
                 if install_date is not None:
@@ -292,7 +300,7 @@ def check_for_updates(
                     _apply_update_result(
                         has_update, meta, mod_id, game_domain,
                         latest_version=latest.version or latest.mod_version or "",
-                        latest_file_id=latest.file_id,
+                        latest_file_id=latest.file_id if exact_name_match else 0,
                         latest_file_name=latest.file_name,
                         updates=updates,
                         staging_root=staging_root,
@@ -362,6 +370,16 @@ def _apply_update_result(
             meta.has_update = True
             write_meta(staging_root / meta.mod_name / "meta.ini", meta)
     else:
-        if save_results and meta.has_update:
-            meta.has_update = False
-            write_meta(staging_root / meta.mod_name / "meta.ini", meta)
+        if save_results:
+            changed = False
+            if meta.has_update:
+                meta.has_update = False
+                changed = True
+            if latest_file_id and meta.latest_file_id != latest_file_id:
+                meta.latest_file_id = latest_file_id
+                changed = True
+            if latest_version and meta.latest_version != latest_version:
+                meta.latest_version = latest_version
+                changed = True
+            if changed:
+                write_meta(staging_root / meta.mod_name / "meta.ini", meta)

@@ -16,7 +16,7 @@ import stat
 import subprocess
 import tarfile
 import threading
-import webbrowser
+from Utils.xdg import open_url
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -246,7 +246,7 @@ class BepInExWizard(ctk.CTkToplevel):
             self._body, text="Download BepInEx", width=220, height=36,
             font=FONT_BOLD,
             fg_color="#da8e35", hover_color="#e5a04a", text_color="white",
-            command=lambda: webbrowser.open(self._download_url),
+            command=lambda: open_url(self._download_url),
             state=btn_state,
         ).pack(pady=(0, 20))
 

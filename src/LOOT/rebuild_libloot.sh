@@ -18,7 +18,6 @@ LIBLOOT_DIR="${SCRIPT_DIR}/libloot"
 PYTHON_DIR="${LIBLOOT_DIR}/python"
 OUT_SO_NAME="loot.cpython-313-x86_64-linux-gnu.so"
 OUT_PRIMARY="${SCRIPT_DIR}/${OUT_SO_NAME}"
-OUT_APPDIR="${SCRIPT_DIR}/lib/loot/${OUT_SO_NAME}"
 REQUIREMENTS="${PROJECT_DIR}/requirements.txt"
 
 # Optional: build a specific tag or commit (e.g. v0.29.0)
@@ -28,8 +27,7 @@ echo "=== Rebuilding libloot Python extension ==="
 echo "  Project root: $PROJECT_DIR"
 echo "  venv: $VENV_DIR"
 echo "  libloot clone: $LIBLOOT_DIR"
-echo "  Output (primary): $OUT_PRIMARY"
-echo "  Output (AppImage): $OUT_APPDIR"
+echo "  Output: $OUT_PRIMARY"
 echo ""
 
 # ── Require C toolchain (Rust needs it to link) ───────────────────────
@@ -129,10 +127,14 @@ if [ -z "$SO_FILE" ] || [ ! -f "$SO_FILE" ]; then
     exit 1
 fi
 
-mkdir -p "$(dirname "$OUT_APPDIR")"
 cp -f "$SO_FILE" "$OUT_PRIMARY"
-cp -f "$SO_FILE" "$OUT_APPDIR"
 echo "  Installed: $OUT_PRIMARY"
-echo "  Installed: $OUT_APPDIR"
+echo ""
+
+# ── Cleanup build directories ─────────────────────────────────────────
+echo "=== Cleaning up build directories ==="
+rm -rf "$LIBLOOT_DIR" "${SCRIPT_DIR}/lib"
+echo "  Removed: $LIBLOOT_DIR"
+echo "  Removed: ${SCRIPT_DIR}/lib"
 echo ""
 echo "=== Done. You can run the Mod Manager or build the AppImage."

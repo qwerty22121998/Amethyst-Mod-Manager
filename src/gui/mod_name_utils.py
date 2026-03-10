@@ -73,8 +73,17 @@ def _suggest_mod_names(filename_stem: str) -> list[str]:
     # Step 2 (was 1): strip trailing numeric dash-segments (Nexus: name-id-ver-timestamp)
     nexus_clean = re.sub(r"(-\d+)+$", "", stem).strip()
 
+    # If the nexus-cleaned name ends with a dotted version (e.g. "Ordinator 9.35.0"),
+    # that version was part of the uploader's filename before the Nexus ID — preserve it.
+    _ends_with_version = bool(re.search(r"\s+\d+(?:\.\d+)+$", nexus_clean))
+
     # Step 3 (was 2): strip title metadata from the Nexus-cleaned name
     title_clean = _strip_title_metadata(nexus_clean)
+
+    # If stripping removed a version that was intentionally in the name, restore nexus_clean
+    # as the preferred candidate (title_clean still included as fallback below).
+    if _ends_with_version and title_clean != nexus_clean:
+        title_clean = nexus_clean
 
     # Build de-duplicated list from cleanest to rawest
     seen = set()

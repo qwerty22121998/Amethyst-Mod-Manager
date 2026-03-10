@@ -45,6 +45,7 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Stardew Valley
 - Kingdom Come Deliverance (1 and 2)
 - Hogwarts Legacy
+- Marvel Rivals
 - Subnautica
 - Subnautica Below Zero
 - Resident Evil Requiem
@@ -52,7 +53,7 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Tcg Card Shop Simulator
 - Valheim
 - Lethal Company
-
+- Mount & Blade II: Bannerlord
 - The manager now has the ability to define custom games. See the Wiki for the guide
 
 ## Usage
@@ -130,4 +131,8 @@ ParallaxR (Version 2.0) Uses a similar process, Requires a patched ucrtbase.dll 
 
 ## Planned Features
 
-- Adding/Installing collections directly into the manager as a new profile, This would be for Nexus premium users only but the manager would handle the installation of collections and add them as separate profiles you can switch between to deploy. This will require the application to be Registered with Nexus first but the frameworks to allow this feature to work already exist and shouldn't be too hard to implement.
+- Adding/Installing collections directly into the manager as a new profile, This is currently working, See the wiki for screenshots of what this will look like. This Will be added once the application is registered with Nexus and some more polish is added.
+
+## Supporting the project
+
+- This is where I'd put a ko-fi link or something. Give your money to a more worthwhile cause. Your feedback is enough

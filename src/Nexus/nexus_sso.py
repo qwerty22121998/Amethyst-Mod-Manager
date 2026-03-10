@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-import webbrowser
+from Utils.xdg import open_url
 from typing import Callable, Optional
 
 import websocket  # websocket-client
@@ -189,7 +189,7 @@ class NexusSSOClient:
                     "Opening browser — please authorise the app on Nexus Mods..."
                 )
                 app_log(f"Opening SSO auth URL: {auth_url}")
-                webbrowser.open(auth_url)
+                open_url(auth_url)
 
         # -- API key received! --
         if "api_key" in data:

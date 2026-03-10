@@ -68,3 +68,7 @@ def xdg_open(path: str | Path, log_fn: Callable[[str], None] | None = None) -> N
             log_fn(f"xdg-open returned {rc}: {msg or '(no output)'}")
 
     threading.Thread(target=_watch, daemon=True).start()
+
+
+def open_url(url: str, log_fn: Callable[[str], None] | None = None) -> None:
+    xdg_open(url, log_fn=log_fn)
