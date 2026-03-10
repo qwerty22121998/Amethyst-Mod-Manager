@@ -308,13 +308,16 @@ def read_mod_index(
 def _write_mod_index(
     index_path: Path,
     index: dict[str, tuple[dict[str, str], dict[str, str]]],
+    normalize_folder_case: bool = True,
 ) -> None:
     """Normalize paths, write the full index atomically, then update the cache."""
     global _index_cache
     # Normalize folder-case across all mods before writing so build_filemap
     # can skip the normalize step entirely on every rebuild.
-    _normalize_folder_cases({name: normal for name, (normal, _) in index.items()})
-    _normalize_folder_cases({name: root   for name, (_, root)   in index.items() if root})
+    # Skip when the game requires case-sensitive folder names (e.g. Stardew Valley).
+    if normalize_folder_case:
+        _normalize_folder_cases({name: normal for name, (normal, _) in index.items()})
+        _normalize_folder_cases({name: root   for name, (_, root)   in index.items() if root})
     index_path.parent.mkdir(parents=True, exist_ok=True)
     mods = []
     for mod_name, (normal, root) in index.items():
@@ -347,6 +350,7 @@ def update_mod_index(
     mod_name: str,
     normal_files: dict[str, str],
     root_files: dict[str, str],
+    normalize_folder_case: bool = True,
 ) -> None:
     """Add or replace a single mod's entry in the index.
 
@@ -355,10 +359,14 @@ def update_mod_index(
     """
     index = read_mod_index(index_path) or {}
     index[mod_name] = (normal_files, root_files)
-    _write_mod_index(index_path, index)
+    _write_mod_index(index_path, index, normalize_folder_case=normalize_folder_case)
 
 
-def remove_from_mod_index(index_path: Path, mod_names: list[str]) -> None:
+def remove_from_mod_index(
+    index_path: Path,
+    mod_names: list[str],
+    normalize_folder_case: bool = True,
+) -> None:
     """Remove one or more mods from the index and rewrite it atomically.
 
     Call this after deleting mod folders from staging.
@@ -375,7 +383,7 @@ def remove_from_mod_index(index_path: Path, mod_names: list[str]) -> None:
             del index[name]
             changed = True
     if changed:
-        _write_mod_index(index_path, index)
+        _write_mod_index(index_path, index, normalize_folder_case=normalize_folder_case)
 
 
 def rebuild_mod_index(
@@ -385,6 +393,7 @@ def rebuild_mod_index(
     per_mod_strip_prefixes: dict[str, list[str]] | None = None,
     allowed_extensions: set[str] | None = None,
     root_deploy_folders: set[str] | None = None,
+    normalize_folder_case: bool = True,
 ) -> None:
     """Scan every mod folder under staging_root and rewrite the full index.
 
@@ -438,7 +447,7 @@ def rebuild_mod_index(
         name, normal, root = fut.result()
         index[name] = (normal, root)
 
-    _write_mod_index(index_path, index)
+    _write_mod_index(index_path, index, normalize_folder_case=normalize_folder_case)
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +465,7 @@ def build_filemap(
     disabled_plugins: dict[str, list[str]] | None = None,
     conflict_ignore_filenames: set[str] | None = None,
     excluded_mod_files: dict[str, set[str]] | None = None,
+    normalize_folder_case: bool = True,
 ) -> tuple[int, dict[str, int], dict[str, set[str]], dict[str, set[str]]]:
     """
     Build filemap.txt from the current modlist.
@@ -511,6 +521,7 @@ def build_filemap(
             per_mod_strip_prefixes=per_mod_strip_prefixes,
             allowed_extensions=allowed_extensions,
             root_deploy_folders=root_deploy_folders,
+            normalize_folder_case=normalize_folder_case,
         )
         index = read_mod_index(index_path) or {}
 

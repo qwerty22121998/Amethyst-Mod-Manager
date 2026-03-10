@@ -721,8 +721,14 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             _, normal_files, root_files = _scan_dir(
                 mod_name, str(dest_root), _strip, _exts, _root,
             )
-            _index_path = modlist_path.parent.parent.parent / "modindex.bin"
-            update_mod_index(_index_path, mod_name, normal_files, root_files)
+            if mod_panel is not None and mod_panel._modlist_path is not None:
+                _ml = mod_panel._modlist_path
+            else:
+                _ml = game.get_profile_root() / "profiles" / "default" / "modlist.txt"
+            _index_path = _ml.parent / "modindex.bin"
+            _norm_case = getattr(game, "normalize_folder_case", True)
+            update_mod_index(_index_path, mod_name, normal_files, root_files,
+                             normalize_folder_case=_norm_case)
         except (OSError, ValueError, KeyError):
             pass  # non-fatal — next rebuild will fall back to a full rescan
 
