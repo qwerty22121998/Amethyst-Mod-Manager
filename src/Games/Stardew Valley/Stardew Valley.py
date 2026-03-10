@@ -70,6 +70,10 @@ class StardewValley(BaseGame):
         return False
 
     @property
+    def normalize_folder_case(self) -> bool:
+        return False
+
+    @property
     def mod_staging_requires_subdir(self) -> bool:
         return True
 
