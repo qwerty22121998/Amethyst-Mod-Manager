@@ -57,12 +57,14 @@ from Utils.profile_backup import create_backup
 # TopBar
 # ---------------------------------------------------------------------------
 class TopBar(ctk.CTkFrame):
+    # Fallback threshold; overwritten dynamically once widgets are measured.
+    _WRAP_THRESHOLD = 1200
+
     def __init__(self, parent, log_fn=None, show_add_game_panel_fn=None,
                  show_reconfigure_panel_fn=None, show_proton_panel_fn=None,
                  show_wizard_panel_fn=None, show_nexus_panel_fn=None,
                  show_custom_game_panel_fn=None):
-        super().__init__(parent, fg_color=BG_PANEL, corner_radius=0, height=46)
-        self.grid_propagate(False)
+        super().__init__(parent, fg_color=BG_PANEL, corner_radius=0)
         self._log = log_fn or (lambda msg: None)
         self._show_add_game_panel_fn = show_add_game_panel_fn
         self._show_reconfigure_panel_fn = show_reconfigure_panel_fn
@@ -70,30 +72,43 @@ class TopBar(ctk.CTkFrame):
         self._show_wizard_panel_fn = show_wizard_panel_fn
         self._show_nexus_panel_fn = show_nexus_panel_fn
         self._show_custom_game_panel_fn = show_custom_game_panel_fn
+        self._two_rows: bool | None = None  # unknown until first configure
+
+        # ── Content area (above separator) ───────────────────────────────────
+        # _row1 holds game/profile selectors; _row2 holds action buttons.
+        # Layout:
+        #   Wide  → _row1 left, _row2 right, both on the same visual line
+        #           (achieved by packing _row2 side="right" inside _content)
+        #   Narrow → _row1 top, _row2 below (stacked)
+        self._content = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        self._content.pack(side="top", fill="both", expand=True)
+
+        self._row1 = ctk.CTkFrame(self._content, fg_color="transparent", corner_radius=0)
+        self._row2 = ctk.CTkFrame(self._content, fg_color="transparent", corner_radius=0)
+        # Initial pack deferred to _apply_layout() after widgets are built
 
         # Bottom separator line
-        ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(
-            side="bottom", fill="x"
-        )
+        self._sep = ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0)
+        self._sep.pack(side="bottom", fill="x")
 
-        # Left: Game label, + button, dropdown
+        # ── Game selector (row 1) ────────────────────────────────────────────
         game_names = _load_games()
         _last_game = _load_last_game()
         _initial_game = _last_game if (_last_game and _last_game in game_names) else game_names[0]
         self._game_var = tk.StringVar(value=_initial_game)
 
         ctk.CTkLabel(
-            self, text="Game:", font=FONT_BOLD, text_color=TEXT_MAIN
+            self._row1, text="Game:", font=FONT_BOLD, text_color=TEXT_MAIN
         ).pack(side="left", padx=(12, 4))
 
         ctk.CTkButton(
-            self, text="+", width=32, height=32, font=FONT_BOLD,
+            self._row1, text="+", width=32, height=32, font=FONT_BOLD,
             fg_color="#2d7a2d", hover_color="#3a9a3a", text_color="white",
             command=self._on_add_game
         ).pack(side="left", padx=(0, 4))
 
         self._game_menu = ctk.CTkOptionMenu(
-            self, values=game_names, variable=self._game_var,
+            self._row1, values=game_names, variable=self._game_var,
             width=180, height=32, font=FONT_NORMAL,
             fg_color=BG_HEADER, button_color=ACCENT, button_hover_color=ACCENT_HOV,
             dropdown_fg_color=BG_PANEL, text_color=TEXT_MAIN,
@@ -102,24 +117,24 @@ class TopBar(ctk.CTkFrame):
         self._game_menu.pack(side="left", padx=(0, 4))
 
         ctk.CTkButton(
-            self, text="⚙", width=32, height=32, font=FONT_BOLD,
+            self._row1, text="⚙", width=32, height=32, font=FONT_BOLD,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_settings
         ).pack(side="left", padx=(0, 16))
 
-        # Profile
+        # ── Profile selector (row 1) ─────────────────────────────────────────
         ctk.CTkLabel(
-            self, text="Profile:", font=FONT_BOLD, text_color=TEXT_MAIN
+            self._row1, text="Profile:", font=FONT_BOLD, text_color=TEXT_MAIN
         ).pack(side="left", padx=(0, 4))
 
         ctk.CTkButton(
-            self, text="+", width=32, height=32, font=FONT_BOLD,
+            self._row1, text="+", width=32, height=32, font=FONT_BOLD,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_add_profile
         ).pack(side="left", padx=(0, 2))
 
         ctk.CTkButton(
-            self, text="−", width=32, height=32, font=FONT_BOLD,
+            self._row1, text="−", width=32, height=32, font=FONT_BOLD,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_remove_profile
         ).pack(side="left", padx=(0, 4))
@@ -139,7 +154,7 @@ class TopBar(ctk.CTkFrame):
         _initial_profile = _last_profile if _last_profile in profile_names else profile_names[0]
         self._profile_var = tk.StringVar(value=_initial_profile)
         self._profile_menu = ctk.CTkOptionMenu(
-            self, values=profile_names, variable=self._profile_var,
+            self._row1, values=profile_names, variable=self._profile_var,
             width=160, height=32, font=FONT_NORMAL,
             fg_color=BG_HEADER, button_color=ACCENT, button_hover_color=ACCENT_HOV,
             dropdown_fg_color=BG_PANEL, text_color=TEXT_MAIN,
@@ -147,22 +162,23 @@ class TopBar(ctk.CTkFrame):
         )
         self._profile_menu.pack(side="left", padx=(0, 4))
 
+        # ── Action buttons (row 2 container, but children created here) ──────
         # Install Mod button
         self._disable_extract = False
         _install_mod_icon = load_icon("install.png", size=(30, 30))
         self._install_mod_btn = ctk.CTkButton(
-            self, text="Install Mod", width=100, height=32, font=FONT_BOLD,
+            self._row2, text="Install Mod", width=100, height=32, font=FONT_BOLD,
             image=_install_mod_icon, compound="left",
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_install_mod
         )
-        self._install_mod_btn.pack(side="left", padx=(0, 8))
+        self._install_mod_btn.pack(side="left", padx=(8, 8))
         self._install_mod_btn.bind("<Button-3>", self._on_install_mod_right_click)
 
         # Deploy button
         _deploy_icon = load_icon("deploy.png", size=(30, 30))
         self._deploy_btn = ctk.CTkButton(
-            self, text="Deploy", width=100, height=32, font=FONT_BOLD,
+            self._row2, text="Deploy", width=100, height=32, font=FONT_BOLD,
             image=_deploy_icon, compound="left",
             fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="white",
             command=self._on_deploy
@@ -172,7 +188,7 @@ class TopBar(ctk.CTkFrame):
         # Restore button
         _restore_icon = load_icon("restore.png", size=(30, 30))
         self._restore_btn = ctk.CTkButton(
-            self, text="Restore", width=100, height=32, font=FONT_BOLD,
+            self._row2, text="Restore", width=100, height=32, font=FONT_BOLD,
             image=_restore_icon, compound="left",
             fg_color="#8b1a1a", hover_color="#b22222", text_color="white",
             command=self._on_restore
@@ -182,7 +198,7 @@ class TopBar(ctk.CTkFrame):
         # Proton tools button
         _proton_icon = load_icon("proton.png", size=(30, 30))
         self._proton_btn = ctk.CTkButton(
-            self, text="Proton", width=100, height=32, font=FONT_BOLD,
+            self._row2, text="Proton", width=100, height=32, font=FONT_BOLD,
             image=_proton_icon, compound="left",
             fg_color="#7b2d8b", hover_color="#9a3aae", text_color="white",
             command=self._on_proton_tools
@@ -192,7 +208,7 @@ class TopBar(ctk.CTkFrame):
         # Wizard button (shown only when the game has wizard tools)
         _wizard_icon = load_icon("wizard.png", size=(30, 30))
         self._wizard_btn = ctk.CTkButton(
-            self, text="Wizard", width=100, height=32, font=FONT_BOLD,
+            self._row2, text="Wizard", width=100, height=32, font=FONT_BOLD,
             image=_wizard_icon, compound="left",
             fg_color="#4a1272", hover_color="#6318a0", text_color="white",
             command=self._on_wizard
@@ -201,15 +217,59 @@ class TopBar(ctk.CTkFrame):
 
         # Nexus Mods settings button
         _nexus_icon = load_icon("nexus.png", size=(30, 30))
-        ctk.CTkButton(
-            self, text="Nexus", width=100, height=32, font=FONT_BOLD,
+        self._nexus_btn = ctk.CTkButton(
+            self._row2, text="Nexus", width=100, height=32, font=FONT_BOLD,
             image=_nexus_icon, compound="left",
             fg_color="#da8e35", hover_color="#e5a04a", text_color="white",
             command=self._on_nexus_settings
-        ).pack(side="left", padx=(0, 4))
+        )
+        self._nexus_btn.pack(side="left", padx=(0, 4))
 
         # Show/hide wizard button for the initial game
         self._update_wizard_visibility()
+
+        # Measure natural widths after layout pass, set threshold, then apply
+        self.after_idle(self._init_threshold)
+        self.bind("<Configure>", self._on_configure)
+
+    # ── Responsive layout ────────────────────────────────────────────────────
+
+    def _init_threshold(self):
+        """Measure the natural widths of both rows and set the wrap threshold."""
+        # Temporarily pack both rows to get their requested widths
+        self._row1.pack(side="top", fill="x")
+        self._row2.pack(side="top", fill="x")
+        self.update_idletasks()
+        row1_w = self._row1.winfo_reqwidth()
+        row2_w = self._row2.winfo_reqwidth()
+        # Add a small buffer (32px) so the profile dropdown never gets clipped
+        self._WRAP_THRESHOLD = row1_w + row2_w + 32
+        # Now unpack and apply the correct layout for the current window width
+        self._row1.pack_forget()
+        self._row2.pack_forget()
+        self._two_rows = None  # reset so _apply_layout always runs
+        self._apply_layout(self.winfo_width())
+
+    def _on_configure(self, event):
+        """Re-evaluate single-row vs two-row layout whenever our width changes."""
+        self._apply_layout(event.width)
+
+    def _apply_layout(self, width: int):
+        two_rows = width < self._WRAP_THRESHOLD
+        if two_rows == self._two_rows:
+            return  # no change
+        self._two_rows = two_rows
+        # Unpack both first to avoid pack-order conflicts
+        self._row1.pack_forget()
+        self._row2.pack_forget()
+        if two_rows:
+            # Stacked: each row centred horizontally
+            self._row1.pack(side="top", anchor="center", pady=(4, 0))
+            self._row2.pack(side="top", anchor="center", pady=(4, 4))
+        else:
+            # Side by side on one line, centred together
+            self._row2.pack(side="right", fill="y", pady=2, padx=(0, 4))
+            self._row1.pack(side="left", fill="y", pady=2)
 
     def _on_nexus_settings(self):
         """Open the Nexus Mods settings panel (or dialog fallback)."""

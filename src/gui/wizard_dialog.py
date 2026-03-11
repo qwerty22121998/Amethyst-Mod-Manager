@@ -177,11 +177,12 @@ class WizardDialog(ctk.CTkToplevel):
 class WizardPanel(ctk.CTkFrame):
     """Inline panel for wizard tool selection — overlays the plugin panel while open."""
 
-    def __init__(self, parent, game: "BaseGame", log_fn=None, on_done=None):
+    def __init__(self, parent, game: "BaseGame", log_fn=None, on_done=None, on_open_tool=None):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
         self._game = game
         self._log = log_fn or (lambda msg: None)
         self._on_done = on_done or (lambda p: None)
+        self._on_open_tool = on_open_tool  # callable(cls, game, log_fn, extra) or None
         self._build()
 
     def _build(self):
@@ -257,24 +258,28 @@ class WizardPanel(ctk.CTkFrame):
         ).pack(side="right", padx=(8, 0))
 
     def _open_tool(self, tool: "WizardTool"):
-        """Close the panel and open the tool's dedicated wizard dialog."""
+        """Close the panel and open the tool's dedicated wizard."""
         game = self._game
         log = self._log
-        toplevel = self.winfo_toplevel()
         path = tool.dialog_class_path
         extra = tool.extra
+        on_open_tool = self._on_open_tool
 
         self._on_done(self)
 
         def _launch():
             try:
                 cls = _resolve_dialog_class(path)
-                dlg = cls(toplevel, game, log, **extra)
-                toplevel.wait_window(dlg)
+                if on_open_tool is not None:
+                    on_open_tool(cls, game, log, extra)
+                else:
+                    toplevel = self.winfo_toplevel()
+                    dlg = cls(toplevel, game, log, **extra)
+                    toplevel.wait_window(dlg)
             except Exception as exc:
                 log(f"Wizard error: {exc}")
 
-        toplevel.after(50, _launch)
+        self.after(50, _launch)
 
     def _on_close(self):
         self._on_done(self)

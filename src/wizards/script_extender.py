@@ -15,6 +15,7 @@ import subprocess
 import tarfile
 import threading
 from Utils.xdg import open_url
+from Utils.portal_filechooser import pick_file
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -161,7 +162,7 @@ def _extract_archive(archive: Path, dest: Path) -> list[Path]:
 # Wizard dialog
 # ============================================================================
 
-class ScriptExtenderWizard(ctk.CTkToplevel):
+class ScriptExtenderWizard(ctk.CTkFrame):
     """Step-by-step wizard to download and install a script extender."""
 
     def __init__(
@@ -170,16 +171,12 @@ class ScriptExtenderWizard(ctk.CTkToplevel):
         game: "BaseGame",
         log_fn=None,
         *,
+        on_close=None,
         download_url: str = "",
         archive_keywords: list[str] | None = None,
     ):
-        super().__init__(parent, fg_color=BG_DEEP)
-        self.title(f"Install Script Extender — {game.name}")
-        self.geometry("520x380")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        self.after(100, self._make_modal)
+        super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
+        self._on_close_cb = on_close or (lambda: None)
 
         self._game = game
         self._log = log_fn or (lambda msg: None)
@@ -189,28 +186,26 @@ class ScriptExtenderWizard(ctk.CTkToplevel):
         self._archive_path: Path | None = None
         self._game_root: Path | None = game.get_game_path()
 
+        title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+        ctk.CTkLabel(
+            title_bar, text=f"Install Script Extender \u2014 {game.name}",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12, pady=8)
+        ctk.CTkButton(
+            title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
+            fg_color="transparent", hover_color=BG_PANEL, text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=4, pady=4)
+
         self._body = ctk.CTkFrame(self, fg_color=BG_DEEP)
         self._body.pack(fill="both", expand=True, padx=20, pady=20)
 
         self._show_step_download()
 
-    # ------------------------------------------------------------------
-    # Modal helpers
-    # ------------------------------------------------------------------
-
-    def _make_modal(self):
-        try:
-            self.grab_set()
-            self.focus_set()
-        except Exception:
-            pass
-
     def _on_cancel(self):
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        self.destroy()
+        self._on_close_cb()
 
     def _clear_body(self):
         for w in self._body.winfo_children():
@@ -332,29 +327,15 @@ class ScriptExtenderWizard(ctk.CTkToplevel):
             self._next_btn.configure(state="disabled")
 
     def _browse_archive(self):
-        try:
-            result = subprocess.run(
-                [
-                    "zenity", "--file-selection",
-                    "--title=Select the script extender archive",
-                    "--file-filter=Archives (*.zip *.7z *.rar *.tar*) | *.zip *.7z *.rar *.tar *.tar.gz *.tar.bz2 *.tar.xz *.tgz",
-                    "--file-filter=All files | *",
-                ],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return
-            path = Path(result.stdout.strip())
-        except FileNotFoundError:
-            self._log("Wizard: zenity not found \u2014 cannot open file picker.")
-            return
+        def _on_picked(path: Path | None) -> None:
+            if path and path.is_file():
+                self._archive_path = path
+                self._locate_status.configure(
+                    text=f"Selected: {path.name}", text_color="#6bc76b",
+                )
+                self._next_btn.configure(state="normal")
 
-        if path.is_file():
-            self._archive_path = path
-            self._locate_status.configure(
-                text=f"Selected: {path.name}", text_color="#6bc76b",
-            )
-            self._next_btn.configure(state="normal")
+        pick_file("Select the script extender archive", lambda p: self.after(0, lambda: _on_picked(p)))
 
     # ------------------------------------------------------------------
     # Step 3 — Extract & clean up
@@ -433,11 +414,7 @@ class ScriptExtenderWizard(ctk.CTkToplevel):
 
     def _finish(self):
         self._log("Wizard: script extender installation wizard finished.")
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        self.destroy()
+        self._on_close_cb()
 
     # ------------------------------------------------------------------
     # Thread-safe UI helpers

@@ -935,8 +935,21 @@ class App(ctk.CTk):
             lambda: WizardPanel(
                 self._plugin_panel_container, game, log_fn,
                 on_done=lambda p: self._hide_plugin_overlay("_wizard_panel"),
+                on_open_tool=self._show_wizard_tool,
             ),
         )
+
+    def _show_wizard_tool(self, cls, game, log_fn, extra: dict):
+        """Open an individual wizard tool as a plugin-panel overlay."""
+        self._hide_plugin_overlay("_wizard_tool")
+        panel = cls(
+            self._plugin_panel_container, game, log_fn,
+            on_close=lambda: self._hide_plugin_overlay("_wizard_tool"),
+            **extra,
+        )
+        setattr(self, "_wizard_tool", panel)
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        panel.lift()
 
     def hide_wizard_panel(self):
         self._hide_plugin_overlay("_wizard_panel")

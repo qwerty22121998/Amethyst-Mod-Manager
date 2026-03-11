@@ -40,7 +40,6 @@ from gui.game_helpers import _GAMES, _vanilla_plugins_for_game
 from gui.dialogs import _PriorityDialog, _ExeConfigDialog, _VRAMrPresetDialog, _ExeFilterDialog
 from gui.install_mod import install_mod_from_archive
 from gui.mod_name_utils import _suggest_mod_names as suggest_mod_names
-from gui.wizard_dialog import WizardDialog
 from gui.downloads_panel import DownloadsPanel
 from gui.tracked_mods_panel import TrackedModsPanel
 from gui.endorsed_mods_panel import EndorsedModsPanel

@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 BG_DEEP = "#1a1a1a"
 BG_PANEL = "#252526"
+BG_HEADER = "#2a2a2b"
 ACCENT = "#0078d4"
 ACCENT_HOV = "#1084d8"
 TEXT_MAIN = "#d4d4d4"
@@ -36,7 +37,7 @@ _RESOURCES_GPAK = "resources.gpak"
 _UNPACKED_DIR = "Unpacked"
 
 
-class MewgenicsGpakWizard(ctk.CTkToplevel):
+class MewgenicsGpakWizard(ctk.CTkFrame):
     """Wizard to unpack or repack resources.gpak in the game root."""
 
     def __init__(
@@ -44,37 +45,36 @@ class MewgenicsGpakWizard(ctk.CTkToplevel):
         parent,
         game: "BaseGame",
         log_fn=None,
+        *,
+        on_close=None,
     ):
-        super().__init__(parent, fg_color=BG_DEEP)
-        self.title(f"GPAK tools — {game.name}")
-        self.geometry("480x360")
-        self.resizable(True, True)
-        self.transient(parent)
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.after(100, self._make_modal)
+        super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
+        self._on_close_cb = on_close or (lambda: None)
 
         self._game = game
         self._log_fn = log_fn or (lambda _: None)
         self._game_root: Path | None = game.get_game_path()
         self._running = False
 
-        self._build()
+        title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+        ctk.CTkLabel(
+            title_bar, text=f"GPAK tools \u2014 {game.name}",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12, pady=8)
+        ctk.CTkButton(
+            title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
+            fg_color="transparent", hover_color=BG_PANEL, text_color=TEXT_MAIN,
+            command=self._on_close,
+        ).pack(side="right", padx=4, pady=4)
 
-    def _make_modal(self):
-        try:
-            self.grab_set()
-            self.focus_set()
-        except Exception:
-            pass
+        self._build()
 
     def _on_close(self):
         if self._running:
             return
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        self.destroy()
+        self._on_close_cb()
 
     def _log(self, msg: str):
         self._log_fn(msg)

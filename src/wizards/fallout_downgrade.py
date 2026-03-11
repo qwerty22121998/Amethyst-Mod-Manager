@@ -17,6 +17,7 @@ import tarfile
 import tempfile
 import threading
 from Utils.xdg import open_url
+from Utils.portal_filechooser import pick_file
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -191,17 +192,12 @@ def _extract_archive(archive: Path, dest: Path) -> list[Path]:
 # Wizard dialog
 # ============================================================================
 
-class FalloutDowngradeWizard(ctk.CTkToplevel):
+class FalloutDowngradeWizard(ctk.CTkFrame):
     """Step-by-step wizard to downgrade Fallout 3 for script extender compat."""
 
-    def __init__(self, parent, game: "BaseGame", log_fn=None):
-        super().__init__(parent, fg_color=BG_DEEP)
-        self.title("Downgrade Fallout 3")
-        self.geometry("520x380")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        self.after(100, self._make_modal)
+    def __init__(self, parent, game: "BaseGame", log_fn=None, *, on_close=None):
+        super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
+        self._on_close_cb = on_close or (lambda: None)
 
         self._game = game
         self._log = log_fn or (lambda msg: None)
@@ -210,30 +206,28 @@ class FalloutDowngradeWizard(ctk.CTkToplevel):
         self._extracted_paths: list[Path] = []
         self._game_root: Path | None = game.get_game_path()
 
+        title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+        ctk.CTkLabel(
+            title_bar, text="Downgrade Fallout 3",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12, pady=8)
+        ctk.CTkButton(
+            title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
+            fg_color="transparent", hover_color=BG_PANEL, text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=4, pady=4)
+
         # Build a container that each step fills
         self._body = ctk.CTkFrame(self, fg_color=BG_DEEP)
         self._body.pack(fill="both", expand=True, padx=20, pady=20)
 
         self._show_step_download()
 
-    # ------------------------------------------------------------------
-    # Modal helpers
-    # ------------------------------------------------------------------
-
-    def _make_modal(self):
-        try:
-            self.grab_set()
-            self.focus_set()
-        except Exception:
-            pass
-
     def _on_cancel(self):
         self._cleanup_extracted()
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        self.destroy()
+        self._on_close_cb()
 
     def _clear_body(self):
         for w in self._body.winfo_children():
@@ -345,30 +339,15 @@ class FalloutDowngradeWizard(ctk.CTkToplevel):
             self._next_btn.configure(state="disabled")
 
     def _browse_archive(self):
-        """Let the user pick the archive manually via zenity."""
-        try:
-            result = subprocess.run(
-                [
-                    "zenity", "--file-selection",
-                    "--title=Select the Fallout Anniversary Patcher archive",
-                    "--file-filter=Archives (*.zip *.7z *.rar *.tar*) | *.zip *.7z *.rar *.tar *.tar.gz *.tar.bz2 *.tar.xz *.tgz",
-                    "--file-filter=All files | *",
-                ],
-                capture_output=True, text=True,
-            )
-            if result.returncode != 0 or not result.stdout.strip():
-                return
-            path = Path(result.stdout.strip())
-        except FileNotFoundError:
-            self._log("Wizard: zenity not found — cannot open file picker.")
-            return
+        def _on_picked(path: Path | None) -> None:
+            if path and path.is_file():
+                self._archive_path = path
+                self._locate_status.configure(
+                    text=f"Selected: {path.name}", text_color="#6bc76b",
+                )
+                self._next_btn.configure(state="normal")
 
-        if path.is_file():
-            self._archive_path = path
-            self._locate_status.configure(
-                text=f"Selected: {path.name}", text_color="#6bc76b",
-            )
-            self._next_btn.configure(state="normal")
+        pick_file("Select the Fallout Anniversary Patcher archive", lambda p: self.after(0, lambda: _on_picked(p)))
 
     # ------------------------------------------------------------------
     # Step 3 — Extract & Run
@@ -529,11 +508,7 @@ class FalloutDowngradeWizard(ctk.CTkToplevel):
         """Clean up extracted files and close the wizard."""
         self._cleanup_extracted()
         self._log("Wizard: cleanup complete. Downgrade wizard finished.")
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        self.destroy()
+        self._on_close_cb()
 
     def _cleanup_extracted(self):
         """Remove every file and directory that was extracted into game root."""
