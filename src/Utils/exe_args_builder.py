@@ -99,6 +99,7 @@ EXE_SKIP: frozenset[str] = frozenset({
     "PGPatcher.exe",
     "WitcherScriptMerger.exe",
     "Wrye Bash.exe",       # -o path injected at runtime from active game
+    "NPC Plugin Chooser 2.exe",
 })
 
 # ---------------------------------------------------------------------------
@@ -224,6 +225,44 @@ def _bootstrap_pgpatcher_settings(
 
 
 # ---------------------------------------------------------------------------
+# NPC Plugin Chooser 2 settings.json bootstrap
+# ---------------------------------------------------------------------------
+
+def _bootstrap_npc_plugin_chooser_settings(
+    exe_path: Path,
+    game_path: "Path | None",
+    staging_path: "Path | None",
+    log_fn: "Callable[[str], None]",
+) -> None:
+    """
+    Write or update settings.json next to "NPC Plugin Chooser 2.exe".
+
+    Always updates ModsFolder and SkyrimGamePath regardless of whether the
+    file already exists, so that profile switches are reflected immediately.
+    """
+    settings_file = exe_path.parent / "settings.json"
+
+    if game_path is None or staging_path is None:
+        log_fn("NPC Plugin Chooser 2: game/staging path not configured; skipping settings.json")
+        return
+
+    # Load existing settings if present
+    try:
+        settings: dict = json.loads(settings_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        settings = {}
+
+    settings["ModsFolder"] = _to_wine_path(staging_path)
+    settings["SkyrimGamePath"] = _to_wine_path(game_path / "Data")
+
+    try:
+        settings_file.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+        log_fn(f"NPC Plugin Chooser 2: updated {settings_file}")
+    except OSError as exc:
+        log_fn(f"NPC Plugin Chooser 2: could not write settings.json: {exc}")
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -331,6 +370,8 @@ def build_default_exe_args(
                 _bootstrap_pgpatcher_settings(exe_path, game_path, effective_staging_path, _log)
             if name == "WitcherScriptMerger.exe":
                 update_witcher3_script_merger_config(game_path, exe_path) # type: ignore
+            if name == "NPC Plugin Chooser 2.exe":
+                _bootstrap_npc_plugin_chooser_settings(exe_path, game_path, effective_staging_path, _log)
             continue
 
         # Skip unknowns and already-configured entries
