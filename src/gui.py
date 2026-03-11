@@ -50,6 +50,7 @@ from gui.game_helpers import (
     _handle_missing_profile_root,
 )
 from gui.modlist_panel import ModListPanel
+from Utils.filemap import OVERWRITE_NAME as _OVERWRITE_NAME
 from gui.plugin_panel import PluginPanel
 from gui.top_bar import TopBar
 from gui.status_bar import StatusBar
@@ -598,14 +599,20 @@ class App(ctk.CTk):
                     dl_panel.refresh()
 
     def _build_layout(self):
+        # Root grid: 3 columns (mod side | separator | plugin side), 3 rows
+        # Row 0: top bar (mod side only) + plugin panel top
+        # Row 1: mod panel + plugin panel (both expand)
+        # Row 2: status bar (full width)
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
         self.grid_rowconfigure(2, weight=0)
-        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=5)
+        self.grid_columnconfigure(1, weight=0)
+        self.grid_columnconfigure(2, weight=4, minsize=480)
 
         # Build status bar first so log_fn is available immediately
         self._status = StatusBar(self)
-        self._status.grid(row=2, column=0, sticky="ew")
+        self._status.grid(row=2, column=0, columnspan=3, sticky="ew")
 
         log = self._status.log
         set_app_log(log, self.after)
@@ -621,11 +628,14 @@ class App(ctk.CTk):
         )
         self._topbar.grid(row=0, column=0, sticky="ew", pady=(4, 0))
 
+        # Vertical separator spans rows 0+1
+        ctk.CTkFrame(self, fg_color=BORDER, width=1, corner_radius=0).grid(
+            row=0, column=1, rowspan=2, sticky="ns"
+        )
+
         main = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
         main.grid(row=1, column=0, sticky="nsew")
-        main.grid_columnconfigure(0, weight=5)
-        main.grid_columnconfigure(1, weight=0)
-        main.grid_columnconfigure(2, weight=4, minsize=480)
+        main.grid_columnconfigure(0, weight=1)
         main.grid_rowconfigure(0, weight=1)
         self._main_frame = main
         self._game_picker_panel = None
@@ -640,12 +650,8 @@ class App(ctk.CTk):
         self._mod_panel = ModListPanel(self._mod_panel_container, log_fn=log)
         self._mod_panel.grid(row=0, column=0, sticky="nsew")
 
-        ctk.CTkFrame(main, fg_color=BORDER, width=1, corner_radius=0).grid(
-            row=0, column=1, sticky="ns"
-        )
-
-        self._plugin_panel_container = ctk.CTkFrame(main, fg_color="transparent", corner_radius=0)
-        self._plugin_panel_container.grid(row=0, column=2, sticky="nsew")
+        self._plugin_panel_container = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
+        self._plugin_panel_container.grid(row=0, column=2, rowspan=2, sticky="nsew")
         self._plugin_panel_container.grid_rowconfigure(0, weight=1)
         self._plugin_panel_container.grid_columnconfigure(0, weight=1)
 
@@ -747,7 +753,9 @@ class App(ctk.CTk):
                 entry = self._mod_panel._entries[self._mod_panel._sel_idx]
                 if not entry.is_separator:
                     mod_name = entry.name
-            self._plugin_panel.set_highlighted_plugins(mod_name)
+                elif entry.name == _OVERWRITE_NAME:
+                    mod_name = _OVERWRITE_NAME
+            self._plugin_panel.set_highlighted_plugins(mod_name if mod_name != _OVERWRITE_NAME else None)
             self._plugin_panel.show_mod_files(mod_name)
         self._mod_panel._on_mod_selected_cb = _on_mod_selected  # mod selected → clear plugin selection + highlight
 

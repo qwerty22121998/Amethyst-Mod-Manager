@@ -263,7 +263,7 @@ class TopBar(ctk.CTkFrame):
         self._row1.pack_forget()
         self._row2.pack_forget()
         if two_rows:
-            # Stacked: each row centred horizontally
+            # Stacked: both rows centred within the top bar width
             self._row1.pack(side="top", anchor="center", pady=(4, 0))
             self._row2.pack(side="top", anchor="center", pady=(4, 4))
         else:
