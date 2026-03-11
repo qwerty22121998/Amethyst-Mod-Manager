@@ -669,7 +669,16 @@ class CTkPopupMenu(ctk.CTkToplevel):
                 pass
 
         if master is not None:
-            master.bind("<Configure>", lambda e: self._withdraw(), add="+")
+            self._master_geometry = None
+            def _on_master_configure(e):
+                # Only dismiss if the master window actually moved or resized.
+                # Some Wayland compositors (e.g. Hyprland) emit spurious
+                # <Configure> events during pointer interaction with popups.
+                geo = master.winfo_geometry()
+                if self._master_geometry is not None and geo != self._master_geometry:
+                    self._withdraw()
+                self._master_geometry = geo
+            master.bind("<Configure>", _on_master_configure, add="+")
             app_tl = master.winfo_toplevel()
             if app_tl != self:
                 app_tl.bind("<FocusOut>", self._on_focus_out, add="+")
@@ -914,6 +923,10 @@ class CTkPopupMenu(ctk.CTkToplevel):
         self.deiconify()
         self.focus()
         self.hidden = False
+        # Snapshot master geometry so _on_master_configure ignores spurious
+        # Configure events that don't represent real window movement.
+        if self.master_window is not None:
+            self._master_geometry = self.master_window.winfo_geometry()
         if not getattr(self, "_global_bound", False):
             self.bind_all("<ButtonPress-1>", self._on_global_click, add="+")
             self.bind_all("<ButtonPress-3>", self._on_global_click, add="+")
@@ -921,10 +934,7 @@ class CTkPopupMenu(ctk.CTkToplevel):
 
 
 def do_popup(event, frame):
-    try:
-        frame.popup(event.x_root, event.y_root)
-    finally:
-        frame.grab_release()
+    frame.popup(event.x_root, event.y_root)
 
 
 class CTkProgressPopup(ctk.CTkFrame):
