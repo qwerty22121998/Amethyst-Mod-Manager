@@ -126,6 +126,37 @@ class NexusSettingsDialog(ctk.CTkToplevel):
         )
         # hidden by default; shown only while OAuth is in progress
 
+        # -- Manual code entry (when redirect doesn't work) --
+        manual_frame = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=6)
+        manual_frame.pack(padx=16, pady=(0, 6), fill="x")
+
+        ctk.CTkLabel(
+            manual_frame, text="Having issues?",
+            font=FONT_BOLD, text_color=TEXT_MAIN,
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+
+        ctk.CTkLabel(
+            manual_frame,
+            text="If the redirect didn't work, paste the code from the Nexus page below:",
+            font=FONT_SMALL, text_color=TEXT_DIM,
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+
+        manual_inner = ctk.CTkFrame(manual_frame, fg_color="transparent")
+        manual_inner.pack(fill="x", padx=8, pady=(0, 8))
+
+        self._manual_code_entry = ctk.CTkEntry(
+            manual_inner, placeholder_text="Paste authorization code here...",
+            font=FONT_MONO, height=36,
+        )
+        self._manual_code_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self._manual_code_btn = ctk.CTkButton(
+            manual_inner, text="Use code", width=90, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_manual_code_submit,
+        )
+        self._manual_code_btn.pack(side="right")
+
         # -- Buttons --
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(padx=16, pady=8, fill="x")
@@ -480,6 +511,22 @@ class NexusSettingsDialog(ctk.CTkToplevel):
         self._sso_cancel_btn.pack_forget()
         self._set_status("Login cancelled.", TEXT_WARN)
 
+    def _on_manual_code_submit(self):
+        """Submit a manually-pasted authorization code from the Nexus page."""
+        blob = self._manual_code_entry.get().strip()
+        if not blob:
+            self._set_status("Paste the code from the Nexus page first.", TEXT_WARN)
+            return
+        if not self._oauth_client:
+            self._set_status("Start browser login first, then paste the code if redirect failed.", TEXT_WARN)
+            return
+        ok, msg = self._oauth_client.submit_manual_code(blob)
+        if ok:
+            self._set_status(msg, TEXT_DIM)
+            self._manual_code_entry.delete(0, "end")
+        else:
+            self._set_status(msg, TEXT_ERR)
+
     def _oauth_on_token(self, tokens: OAuthTokens):
         """Called from OAuth thread when tokens are received."""
         def _update():
@@ -623,6 +670,37 @@ class NexusSettingsPanel(ctk.CTkFrame):
             fg_color="#8b1a1a", hover_color="#b22222", text_color="white",
             command=self._on_sso_cancel,
         )
+
+        # Manual code entry
+        manual_frame = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
+        manual_frame.pack(padx=16, pady=(0, 6), fill="x")
+
+        ctk.CTkLabel(
+            manual_frame, text="Having issues?",
+            font=FONT_BOLD, text_color=TEXT_MAIN,
+        ).pack(anchor="w", padx=8, pady=(8, 4))
+
+        ctk.CTkLabel(
+            manual_frame,
+            text="If the redirect didn't work, paste the code from the Nexus page below:",
+            font=FONT_SMALL, text_color=TEXT_DIM,
+        ).pack(anchor="w", padx=8, pady=(0, 6))
+
+        manual_inner = ctk.CTkFrame(manual_frame, fg_color="transparent")
+        manual_inner.pack(fill="x", padx=8, pady=(0, 8))
+
+        self._manual_code_entry = ctk.CTkEntry(
+            manual_inner, placeholder_text="Paste authorization code here...",
+            font=FONT_MONO, height=36,
+        )
+        self._manual_code_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+        self._manual_code_btn = ctk.CTkButton(
+            manual_inner, text="Use code", width=90, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_manual_code_submit,
+        )
+        self._manual_code_btn.pack(side="right")
 
         btn_frame = ctk.CTkFrame(body, fg_color="transparent")
         btn_frame.pack(padx=16, pady=8)
@@ -951,6 +1029,21 @@ class NexusSettingsPanel(ctk.CTkFrame):
                                 text="Log in via Nexus Mods")
         self._sso_cancel_btn.pack_forget()
         self._set_status("Login cancelled.", TEXT_WARN)
+
+    def _on_manual_code_submit(self):
+        blob = self._manual_code_entry.get().strip()
+        if not blob:
+            self._set_status("Paste the code from the Nexus page first.", TEXT_WARN)
+            return
+        if not self._oauth_client:
+            self._set_status("Start browser login first, then paste the code if redirect failed.", TEXT_WARN)
+            return
+        ok, msg = self._oauth_client.submit_manual_code(blob)
+        if ok:
+            self._set_status(msg, TEXT_DIM)
+            self._manual_code_entry.delete(0, "end")
+        else:
+            self._set_status(msg, TEXT_ERR)
 
     def _oauth_on_token(self, tokens: OAuthTokens):
         def _update():

@@ -44,7 +44,7 @@ from gui.theme import (
 )
 import gui.theme as _theme
 from gui.path_utils import _to_wine_path
-from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir
+from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir, get_vcredist_cache_path
 from Utils.exe_args_builder import EXE_PROFILES
 from Utils.xdg import xdg_open, open_url
 
@@ -1171,7 +1171,7 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
     def __init__(self, parent, game, log_fn):
         super().__init__(parent, fg_color=BG_DEEP)
         self.title("Proton Tools")
-        self.geometry("380x340")
+        self.geometry("380x420")
         self.resizable(False, False)
         self.transient(parent)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1219,6 +1219,14 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             body, text="Browse prefix", command=self._browse_prefix, **btn_cfg
+        ).pack(pady=(0, 6))
+
+        ctk.CTkButton(
+            body, text="Install VC++ Redistributable", command=self._run_install_vcredist, **btn_cfg
+        ).pack(pady=(0, 6))
+
+        ctk.CTkButton(
+            body, text="Install d3dcompiler_47", command=self._run_install_d3dcompiler_47, **btn_cfg
         ).pack(pady=(0, 6))
 
         ctk.CTkButton(
@@ -1428,6 +1436,74 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
 
         self._close_and_run(_launch)
 
+    def _run_install_vcredist(self):
+        proton_script, env = self._get_proton_env()
+        if proton_script is None:
+            return
+
+        cache_path = get_vcredist_cache_path()
+        log = self._log
+        vcredist_url = "https://aka.ms/vc14/vc_redist.x64.exe"
+
+        def _download_and_run():
+            import urllib.request
+            try:
+                if not cache_path.is_file():
+                    log("Proton Tools: downloading VC++ Redistributable …")
+                    urllib.request.urlretrieve(vcredist_url, cache_path)
+                    log("Proton Tools: download complete.")
+                else:
+                    log("Proton Tools: using cached VC++ Redistributable installer.")
+                log("Proton Tools: launching VC++ Redistributable installer in game prefix …")
+                subprocess.Popen(
+                    ["python3", str(proton_script), "run", str(cache_path)],
+                    env=env,
+                    cwd=cache_path.parent,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                log(f"Proton Tools error (VC++ Redistributable): {e}")
+
+        def _launch():
+            threading.Thread(target=_download_and_run, daemon=True).start()
+
+        self._close_and_run(_launch)
+
+    def _run_install_d3dcompiler_47(self):
+        steam_id = getattr(self._game, "steam_id", "")
+        if not steam_id:
+            self._log("Proton Tools: game has no Steam ID — cannot install d3dcompiler_47. Use 'Run protontricks' to install it manually.")
+            return
+
+        if shutil.which("protontricks") is not None:
+            cmd = ["protontricks", steam_id, "d3dcompiler_47"]
+        elif shutil.which("flatpak") is not None and subprocess.run(
+            ["flatpak", "info", "com.github.Matoking.protontricks"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0:
+            cmd = ["flatpak", "run", "com.github.Matoking.protontricks", steam_id, "d3dcompiler_47"]
+        else:
+            self._log("Proton Tools: 'protontricks' is not installed. Install it to use one-click d3dcompiler_47.")
+            return
+
+        log = self._log
+
+        def _launch():
+            log("Proton Tools: installing d3dcompiler_47 into game prefix (this may take a minute) …")
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    log("Proton Tools: d3dcompiler_47 installed successfully.")
+                else:
+                    log(f"Proton Tools: d3dcompiler_47 install failed: {result.stderr or result.stdout or 'unknown error'}")
+            except subprocess.TimeoutExpired:
+                log("Proton Tools: d3dcompiler_47 install timed out after 5 minutes.")
+            except Exception as e:
+                log(f"Proton Tools error (d3dcompiler_47): {e}")
+
+        self._close_and_run(lambda: threading.Thread(target=_launch, daemon=True).start())
+
     def _on_close(self):
         try:
             self.grab_release()
@@ -1475,12 +1551,14 @@ class ProtonToolsPanel(ctk.CTkFrame):
         btn_cfg = dict(width=260, height=34, font=FONT_BOLD,
                        fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white")
 
-        ctk.CTkButton(inner, text="Run winecfg",             command=self._run_winecfg,      **btn_cfg).pack(pady=(0, 6))
-        ctk.CTkButton(inner, text="Run protontricks",         command=self._run_protontricks, **btn_cfg).pack(pady=(0, 6))
-        ctk.CTkButton(inner, text="Run EXE in this prefix …", command=self._run_exe,          **btn_cfg).pack(pady=(0, 6))
-        ctk.CTkButton(inner, text="Open wine registry",       command=self._run_regedit,      **btn_cfg).pack(pady=(0, 6))
-        ctk.CTkButton(inner, text="Browse prefix",            command=self._browse_prefix,    **btn_cfg).pack(pady=(0, 6))
-        ctk.CTkButton(inner, text="Open game folder",         command=self._open_game_folder, **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Run winecfg",                  command=self._run_winecfg,           **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Run protontricks",              command=self._run_protontricks,     **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Run EXE in this prefix …",      command=self._run_exe,               **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Open wine registry",             command=self._run_regedit,          **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Browse prefix",                 command=self._browse_prefix,         **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Install VC++ Redistributable",  command=self._run_install_vcredist, **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Install d3dcompiler_47",         command=self._run_install_d3dcompiler_47, **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Open game folder",               command=self._open_game_folder,    **btn_cfg).pack(pady=(0, 6))
 
     def _get_proton_env(self):
         from Utils.steam_finder import (
@@ -1639,6 +1717,67 @@ class ProtonToolsPanel(ctk.CTkFrame):
             pick_exe_file("Select EXE to run in this prefix", _on_picked)
 
         self._close_and_run(_launch)
+
+    def _run_install_vcredist(self):
+        proton_script, env = self._get_proton_env()
+        if proton_script is None:
+            return
+        cache_path = get_vcredist_cache_path()
+        log = self._log
+        vcredist_url = "https://aka.ms/vc14/vc_redist.x64.exe"
+
+        def _download_and_run():
+            import urllib.request
+            try:
+                if not cache_path.is_file():
+                    log("Proton Tools: downloading VC++ Redistributable …")
+                    urllib.request.urlretrieve(vcredist_url, cache_path)
+                    log("Proton Tools: download complete.")
+                else:
+                    log("Proton Tools: using cached VC++ Redistributable installer.")
+                log("Proton Tools: launching VC++ Redistributable installer in game prefix …")
+                subprocess.Popen(["python3", str(proton_script), "run", str(cache_path)],
+                                 env=env, cwd=cache_path.parent,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                log(f"Proton Tools error (VC++ Redistributable): {e}")
+
+        def _launch():
+            threading.Thread(target=_download_and_run, daemon=True).start()
+
+        self._close_and_run(_launch)
+
+    def _run_install_d3dcompiler_47(self):
+        steam_id = getattr(self._game, "steam_id", "")
+        if not steam_id:
+            self._log("Proton Tools: game has no Steam ID — cannot install d3dcompiler_47. Use 'Run protontricks' to install it manually.")
+            return
+        if shutil.which("protontricks") is not None:
+            cmd = ["protontricks", steam_id, "d3dcompiler_47"]
+        elif shutil.which("flatpak") is not None and subprocess.run(
+            ["flatpak", "info", "com.github.Matoking.protontricks"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        ).returncode == 0:
+            cmd = ["flatpak", "run", "com.github.Matoking.protontricks", steam_id, "d3dcompiler_47"]
+        else:
+            self._log("Proton Tools: 'protontricks' is not installed. Install it to use one-click d3dcompiler_47.")
+            return
+        log = self._log
+
+        def _launch():
+            log("Proton Tools: installing d3dcompiler_47 into game prefix (this may take a minute) …")
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                if result.returncode == 0:
+                    log("Proton Tools: d3dcompiler_47 installed successfully.")
+                else:
+                    log(f"Proton Tools: d3dcompiler_47 install failed: {result.stderr or result.stdout or 'unknown error'}")
+            except subprocess.TimeoutExpired:
+                log("Proton Tools: d3dcompiler_47 install timed out after 5 minutes.")
+            except Exception as e:
+                log(f"Proton Tools error (d3dcompiler_47): {e}")
+
+        self._close_and_run(lambda: threading.Thread(target=_launch, daemon=True).start())
 
     def _on_close(self):
         self._on_done(self)
@@ -3858,7 +3997,8 @@ class _SetPrefixDialog(ctk.CTkToplevel):
     _FONT_BTN_B = ("Segoe UI", 13, "bold")
 
     def __init__(self, parent, required_folders: set[str],
-                 file_list: list[tuple[str, str, bool]]):
+                 file_list: list[tuple[str, str, bool]],
+                 mod_name: str = ""):
         super().__init__(parent, fg_color=BG_DEEP)
         self.title("Unexpected Mod Structure")
         self.resizable(True, True)
@@ -3869,6 +4009,7 @@ class _SetPrefixDialog(ctk.CTkToplevel):
         self.result: tuple[str, str | None] | None = None
         self._required  = required_folders
         self._file_list = file_list
+        self._mod_name  = (mod_name or "").strip()
         self._entry_var = tk.StringVar()
         self._entry_var.trace_add("write", self._on_entry_change)
 
@@ -3884,7 +4025,17 @@ class _SetPrefixDialog(ctk.CTkToplevel):
 
     def _build(self):
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)
+
+        row = 0
+        if self._mod_name:
+            ctk.CTkLabel(
+                self,
+                text=f"Mod: {self._mod_name}",
+                font=self._FONT_TITLE,
+                text_color=ACCENT,
+                anchor="w",
+            ).grid(row=row, column=0, sticky="ew", padx=16, pady=(16, 2))
+            row += 1
 
         ctk.CTkLabel(
             self,
@@ -3892,7 +4043,8 @@ class _SetPrefixDialog(ctk.CTkToplevel):
             font=self._FONT_TITLE,
             text_color=TEXT_MAIN,
             anchor="w",
-        ).grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 2))
+        ).grid(row=row, column=0, sticky="ew", padx=16, pady=(2 if self._mod_name else (16, 2), 2))
+        row += 1
 
         folders_str = ",  ".join(sorted(self._required))
         ctk.CTkLabel(
@@ -3901,7 +4053,8 @@ class _SetPrefixDialog(ctk.CTkToplevel):
             font=self._FONT_BODY,
             text_color=TEXT_DIM,
             anchor="w",
-        ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 12))
+        ).grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 12))
+        row += 1
 
         ctk.CTkLabel(
             self,
@@ -3909,7 +4062,8 @@ class _SetPrefixDialog(ctk.CTkToplevel):
             font=self._FONT_BODY,
             text_color=TEXT_MAIN,
             anchor="w",
-        ).grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 4))
+        ).grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 4))
+        row += 1
 
         self._entry = ctk.CTkEntry(
             self,
@@ -3920,11 +4074,14 @@ class _SetPrefixDialog(ctk.CTkToplevel):
             text_color=TEXT_MAIN,
             height=36,
         )
-        self._entry.grid(row=3, column=0, sticky="ew", padx=16, pady=(0, 8))
+        self._entry.grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 8))
         self._entry.focus_set()
+        row += 1
 
+        tree_row = row
+        self.grid_rowconfigure(tree_row, weight=1)
         tree_frame = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=6)
-        tree_frame.grid(row=4, column=0, sticky="nsew", padx=16, pady=(0, 10))
+        tree_frame.grid(row=tree_row, column=0, sticky="nsew", padx=16, pady=(0, 10))
         tree_frame.grid_rowconfigure(0, weight=1)
         tree_frame.grid_columnconfigure(0, weight=1)
 
@@ -3953,7 +4110,7 @@ class _SetPrefixDialog(ctk.CTkToplevel):
         tree_hsb.grid(row=1, column=0, sticky="ew")
 
         bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=56)
-        bar.grid(row=5, column=0, sticky="ew")
+        bar.grid(row=tree_row + 1, column=0, sticky="ew")
         bar.grid_propagate(False)
         ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(
             side="top", fill="x"

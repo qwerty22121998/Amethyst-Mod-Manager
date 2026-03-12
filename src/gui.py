@@ -731,6 +731,7 @@ class App(ctk.CTk):
         self._conflicts_panel      = None
         self._deploy_paths_panel   = None
         self._disable_plugins_panel = None
+        self._optional_mods_panel = None
 
         def _on_filemap_rebuilt():
             # 1. Sync plugins.txt from the updated filemap
@@ -1168,6 +1169,26 @@ class App(ctk.CTk):
 
     def hide_disable_plugins_panel(self):
         self._hide_plugin_overlay("_disable_plugins_panel")
+
+    # -- Optional mods panel (overlays plugin panel) --------------------------
+
+    def show_optional_mods_panel(self, optional_mods: list, on_done):
+        """Show OptionalModsPanel as overlay on plugin panel. on_done(panel) receives the
+        panel; panel.result is None (cancelled) or set of file_ids to skip."""
+        from gui.collections_dialog import OptionalModsPanel
+        def _factory():
+            def _done(panel):
+                self._hide_plugin_overlay("_optional_mods_panel")
+                on_done(panel)
+            return OptionalModsPanel(
+                self._plugin_panel_container,
+                optional_mods=optional_mods,
+                on_done=_done,
+            )
+        self._show_plugin_overlay("_optional_mods_panel", _factory)
+
+    def hide_optional_mods_panel(self):
+        self._hide_plugin_overlay("_optional_mods_panel")
 
     # -- Missing requirements panel (overlays plugin panel) -----------------
 

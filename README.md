@@ -13,6 +13,7 @@
 ## Key Features
 
 - **Mod Organiser like interface** - Designed to look and behave like Mod Organiser
+- **Collections** - Install Nexus Mods collections straight into the manager
 - **Linux Native** — Designed for Linux
 - **Multi-game support** — Support for many games
 - **FOMOD support** — Full Fomod support with last selections saved.
@@ -70,6 +71,19 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 
 You can also add multiple profiles with different configurations — simply create/swap to that profile and deploy it.
 
+## Collections
+
+The manager has the ability to add Nexus collections straight into the manager. Here's how it works:
+- This feature only works for nexus premium users, There's no mechanism currently to manually download the mods.
+- The collections page will show the top collections for the selected game, A url can be entered to a specific collection instead.
+- When installing a collection they are downloaded in size order largest first
+- They are then installed, also in size order, smallest first. The application may "freeze" while extracting large zip files. This is normal
+- Some mods come with fomod settings, meaning the fomod menu is skipped for some mods. Some others will still pop up and need manual input.
+- The authors load order is applied when the collection completes
+- Collections are installed as separate profiles and can be switched between, letting you easily swap modlists.
+- There are some limitations, Not all collections will work fully due to missing mods or our game handlers coming across a mod that has been shipped/packaged in an unusual fashion. Some may require some manual intervention to get to work.
+
+
 ## Supporting Applications
 
 The manager supports many supporting applications used to mod games. Place the applications in the games applications folder (**In the staging folder**) and they will be auto detected. The arguments/config used to run them will be auto-generated to make setup easier.
@@ -91,6 +105,7 @@ The manager supports many supporting applications used to mod games. Place the a
 | Working | **Bodyslide and Outfits Studio** | Add as a mod > Deploy > refresh the exe list > Run the exe and it should work |
 | Working | **Witcher 3 Script merger** | Game path added to config automatically |
 | Working | **Witcher 3 Script merger Fresh and Automated Edition** | Game path added to config automatically. Requires .net 8 Runtime installed into the prefix |
+| Maybe | **Npc plugin chooser** | Game paths are applied to config at runtime, Can't seem to generate npc portraits and has some problems under proton |
 
 The other xedit applications for the other games also work as well as the quickautoclean applications.
 
@@ -101,14 +116,6 @@ The other xedit applications for the other games also work as well as the quicka
 3. You can configure the exe to change the arguments or the output mod/folder.
 4. Make sure your game is deployed before running so the application gets the right files.
 5. Hit **Run exe** — it will run using the Proton version and prefix the game uses.
-## Needs Testing
-
-As this application is fairly new, the following needs testing:
-
-- Support on multiple Linux distros
-- Verification that all added games work
-- Baulders Gate 3 testing - The Mod manager can build modsettings.lsx but further testing is needed to know if it's working fully
-- Oblivion Remastered - Uses a special ue5 handler that auto sorts mods into the correct locations. Some mods could be applied incorrectly. from a test of 10-20 mods only 1 caused trouble but was easily fixed with the set deployment paths right click option
 
 ## VRAMr + BENDr + ParallaxR
 

@@ -60,20 +60,44 @@ def _clean_nexus_stem(stem: str, mod_id_str: str) -> str:
     return stem
 
 
+def _fileid_sidecar(archive: Path) -> Path:
+    """Return the path of the .fileid sidecar for *archive*."""
+    return archive.with_suffix(archive.suffix + ".fileid")
+
+
+def _read_sidecar_file_id(archive: Path) -> int:
+    """Return the file_id stored in the sidecar, or 0 if absent/unreadable."""
+    try:
+        return int(_fileid_sidecar(archive).read_text().strip())
+    except Exception:
+        return 0
+
+
+def _write_sidecar_file_id(archive: Path, file_id: int) -> None:
+    """Write *file_id* to the sidecar next to *archive*."""
+    try:
+        _fileid_sidecar(archive).write_text(str(file_id))
+    except Exception:
+        pass
+
+
 def _find_cached_archive(
     dl_dir: Path,
     display_name: str,
     expected_size_bytes: int,
     mod_id: int = 0,
+    file_id: int = 0,
 ) -> "tuple[Path | None, bool]":
     """Scan *dl_dir* for an existing archive that matches this mod.
 
     Matching strategy
     -----------------
+    0. If *file_id* > 0: check each archive's ``.fileid`` sidecar for an exact
+       match.  This is the most reliable check and short-circuits everything
+       else.
     1. If *expected_size_bytes* > 0: find a file whose size is within 1 % of
-       the expected value AND whose filename contains the mod ID.  Both
-       conditions must hold to avoid false matches between archives of
-       similarly-sized mods.
+       the expected value AND whose filename contains the mod ID.  The display
+       name is used as an additional hint (substring match) when available.
     2. Fallback (no expected size): find a file whose stem partially matches
        the normalised *display_name*.
 
@@ -101,6 +125,22 @@ def _find_cached_archive(
     except Exception:
         return None, False
 
+    # Pass 0: exact file_id match via sidecar (written on every download)
+    if file_id > 0:
+        for f in candidates:
+            if _read_sidecar_file_id(f) == file_id:
+                try:
+                    actual = f.stat().st_size
+                except Exception:
+                    continue
+                if expected_size_bytes > 0:
+                    ratio = actual / expected_size_bytes
+                    if ratio >= _PARTIAL_CUTOFF:
+                        return f, ratio >= (1.0 - _SIZE_TOLERANCE)
+                    # Sidecar matched but file is clearly truncated — treat as partial
+                    return f, False
+                return f, True
+
     best_partial: "Path | None" = None
 
     for f in candidates:
@@ -117,31 +157,29 @@ def _find_cached_archive(
                 # different mods.
                 if mod_id_str and mod_id_str not in f.name:
                     continue
-                # Additionally verify the display name matches the *clean*
-                # filename stem (the part before -modId-version-timestamp).
-                # This prevents two files from the *same* mod (same mod_id but
-                # different file_ids, e.g. a main file and a small patch) from
-                # being confused when their sizes happen to be within 1%.
+                # Use the display name as a loose hint (substring in either
+                # direction) to distinguish two files from the same mod with
+                # similar sizes.  We intentionally don't require exact equality
+                # here because the GraphQL display name and the CDN filename
+                # stem often differ (e.g. spaces vs hyphens, or extra suffixes).
                 if mod_id_str and norm_name:
                     clean = re.sub(
                         r'[^\w]', '',
                         _clean_nexus_stem(f.stem, mod_id_str).lower()
                     )
-                    if clean and norm_name != clean:
+                    if clean and norm_name not in clean and clean not in norm_name:
                         continue
-                # Both size and name match — this is the right file.
+                # Size (and optional name hint) match — this is the right file.
                 return f, True
             if ratio < _PARTIAL_CUTOFF:
-                # Might be a partial download of this file.  Use clean-stem
-                # equality (not substring) so we don't mistake a smaller patch
-                # for a partial download of the larger main-mod archive.
+                # Might be a partial download of this file.
                 if not mod_id_str or mod_id_str in f.name:
                     if mod_id_str and norm_name:
                         clean = re.sub(
                             r'[^\w]', '',
                             _clean_nexus_stem(f.stem, mod_id_str).lower()
                         )
-                        if norm_name == clean:
+                        if norm_name in clean or clean in norm_name:
                             best_partial = f
                     elif norm_name:
                         norm_stem = re.sub(r'[^\w]', '', f.stem.lower())
@@ -322,38 +360,37 @@ class NexusDownloader:
         # ------------------------------------------------------------------
         # Cache / partial-download check
         # ------------------------------------------------------------------
-        # If the caller supplies the display name we can look for an archive
-        # that was already downloaded (e.g. a previous install attempt that
-        # was interrupted before the file was installed and deleted).
-        # Partial downloads (file exists but size < 95 % of expected) are
-        # removed so the download starts cleanly.
+        # Check for an already-downloaded archive.  The sidecar (.fileid file)
+        # gives an exact match on file_id; name+size heuristics are used as
+        # fallback.  Partial downloads (size < 95 % of expected) are deleted
+        # so the download starts cleanly.
         _dest = dest_dir or self._download_dir
-        if known_file_name:
-            cached, is_complete = _find_cached_archive(
-                _dest, known_file_name, expected_size_bytes, mod_id
-            )
-            if cached is not None:
-                if is_complete:
-                    app_log(
-                        f"Skipping download — cached archive found: {cached.name}"
-                    )
-                    return DownloadResult(
-                        success=True,
-                        file_path=cached,
-                        file_name=cached.name,
-                        bytes_downloaded=cached.stat().st_size,
-                        game_domain=game_domain,
-                        mod_id=mod_id,
-                        file_id=file_id,
-                    )
-                else:
-                    app_log(
-                        f"Removing partial download before retry: {cached.name}"
-                    )
-                    try:
-                        cached.unlink(missing_ok=True)
-                    except Exception:
-                        pass
+        cached, is_complete = _find_cached_archive(
+            _dest, known_file_name, expected_size_bytes, mod_id, file_id
+        )
+        if cached is not None:
+            if is_complete:
+                app_log(
+                    f"Skipping download — cached archive found: {cached.name}"
+                )
+                return DownloadResult(
+                    success=True,
+                    file_path=cached,
+                    file_name=cached.name,
+                    bytes_downloaded=cached.stat().st_size,
+                    game_domain=game_domain,
+                    mod_id=mod_id,
+                    file_id=file_id,
+                )
+            else:
+                app_log(
+                    f"Removing partial download before retry: {cached.name}"
+                )
+                try:
+                    cached.unlink(missing_ok=True)
+                    _fileid_sidecar(cached).unlink(missing_ok=True)
+                except Exception:
+                    pass
 
         try:
             links = self._api.get_download_links(
@@ -512,6 +549,8 @@ class NexusDownloader:
                         progress_cb(downloaded, total)
 
         app_log(f"Downloaded {file_name} ({downloaded} bytes) → {dest}")
+        if file_id > 0:
+            _write_sidecar_file_id(dest, file_id)
 
         return DownloadResult(
             success=True,

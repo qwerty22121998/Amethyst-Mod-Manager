@@ -98,7 +98,7 @@ class Fallout_3(BaseGame):
 
     @property
     def mod_required_file_types(self) -> set[str]:
-        return {".esp", ".esl", ".esm"}
+        return {".esp", ".esl", ".esm",".ini"}
 
     @property
     def mod_install_as_is_if_no_match(self) -> bool:

@@ -25,6 +25,8 @@ from gui.install_mod import install_mod_from_archive
 from gui.mod_card import CARD_PAD, make_placeholder_image
 from gui.mod_name_utils import _suggest_mod_names
 from Utils.modlist import write_modlist, read_modlist, ModEntry
+from Utils.filemap import rebuild_mod_index
+from Utils.config_paths import get_download_cache_dir
 from Nexus.nexus_meta import build_meta_from_download
 
 # Collections-specific card dimensions (5-column grid)
@@ -38,6 +40,7 @@ from gui.theme import (
     BG_HEADER,
     BG_ROW,
     BG_SEP,
+    BG_HOVER,
     ACCENT,
     ACCENT_HOV,
     TEXT_MAIN,
@@ -50,6 +53,88 @@ from gui.theme import (
 
 PAGE_SIZE    = 20
 _SUMMARY_MAX = 200
+
+
+def _topo_sort_collection(schema_mods: list[dict], mod_rules: list[dict]) -> dict[int, int]:
+    """Return file_id → priority-position dict respecting modRules before/after constraints.
+
+    Position 0 = highest priority (wins conflicts), higher number = lower priority.
+    Falls back to the mods-array order for any mod not constrained by rules.
+    Cycles are broken by ignoring the offending edge (Kahn's algorithm skips them naturally).
+    """
+    # Build logical_name → file_id map from the mods array
+    logical_to_fid: dict[str, int] = {}
+    fid_order: list[int] = []  # original mods-array order, used as topo fallback
+    for m in schema_mods:
+        src = m.get("source") or {}
+        fid = src.get("fileId")
+        if fid is None:
+            continue
+        fid = int(fid)
+        logical = (src.get("logicalFilename") or m.get("name") or "").strip()
+        if logical:
+            logical_to_fid[logical] = fid
+        if fid not in fid_order:
+            fid_order.append(fid)
+
+    all_fids: set[int] = set(fid_order)
+
+    # edges: higher_priority_fid → {lower_priority_fids}
+    # "source after reference"  → reference has higher priority than source
+    # "source before reference" → source has higher priority than reference
+    higher_than: dict[int, set[int]] = {f: set() for f in all_fids}  # fid → fids it beats
+    in_degree: dict[int, int] = {f: 0 for f in all_fids}
+
+    def _resolve(name: str) -> int | None:
+        return logical_to_fid.get(name)
+
+    for rule in mod_rules:
+        rtype = rule.get("type")
+        if rtype not in ("before", "after"):
+            continue
+        ref_name = (rule.get("reference") or {}).get("logicalFileName", "")
+        src_name = (rule.get("source") or {}).get("logicalFileName", "")
+        ref_fid = _resolve(ref_name)
+        src_fid = _resolve(src_name)
+        if ref_fid is None or src_fid is None or ref_fid == src_fid:
+            continue
+
+        if rtype == "after":
+            # source loads after reference → source wins (loads on top of reference)
+            winner, loser = src_fid, ref_fid
+        else:  # "before"
+            # source loads before reference → reference wins
+            winner, loser = ref_fid, src_fid
+
+        if loser not in higher_than[winner]:
+            higher_than[winner].add(loser)
+            in_degree[loser] += 1
+
+    # Kahn's topological sort — highest priority first
+    from collections import deque
+    queue = deque(f for f in fid_order if in_degree[f] == 0)
+    sorted_fids: list[int] = []
+    remaining = set(fid_order)
+
+    while queue:
+        fid = queue.popleft()
+        if fid not in remaining:
+            continue
+        remaining.discard(fid)
+        sorted_fids.append(fid)
+        # Process dependents in original-array order for determinism
+        for dep in sorted(higher_than[fid], key=lambda f: fid_order.index(f) if f in fid_order else 999999):
+            in_degree[dep] -= 1
+            if in_degree[dep] == 0:
+                queue.append(dep)
+
+    # Append any fids not reached (cycle members) in original order
+    for fid in fid_order:
+        if fid in remaining:
+            sorted_fids.append(fid)
+
+    # sorted_fids[0] = highest priority → position 0
+    return {fid: pos for pos, fid in enumerate(sorted_fids)}
 
 
 def _fmt_size(n_bytes: int) -> str:
@@ -245,202 +330,103 @@ class CollectionCard:
 
 
 # ---------------------------------------------------------------------------
-# _OptionalModsDialog
+# OptionalModsPanel — inline overlay for plugin panel
 # ---------------------------------------------------------------------------
 
-class _OptionalModsDialog(ctk.CTkToplevel):
-    """Modal dialog that lists optional mods with checkboxes (all checked by default).
+class OptionalModsPanel(ctk.CTkFrame):
+    """
+    Inline panel that overlays the plugin panel. Lists optional mods with checkboxes
+    (all checked by default). Show before installing a collection so the user can
+    deselect mods they do not want.
 
-    Show before installing a collection so the user can deselect mods they
-    do not want.  After ``wait_window()`` inspect:
-
-    * ``dialog.result is None``  → user cancelled; abort the install.
-    * ``dialog.result`` (set)    → ``file_id`` values of optional mods to **skip**.
+    result: None = cancelled; set of file_ids = optional mods to **skip**.
+    on_done(panel) is called when user clicks Install or Cancel.
     """
 
-    _ROW_H = 30
-
-    def __init__(self, parent, optional_mods: list):
-        super().__init__(parent)
-        self.title("Optional Mods")
-        self.resizable(True, True)
-        self.configure(fg_color=BG_DEEP)
-
-        self.result = None          # None = cancelled; set = file_ids to skip
+    def __init__(self, parent, optional_mods: list, on_done=None):
+        super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
+        self.result = None
         self._optional_mods = optional_mods
-        self._vars: dict[int, tk.BooleanVar] = {}  # file_id → BooleanVar (True = include)
+        self._vars: dict[int, tk.BooleanVar] = {}
+        self._on_done = on_done or (lambda p: None)
 
-        self._build_ui()
+        # Title bar
+        title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=36)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+        ctk.CTkLabel(
+            title_bar, text="Optional Mods",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12)
+        ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
-        # Size & centre on parent.
-        # Use the actual requisition height so nothing is clipped.
-        self.update_idletasks()
-        w  = 540
-        h  = self.winfo_reqheight()
-        px = parent.winfo_rootx() + (parent.winfo_width()  - w) // 2
-        py = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
-        self.geometry(f"{w}x{h}+{px}+{py}")
-        self.minsize(380, 220)
-
-        self.grab_set()
-        self.focus_force()
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-
-    # ------------------------------------------------------------------
-    def _build_ui(self):
-        _MAX_LIST_H = 400
-
-        # --- Header ---
-        hdr = tk.Frame(self, bg=BG_HEADER, pady=6, bd=0, highlightthickness=0)
-        hdr.pack(fill="x", side="top")
-        tk.Label(
-            hdr, text="Optional Mods",
-            bg=BG_HEADER, fg=TEXT_MAIN,
-            font=("Segoe UI", 12, "bold"), anchor="w",
-        ).pack(side="left", padx=14)
-
-        # --- Subtitle ---
-        tk.Label(
+        # Subtitle
+        ctk.CTkLabel(
             self,
-            text=(f"{len(self._optional_mods)} optional mod(s) found. "
+            text=(f"{len(optional_mods)} optional mod(s) found. "
                   "Uncheck any you do not want installed:"),
-            bg=BG_DEEP, fg=TEXT_DIM,
-            font=FONT_SMALL, anchor="w",
-        ).pack(fill="x", padx=12, pady=(6, 2))
+            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
+        ).pack(anchor="w", padx=16, pady=(12, 6))
 
-        # --- Footer (packed BEFORE the expanding list so it is never hidden) ---
-        ftr = tk.Frame(self, bg=BG_HEADER, pady=0, bd=0, highlightthickness=0)
-        ftr.pack(fill="x", side="bottom")
+        scroll = ctk.CTkScrollableFrame(self, fg_color=BG_PANEL, corner_radius=6)
+        scroll.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        scroll.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkButton(
-            ftr, text="Cancel",
-            height=30, fg_color="#3c3c3c", hover_color="#505050",
-            text_color=TEXT_MAIN, font=("Segoe UI", 10),
-            border_width=0,
-            command=self._on_cancel,
-        ).pack(side="right", padx=10, pady=8)
-
-        ctk.CTkButton(
-            ftr, text="Install",
-            height=30, fg_color="#2d7a2d", hover_color="#3a9e3a",
-            text_color="#ffffff", font=("Segoe UI", 10, "bold"),
-            border_width=0,
-            command=self._on_ok,
-        ).pack(side="right", padx=(0, 4), pady=8)
-
-        ctk.CTkButton(
-            ftr, text="Deselect All",
-            height=30, fg_color=BG_PANEL, hover_color=BG_HEADER,
-            text_color=TEXT_DIM, font=("Segoe UI", 10),
-            border_width=0,
-            command=self._deselect_all,
-        ).pack(side="left", padx=(4, 0), pady=8)
-
-        ctk.CTkButton(
-            ftr, text="Select All",
-            height=30, fg_color=BG_PANEL, hover_color=BG_HEADER,
-            text_color=TEXT_DIM, font=("Segoe UI", 10),
-            border_width=0,
-            command=self._select_all,
-        ).pack(side="left", padx=(10, 4), pady=8)
-
-        # --- Scrollable list (packed last so it fills whatever remains) ---
-        list_frame = tk.Frame(self, bg=BG_DEEP, bd=0, highlightthickness=0)
-        list_frame.pack(fill="both", expand=True, padx=8, pady=(0, 4))
-
-        # Give the canvas an explicit height so winfo_reqheight() is meaningful
-        canvas_h = min(len(self._optional_mods) * self._ROW_H + 4, _MAX_LIST_H)
-        canvas = tk.Canvas(
-            list_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
-            yscrollincrement=1, height=canvas_h,
-        )
-        vsb = tk.Scrollbar(
-            list_frame, orient="vertical", command=canvas.yview,
-            bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
-            highlightthickness=0, bd=0,
-        )
-        canvas.configure(yscrollcommand=vsb.set)
-
-        inner = tk.Frame(canvas, bg=BG_DEEP, bd=0, highlightthickness=0)
-        canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
-
-        def _on_inner_resize(_e):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-            canvas.itemconfigure(canvas_window, width=canvas.winfo_width())
-
-        def _on_canvas_resize(e):
-            canvas.itemconfigure(canvas_window, width=e.width)
-
-        inner.bind("<Configure>", _on_inner_resize)
-        canvas.bind("<Configure>", _on_canvas_resize)
-
-        # Scroll-wheel helpers (Linux Button-4/5 + Windows/macOS MouseWheel)
-        def _scroll_up(_e):   canvas.yview_scroll(-3, "units")
-        def _scroll_down(_e): canvas.yview_scroll(3, "units")
-        def _on_wheel(e):
-            canvas.yview_scroll(-3 if getattr(e, "delta", 0) > 0 else 3, "units")
-
-        def _bind_scroll(w):
-            w.bind("<Button-4>",   _scroll_up)
-            w.bind("<Button-5>",   _scroll_down)
-            w.bind("<MouseWheel>", _on_wheel)
-
-        for w in (canvas, vsb, inner, list_frame, self):
-            _bind_scroll(w)
-
-        canvas.pack(side="left", fill="both", expand=True)
-        vsb.pack(side="right", fill="y")
-
-        # --- Rows ---
-        for i, mod in enumerate(self._optional_mods):
+        for mod in optional_mods:
             var = tk.BooleanVar(value=True)
             self._vars[mod.file_id] = var
-
-            row_bg = BG_ROW if i % 2 == 0 else BG_PANEL
-            row = tk.Frame(inner, bg=row_bg, bd=0, highlightthickness=0,
-                           height=self._ROW_H)
-            row.pack(fill="x")
-            row.pack_propagate(False)
-
-            cb = tk.Checkbutton(
-                row, variable=var,
-                bg=row_bg, fg=TEXT_MAIN,
-                activebackground=row_bg, activeforeground=TEXT_MAIN,
-                selectcolor=BG_DEEP,
-                bd=0, highlightthickness=0, cursor="hand2",
-            )
-            cb.pack(side="left", padx=(8, 0))
-
             name_text = mod.mod_name or mod.file_name or "(Unknown)"
-            tk.Label(
-                row, text=name_text,
-                bg=row_bg, fg=TEXT_MAIN,
-                font=FONT_NORMAL, anchor="w",
-            ).pack(side="left", padx=(4, 4))
+            author_text = f" by {mod.mod_author}" if mod.mod_author else ""
+            row = ctk.CTkFrame(scroll, fg_color="transparent")
+            row.grid_columnconfigure(0, weight=1)
+            row.grid(sticky="ew")
+            ctk.CTkCheckBox(
+                row,
+                text=f"{name_text}{author_text}",
+                variable=var,
+                font=FONT_NORMAL,
+                text_color=TEXT_MAIN,
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOV,
+                checkmark_color="white",
+                border_color=BORDER,
+            ).grid(row=0, column=0, sticky="w", padx=8, pady=3)
 
-            if mod.mod_author:
-                tk.Label(
-                    row, text=f"by {mod.mod_author}",
-                    bg=row_bg, fg=TEXT_DIM,
-                    font=FONT_SMALL, anchor="w",
-                ).pack(side="left", padx=(0, 8))
+        helper = ctk.CTkFrame(self, fg_color="transparent")
+        helper.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkButton(
+            helper, text="Select All", width=90, height=24, font=FONT_SMALL,
+            fg_color=BG_HEADER, hover_color=BG_PANEL, text_color=TEXT_MAIN,
+            command=self._select_all,
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(
+            helper, text="Deselect All", width=90, height=24, font=FONT_SMALL,
+            fg_color=BG_HEADER, hover_color=BG_PANEL, text_color=TEXT_MAIN,
+            command=self._deselect_all,
+        ).pack(side="left")
 
-            # Bind scrollwheel to every child so it works anywhere in the row
-            _bind_scroll(row)
-            for child in row.winfo_children():
-                _bind_scroll(child)
+        bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(side="top", fill="x")
+        ctk.CTkButton(
+            bar, text="Cancel", width=80, height=28, font=FONT_NORMAL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=(4, 12), pady=12)
+        ctk.CTkButton(
+            bar, text="Install", width=80, height=28, font=FONT_BOLD,
+            fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="white",
+            command=self._on_ok,
+        ).pack(side="right", padx=4, pady=12)
 
-    # ------------------------------------------------------------------
     def _on_ok(self):
-        # file_ids whose checkbox was unchecked → skip them
         self.result = {fid for fid, var in self._vars.items() if not var.get()}
-        self.grab_release()
-        self.destroy()
+        self._on_done(self)
 
     def _on_cancel(self):
         self.result = None
-        self.grab_release()
-        self.destroy()
+        self._on_done(self)
 
     def _select_all(self):
         for var in self._vars.values():
@@ -780,18 +766,32 @@ class CollectionDetailDialog(tk.Frame):
             self._status_var.set("Mod list not loaded yet — please wait.")
             return
 
-        # --- Optional mods selection dialog ---
+        # --- Optional mods selection (overlay on plugin panel) ---
         optional_mods = [m for m in mods if m.optional]
         if optional_mods:
-            dlg = _OptionalModsDialog(self.winfo_toplevel(), optional_mods)
-            self.wait_window(dlg)
-            if dlg.result is None:
-                # User cancelled — abort the install
+            show_fn = getattr(app, "show_optional_mods_panel", None)
+            if show_fn:
+                def _on_optional_done(panel):
+                    if panel.result is None:
+                        return
+                    mods_to_use = list(mods)
+                    if panel.result:
+                        mods_to_use = [
+                            m for m in mods_to_use
+                            if not m.optional or m.file_id not in panel.result
+                        ]
+                    self._continue_install_collection(app, mods_to_use, downloader)
+                show_fn(optional_mods, _on_optional_done)
                 return
-            if dlg.result:
-                # dlg.result is the set of file_ids to skip
-                skip_ids = dlg.result
-                mods = [m for m in mods if not m.optional or m.file_id not in skip_ids]
+            # Fallback: no app overlay support — skip optional selection and install all
+            mods = [m for m in mods if not m.optional]
+
+        self._continue_install_collection(app, list(mods), downloader)
+
+    def _continue_install_collection(self, app, mods, downloader):
+        """Proceed with collection install after optional mods have been resolved."""
+        if not self._game:
+            return
 
         # Sanitise collection name → profile name
         raw = self._collection.name or self._collection.slug or "Collection"
@@ -869,10 +869,11 @@ class CollectionDetailDialog(tk.Frame):
                     self._log(f"Collection install: could not download collection.json: {exc} — "
                               "continuing with GraphQL order")
 
-        # Build a mapping from file_id → position in collection.json mods array
-        # and file_id → pre-converted FOMOD auto-selections (if any)
+        # Build a mapping from file_id → priority position (0 = highest priority)
+        # respecting modRules before/after constraints via topological sort.
         schema_mods: list[dict] = collection_schema.get("mods", [])
-        schema_file_id_to_pos: dict[int, int] = {}
+        mod_rules: list[dict] = collection_schema.get("modRules", [])
+        schema_file_id_to_pos: dict[int, int] = _topo_sort_collection(schema_mods, mod_rules)
         schema_pos_to_name: dict[int, str] = {}  # collection.json logical name
         schema_file_id_to_logical: dict[int, str] = {}  # file_id → logicalFilename
         fomod_by_file_id: dict[int, dict] = {}   # file_id → saved_selections dict
@@ -881,15 +882,15 @@ class CollectionDetailDialog(tk.Frame):
             fid = src.get("fileId")
             if fid is not None:
                 fid = int(fid)
-                schema_file_id_to_pos[fid] = pos
-                schema_pos_to_name[pos] = schema_mod.get("name") or ""
+                topo_pos = schema_file_id_to_pos.get(fid, pos)
+                schema_pos_to_name[topo_pos] = schema_mod.get("name") or ""
                 logical = src.get("logicalFilename") or schema_mod.get("name") or ""
                 schema_file_id_to_logical[fid] = logical
                 choices = schema_mod.get("choices") or {}
                 if choices.get("type") == "fomod":
                     fomod_by_file_id[fid] = _fomod_choices_from_collection(choices)
 
-        # Sort the mods list by collection.json position when available;
+        # Sort the mods list by topo position (0 = highest priority);
         # mods without a position come last (preserving their original order).
         def _sort_key(m):
             return schema_file_id_to_pos.get(m.file_id, len(schema_mods))
@@ -1048,6 +1049,7 @@ class CollectionDetailDialog(tk.Frame):
                     cancel=dl_cancel,
                     known_file_name=mod.file_name or "",
                     expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
+                    dest_dir=get_download_cache_dir(),
                 )
             except Exception as exc:
                 self._log(f"Collection install: download failed for '{mod.mod_name}': {exc}")
@@ -1138,12 +1140,24 @@ class CollectionDetailDialog(tk.Frame):
             except Exception:
                 _pmeta = None
 
+            # Preferred folder name: logicalFilename from collection.json is
+            # the most specific (e.g. "Inventory Interface Information Injector
+            # - Alchemy Fix"), then schema name, then Nexus mod page name.
+            # This avoids two mods from the same page being stripped to the
+            # same folder name by _suggest_mod_names.
+            _logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
+            _schema_name = schema_pos_to_name.get(
+                schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
+            _preferred = _logical or _schema_name or mod.mod_name or ""
+
             folder_name = install_mod_from_archive(
                 archive_path, self, self._log, self._game,
                 fomod_auto_selections=auto_fomod,
                 prebuilt_meta=_pmeta,
                 profile_dir=profile_dir,
                 headless=True,
+                preferred_name=_preferred,
+                skip_index_update=True,
             )
 
             with _install_lock:
@@ -1189,7 +1203,7 @@ class CollectionDetailDialog(tk.Frame):
                 pass
             # Sort smallest archives first so workers stay busy and large mods
             # don't block the queue.  Any mod that needs a manual FOMOD dialog
-            # will still serialize correctly via the _fomod_dialog_lock — running
+            # will still serialize correctly via the _interactive_dialog_lock — running
             # small non-interactive mods first means the FOMOD prompts typically
             # appear after the bulk of parallel work is already done.
             _to_install = sorted(to_download, key=lambda m: getattr(m, "size_bytes", 0) or 0)
@@ -1198,6 +1212,23 @@ class CollectionDetailDialog(tk.Frame):
 
         installed += _install_counters["installed"]
         skipped  += _install_counters["skipped"]
+
+        # Rebuild the mod index once for all newly installed mods rather than
+        # updating it per-mod inside the workers (which caused lock contention).
+        if _install_counters["installed"] > 0:
+            try:
+                self._log("Updating mod index…")
+                _idx_path = profile_dir / "modindex.bin"
+                rebuild_mod_index(
+                    _idx_path,
+                    self._game.get_effective_mod_staging_path(),
+                    strip_prefixes=set(getattr(self._game, "strip_prefixes", None) or []),
+                    allowed_extensions=set(getattr(self._game, "install_extensions", None) or []),
+                    root_deploy_folders=set(getattr(self._game, "root_deploy_folders", None) or []),
+                    normalize_folder_case=getattr(self._game, "normalize_folder_case", True),
+                )
+            except Exception as _idx_exc:
+                self._log(f"Mod index rebuild skipped: {_idx_exc}")
 
         # Build install_order from parallel results.
         for mod in to_download:
@@ -1212,14 +1243,12 @@ class CollectionDetailDialog(tk.Frame):
 
         # ------------------------------------------------------------------
         # Step 3: Write modlist.txt in collection-defined order
-        # (collection index 0 = lowest priority → last in modlist.txt;
-        #  collection last entry = highest priority → first in modlist.txt)
+        # Position 0 = highest priority (topo sort) → first in modlist.txt
         # ------------------------------------------------------------------
-        install_order.sort(key=lambda x: x[0])  # sort by collection position
-        # Highest priority first (reversed collection order)
+        install_order.sort(key=lambda x: x[0])
         modlist_entries = [
             ModEntry(name=folder, enabled=True, locked=False)
-            for _, folder in reversed(install_order)
+            for _, folder in install_order
         ]
         if modlist_entries:
             try:
@@ -1368,12 +1397,19 @@ class CollectionDetailDialog(tk.Frame):
             self.after(0, lambda: self._status_var.set("Downloading collection manifest…"))
             cj = self._api.get_collection_archive_json(self._download_link_path)
 
-            # Build file_id → collection position map
-            fid_to_pos: dict = {}
-            for pos, m in enumerate(cj.get("mods", [])):
-                fid = (m.get("source") or {}).get("fileId")
-                if fid is not None:
-                    fid_to_pos[int(fid)] = pos
+            # Save manifest to profile dir for inspection
+            try:
+                import json as _json
+                manifest_path = profile_dir / "collection.json"
+                manifest_path.write_text(_json.dumps(cj, indent=2), encoding="utf-8")
+                self._log(f"Saved collection manifest to {manifest_path}")
+            except Exception as _exc:
+                self._log(f"Could not save manifest: {_exc}")
+
+            # Build file_id → priority position map respecting modRules
+            fid_to_pos: dict = _topo_sort_collection(
+                cj.get("mods", []), cj.get("modRules", [])
+            )
 
             # Staging dir for a profile-specific-mods profile is profile_dir/mods
             staging_path = profile_dir / "mods"
@@ -1409,10 +1445,10 @@ class CollectionDetailDialog(tk.Frame):
                     unordered.append(folder.name)
 
             ordered.sort(key=lambda x: x[0])
-            # Highest priority first (reversed collection order → first in modlist.txt)
+            # Position 0 = highest priority → first in modlist.txt
             modlist_entries = [
                 ModEntry(name=name, enabled=True, locked=False)
-                for _, name in reversed(ordered)
+                for _, name in ordered
             ] + [
                 ModEntry(name=name, enabled=True, locked=False)
                 for name in unordered

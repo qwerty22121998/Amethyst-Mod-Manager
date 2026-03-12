@@ -162,6 +162,17 @@ class TopBar(ctk.CTkFrame):
         )
         self._profile_menu.pack(side="left", padx=(0, 4))
 
+        # ── Collections button (row 1, right of profile dropdown) ────────────
+        _collections_icon = load_icon("collection.png", size=(30, 30))
+        self._collections_btn = ctk.CTkButton(
+            self._row1, text="Collections", width=100, height=32, font=FONT_BOLD,
+            image=_collections_icon, compound="left",
+            fg_color="#c07320", hover_color="#d4832a", text_color="white",
+            command=self._on_collections
+        )
+        # Hidden until premium status confirmed — _check_collections_visibility() shows it
+        # self._collections_btn.pack(...)  deferred
+
         # ── Action buttons (row 2 container, but children created here) ──────
         # Install Mod button
         self._disable_extract = False
@@ -232,6 +243,10 @@ class TopBar(ctk.CTkFrame):
         self.after_idle(self._init_threshold)
         self.bind("<Configure>", self._on_configure)
 
+        # Check premium status in background; show Collections btn if premium
+        # Delay slightly so _init_nexus_api() on the App has time to run first
+        self.after(500, self._check_collections_visibility)
+
     # ── Responsive layout ────────────────────────────────────────────────────
 
     def _init_threshold(self):
@@ -271,12 +286,48 @@ class TopBar(ctk.CTkFrame):
             self._row2.pack(side="right", fill="y", pady=2, padx=(0, 4))
             self._row1.pack(side="left", fill="y", pady=2)
 
+    def _check_collections_visibility(self):
+        """Show the Collections button only for Nexus premium members."""
+        app = self.winfo_toplevel()
+        api = getattr(app, "_nexus_api", None)
+        if api is None:
+            self._collections_btn.pack_forget()
+            self.after_idle(self._init_threshold)
+            return
+
+        def _worker():
+            try:
+                user = api.validate()
+                premium = bool(user.is_premium)
+                self.after(0, lambda: self._log(f"Nexus: logged in as {user.name} (premium={premium})"))
+            except Exception as e:
+                self.after(0, lambda err=e: self._log(f"Nexus: premium check failed: {err}"))
+                premium = False
+
+            def _apply():
+                if premium:
+                    self._collections_btn.pack(side="left", padx=(0, 4))
+                else:
+                    self._collections_btn.pack_forget()
+                self.after_idle(self._init_threshold)
+
+            self.after(0, _apply)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_collections(self):
+        """Delegate to the mod panel's collections handler."""
+        app = self.winfo_toplevel()
+        if hasattr(app, "_mod_panel"):
+            app._mod_panel._on_collections()
+
     def _on_nexus_settings(self):
         """Open the Nexus Mods settings panel (or dialog fallback)."""
         app = self.winfo_toplevel()
         def _key_changed():
             app._init_nexus_api()
             self._log("Nexus API key updated.")
+            self.after(200, self._check_collections_visibility)
         if self._show_nexus_panel_fn:
             self._show_nexus_panel_fn(_key_changed, self._log)
         else:

@@ -251,6 +251,20 @@ class BaseGame(ABC):
         return set()
 
     @property
+    def additional_install_logic(self) -> list:
+        """
+        List of callables for game-specific post-install steps.
+
+        Each callable is invoked as fn(dest_root, mod_name, log_fn) after the
+        mod files are copied to staging. Use for game-specific file moves or
+        transformations (e.g. moving loose .archive files to archive/pc/mod
+        for Cyberpunk 2077).
+
+        Return an empty list (the default) for no additional logic.
+        """
+        return []
+
+    @property
     def mod_install_as_is_if_no_match(self) -> bool:
         """
         When True, if both mod_required_top_level_folders and

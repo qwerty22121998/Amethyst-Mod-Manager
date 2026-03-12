@@ -172,9 +172,13 @@ def _parse_files(files_el: ET.Element) -> list[FileInstall]:
         if "}" in tag:
             tag = tag.split("}", 1)[1]
         if tag in ("file", "folder"):
+            source = child.get("source", "")
+            destination = child.get("destination", "")
+            if tag == "folder" and destination == source and source:
+                destination = source.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
             result.append(FileInstall(
-                source=child.get("source", ""),
-                destination=child.get("destination", ""),
+                source=source,
+                destination=destination,
                 priority=int(child.get("priority", "0")),
                 is_folder=(tag == "folder"),
             ))

@@ -153,6 +153,16 @@ def get_custom_games_dir() -> Path:
     return d
 
 
+def get_vcredist_cache_path() -> Path:
+    """Return the path where the VC++ Redistributable installer is cached.
+
+    Result: ~/.config/AmethystModManager/vcredist/vc_redist.x64.exe
+    """
+    path = get_config_dir() / "vcredist" / "vc_redist.x64.exe"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def get_custom_game_images_dir() -> Path:
     """Return the directory where downloaded custom game banner images are cached.
 
@@ -162,5 +172,17 @@ def get_custom_game_images_dir() -> Path:
     Result: ~/.config/AmethystModManager/custom_game_images/
     """
     d = get_config_dir() / "custom_game_images"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def get_download_cache_dir() -> Path:
+    """Return the download cache directory, creating it if it doesn't exist.
+
+    Used for collection installs so archive files are kept out of ~/Downloads.
+
+    Result: ~/.config/AmethystModManager/download_cache/
+    """
+    d = get_config_dir() / "download_cache"
     d.mkdir(parents=True, exist_ok=True)
     return d

@@ -521,13 +521,6 @@ class ModListPanel(ctk.CTkFrame):
         bar.grid(row=3, column=1, sticky="ew")
         bar.grid_propagate(False)
 
-        ctk.CTkButton(
-            bar, text="Collections", width=100, height=26,
-            fg_color="#c07320", hover_color="#d4832a",
-            text_color="#ffffff", font=_theme.FONT_SMALL,
-            command=self._on_collections
-        ).pack(side="left", padx=4, pady=5)
-
         # Expand/Collapse all separators toggle
         self._expand_collapse_all_btn = ctk.CTkButton(
             bar, text="Expand all", width=90, height=26,
@@ -3236,7 +3229,7 @@ class ModListPanel(ctk.CTkFrame):
             show_fn(sep_name, current_path, _on_save, current_raw=current_raw)
             return
 
-        # Fallback: plain tk overlay on self (no portal_filechooser)
+        # Fallback: plain tk overlay on self (uses portal_filechooser for Browse)
         self._close_sep_settings()
         overlay = tk.Frame(self, bg=BG_PANEL, bd=0, highlightthickness=0)
         path_var = tk.StringVar(value=current_path)
@@ -3258,11 +3251,13 @@ class ModListPanel(ctk.CTkFrame):
         entry_w.grid(row=1, column=0, sticky="ew", padx=(0, 6))
 
         def _browse():
-            from tkinter import filedialog
-            chosen = filedialog.askdirectory(title="Select deployment directory",
-                                             initialdir=path_var.get() or str(Path.home()))
-            if chosen:
-                path_var.set(chosen)
+            from Utils.portal_filechooser import pick_folder
+            def _cb(chosen):
+                if chosen is not None:
+                    def _apply():
+                        path_var.set(str(chosen))
+                    overlay.after(0, _apply)
+            pick_folder("Select deployment directory", _cb)
 
         tk.Button(content, text="Browse", command=_browse, bg=BG_HEADER, fg=TEXT_MAIN,
                   relief="flat", font=_theme.FONT_SMALL, cursor="hand2",

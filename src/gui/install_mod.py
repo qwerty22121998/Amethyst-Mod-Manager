@@ -11,10 +11,11 @@ import tempfile
 import threading
 import zipfile
 
-# Ensures only one FOMOD dialog is shown at a time even when collection installs
-# run parallel extraction workers.  Any worker that needs user input acquires this
-# lock, marshals the dialog to the main thread, waits for the result, then releases.
-_fomod_dialog_lock = threading.Lock()
+# Ensures only one interactive dialog (FOMOD, Unexpected Mod Structure, etc.) is
+# shown at a time when collection installs run parallel extraction workers.
+# Any worker that needs user input acquires this lock, marshals the dialog to
+# the main thread, waits for the result, then releases.
+_interactive_dialog_lock = threading.Lock()
 from pathlib import Path
 from datetime import datetime
 
@@ -35,6 +36,19 @@ from Utils.modlist import prepend_mod, ensure_mod_preserving_position
 from Utils.filemap import _scan_dir, update_mod_index
 from Nexus.nexus_meta import write_meta, resolve_nexus_meta_for_archive
 from gui.ctk_components import CTkNotification
+
+
+def _show_set_prefix_dialog_on_main(parent_window, required, file_list, mod_name: str,
+                                    result_holder: list, done_event: threading.Event) -> None:
+    """Run on main thread via after(0, ...). Shows _SetPrefixDialog, stores result, signals done."""
+    try:
+        dlg = _SetPrefixDialog(parent_window, required, file_list, mod_name=mod_name)
+        parent_window.wait_window(dlg)
+        result_holder[0] = dlg.result
+    except Exception:
+        result_holder[0] = None
+    finally:
+        done_event.set()
 
 
 def _show_mod_notification(parent_window, message: str, state: str = "success") -> None:
@@ -206,54 +220,6 @@ def _try_auto_strip_for_file_types(
     return (file_list, False)
 
 
-def _check_mod_top_level_file_types(
-    file_list: list[tuple[str, str, bool]],
-    required_exts: set[str],
-) -> bool:
-    """Return True if at least one top-level file (no sub-folder) has a required extension."""
-    exts_lower = {e.lower() for e in required_exts}
-    for _, dst_rel, is_folder in file_list:
-        if is_folder:
-            continue
-        dst_rel = dst_rel.replace("\\", "/").strip("/")
-        if "/" not in dst_rel:
-            ext = Path(dst_rel).suffix.lower()
-            if ext in exts_lower:
-                return True
-    return False
-
-
-def _try_auto_strip_for_file_types(
-    file_list: list[tuple[str, str, bool]],
-    required_exts: set[str],
-    max_strip_depth: int = 5,
-) -> tuple[list[tuple[str, str, bool]], bool]:
-    """
-    Try stripping leading path segments until at least one top-level file has a
-    required extension.  Returns (new_file_list, True) if successful, otherwise
-    (original file_list, False).
-    """
-    if _check_mod_top_level_file_types(file_list, required_exts):
-        return (file_list, True)
-    exts_lower = {e.lower() for e in required_exts}
-    for strip_depth in range(1, max_strip_depth + 1):
-        new_list: list[tuple[str, str, bool]] = []
-        has_required = False
-        for src_rel, dst_rel, is_folder in file_list:
-            parts = dst_rel.replace("\\", "/").strip("/").split("/")
-            if len(parts) <= strip_depth:
-                continue
-            new_dst = "/".join(parts[strip_depth:])
-            if not is_folder and len(parts) == strip_depth + 1:
-                ext = Path(new_dst).suffix.lower()
-                if ext in exts_lower:
-                    has_required = True
-            new_list.append((src_rel, new_dst, is_folder))
-        if has_required and new_list:
-            return (new_list, True)
-    return (file_list, False)
-
-
 def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -> None:
     """Write the current datetime as the ``installed`` key in meta.ini if not
     already present.  Also write ``installationFile`` if *installation_file* is
@@ -362,7 +328,9 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                              prebuilt_meta=None,
                              disable_extract: bool = False,
                              profile_dir=None,
-                             headless: bool = False) -> None:
+                             headless: bool = False,
+                             preferred_name: str = "",
+                             skip_index_update: bool = False) -> None:
     """
     Extract archive to a temp directory, detect FOMOD, run the wizard if
     present, then copy the resolved files into the game's mod staging area.
@@ -392,7 +360,7 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         raw_stem = os.path.splitext(raw_stem)[0]
 
     suggestions = _suggest_mod_names(raw_stem)
-    mod_name = suggestions[0] if suggestions else raw_stem
+    mod_name = preferred_name.strip() if preferred_name.strip() else (suggestions[0] if suggestions else raw_stem)
 
     # ------------------------------------------------------------------
     # Disable-extract mode: move the archive as-is into the mod folder.
@@ -455,7 +423,25 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             log_fn(traceback.format_exc())
         return
 
-    extract_dir = tempfile.mkdtemp(prefix="modmgr_")
+    # Small archives (< 1 GB) extract to /tmp for speed (tmpfs).
+    # Large archives extract alongside the staging area so they don't exhaust
+    # RAM or the /tmp partition.
+    _1GB = 1 * 1024 ** 3
+    try:
+        _archive_size = os.path.getsize(archive_path)
+    except OSError:
+        _archive_size = 0
+    _staging = game.get_effective_mod_staging_path()
+    if _archive_size >= _1GB:
+        _tmp_parent = _staging.parent if _staging else None
+    else:
+        _tmp_parent = None  # let mkdtemp use the default /tmp
+    try:
+        if _tmp_parent:
+            _tmp_parent.mkdir(parents=True, exist_ok=True)
+        extract_dir = tempfile.mkdtemp(prefix="modmgr_", dir=_tmp_parent or None)
+    except OSError:
+        extract_dir = tempfile.mkdtemp(prefix="modmgr_")
 
     try:
         if not os.path.isfile(archive_path):
@@ -605,7 +591,11 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                         seen.add(c)
                         new_suggestions.append(c)
                 suggestions = new_suggestions
-                mod_name = suggestions[0]
+                # Only let the FOMOD name override mod_name when the caller
+                # didn't supply an explicit preferred_name (collection installs
+                # use preferred_name to keep mods from the same page distinct).
+                if not preferred_name.strip():
+                    mod_name = suggestions[0]
 
             installed_files: set[str] = set()
             active_files: set[str] = set()
@@ -665,29 +655,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                             json.dump(dialog.result, f, indent=2)
                     except OSError:
                         pass
-                    finally:
-                        _ev.set()
 
-                with _fomod_dialog_lock:
-                    if threading.current_thread() is threading.main_thread():
-                        # Already on the main thread — call directly so that
-                        # wait_window() can run its nested event loop.  Using
-                        # after(0, …) + Event.wait() here would deadlock because
-                        # wait() blocks the Tk event loop before the after
-                        # callback ever gets dispatched.
-                        _show_dialog()
-                    else:
-                        try:
-                            parent_window.after(0, _show_dialog)
-                        except Exception:
-                            _dialog_done.set()
-                        _dialog_done.wait()
-
-                if _result_holder[0] is None:
-                    log_fn("FOMOD install cancelled.")
-                    return None
-
-                final_selections = _result_holder[0]
+                final_selections = dialog.result
 
             file_list = resolve_files(config, final_selections, installed_files)
             log_fn(f"FOMOD complete — {len(file_list)} file(s) to install.")
@@ -700,6 +669,13 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         replace_selected_only = False
         replace_all = False
         if dest_root.exists():
+            if headless:
+                # In headless (collection) installs, a pre-existing folder means
+                # the mod was already installed (e.g. two collection entries share
+                # the same archive, or a previous partial run installed it).
+                # Just return the folder name — no dialog, no re-extraction.
+                log_fn(f"Collection install: '{mod_name}' folder already exists — skipping re-install.")
+                return mod_name
             replace_dialog = _ReplaceModDialog(parent_window, mod_name)
             parent_window.wait_window(replace_dialog)
             if replace_dialog.result == "cancel":
@@ -776,12 +752,28 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 if install_as_is:
                     log_fn("Mod structure unrecognised — installing as-is (no prefix applied).")
                 else:
-                    dlg = _SetPrefixDialog(parent_window, required, file_list)
-                    parent_window.wait_window(dlg)
-                    if dlg.result is None:
+                    dlg_result = None
+                    if threading.current_thread() is threading.main_thread():
+                        dlg = _SetPrefixDialog(parent_window, required, file_list, mod_name=mod_name)
+                        parent_window.wait_window(dlg)
+                        dlg_result = dlg.result
+                    else:
+                        with _interactive_dialog_lock:
+                            result_holder = [None]
+                            done_event = threading.Event()
+                            parent_window.after(
+                                0,
+                                lambda: _show_set_prefix_dialog_on_main(
+                                    parent_window, required, file_list, mod_name,
+                                    result_holder, done_event,
+                                ),
+                            )
+                            done_event.wait()
+                            dlg_result = result_holder[0]
+                    if dlg_result is None:
                         log_fn("Install cancelled — mod structure not mapped.")
                         return
-                    action, prefix = dlg.result
+                    action, prefix = dlg_result
                     if action == "prefix" and prefix:
                         prefix = prefix.strip().strip("/").replace("\\", "/")
                         file_list = [(s, f"{prefix}/{d}", f) for s, d, f in file_list]
@@ -795,12 +787,28 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 if install_as_is:
                     log_fn("Mod structure unrecognised — installing as-is (no prefix applied).")
                 else:
-                    dlg = _SetPrefixDialog(parent_window, set(), file_list)
-                    parent_window.wait_window(dlg)
-                    if dlg.result is None:
+                    dlg_result = None
+                    if threading.current_thread() is threading.main_thread():
+                        dlg = _SetPrefixDialog(parent_window, set(), file_list, mod_name=mod_name)
+                        parent_window.wait_window(dlg)
+                        dlg_result = dlg.result
+                    else:
+                        with _interactive_dialog_lock:
+                            result_holder = [None]
+                            done_event = threading.Event()
+                            parent_window.after(
+                                0,
+                                lambda: _show_set_prefix_dialog_on_main(
+                                    parent_window, set(), file_list, mod_name,
+                                    result_holder, done_event,
+                                ),
+                            )
+                            done_event.wait()
+                            dlg_result = result_holder[0]
+                    if dlg_result is None:
                         log_fn("Install cancelled — mod structure not mapped.")
                         return
-                    action, prefix = dlg.result
+                    action, prefix = dlg_result
                     if action == "prefix" and prefix:
                         prefix = prefix.strip().strip("/").replace("\\", "/")
                         file_list = [(s, f"{prefix}/{d}", f) for s, d, f in file_list]
@@ -824,6 +832,12 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         _stamp_meta_install_date(dest_root / "meta.ini",
                                   installation_file=os.path.basename(archive_path))
 
+        for fn in getattr(game, "additional_install_logic", []):
+            try:
+                fn(dest_root, mod_name, log_fn)
+            except Exception as e:
+                log_fn(f"Additional install logic failed: {e}")
+
         # Resolve which profile directory to write modlist/plugins into.
         # Priority: explicit profile_dir arg > mod_panel's path > default.
         if mod_panel is not None and mod_panel._modlist_path is not None:
@@ -836,23 +850,27 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
 
         # Update the mod index for just this mod so the next filemap rebuild
         # reads from the index instead of rescanning all mod folders.
-        try:
-            _strip = frozenset(s.lower() for s in (getattr(game, "strip_prefixes", None) or []))
-            _exts  = frozenset(e.lower() for e in (getattr(game, "install_extensions", None) or []))
-            _root  = frozenset(s.lower() for s in (getattr(game, "root_deploy_folders", None) or []))
-            _, normal_files, root_files = _scan_dir(
-                mod_name, str(dest_root), _strip, _exts, _root,
-            )
-            if mod_panel is not None and mod_panel._modlist_path is not None:
-                _ml = mod_panel._modlist_path
-            else:
-                _ml = game.get_profile_root() / "profiles" / "default" / "modlist.txt"
-            _index_path = _ml.parent / "modindex.bin"
-            _norm_case = getattr(game, "normalize_folder_case", True)
-            update_mod_index(_index_path, mod_name, normal_files, root_files,
-                             normalize_folder_case=_norm_case)
-        except (OSError, ValueError, KeyError):
-            pass  # non-fatal — next rebuild will fall back to a full rescan
+        # Skipped for collection installs (skip_index_update=True) — the
+        # collection does one bulk rebuild_mod_index after all mods are done,
+        # which is far faster than N concurrent read→merge→write passes.
+        if not skip_index_update:
+            try:
+                _strip = frozenset(s.lower() for s in (getattr(game, "strip_prefixes", None) or []))
+                _exts  = frozenset(e.lower() for e in (getattr(game, "install_extensions", None) or []))
+                _root  = frozenset(s.lower() for s in (getattr(game, "root_deploy_folders", None) or []))
+                _, normal_files, root_files = _scan_dir(
+                    mod_name, str(dest_root), _strip, _exts, _root,
+                )
+                if mod_panel is not None and mod_panel._modlist_path is not None:
+                    _ml = mod_panel._modlist_path
+                else:
+                    _ml = game.get_profile_root() / "profiles" / "default" / "modlist.txt"
+                _index_path = _ml.parent / "modindex.bin"
+                _norm_case = getattr(game, "normalize_folder_case", True)
+                update_mod_index(_index_path, mod_name, normal_files, root_files,
+                                 normalize_folder_case=_norm_case)
+            except (OSError, ValueError, KeyError):
+                pass  # non-fatal — next rebuild will fall back to a full rescan
 
         plugin_exts = getattr(game, "plugin_extensions", [])
         if plugin_exts and mod_panel is not None and mod_panel._modlist_path is not None:

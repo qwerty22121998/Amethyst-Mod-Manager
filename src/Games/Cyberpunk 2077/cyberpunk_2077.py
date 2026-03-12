@@ -8,6 +8,7 @@ Mod structure:
 """
 
 import json
+import shutil
 from pathlib import Path
 
 from Games.base_game import BaseGame
@@ -60,8 +61,37 @@ class Cyberpunk2077(BaseGame):
         return {"bin", "r6", "archive", "red4ext","engine"}
 
     @property
+    def mod_required_file_types(self) -> set[str]:
+        return {".archive"}
+
+    @property
+    def conflict_ignore_filenames(self) -> set[str]:
+        return {"*.txt","*.png","*.jpg","*.jpeg"}
+
+    @property
     def mod_auto_strip_until_required(self) -> bool:
         return True
+
+    @property
+    def additional_install_logic(self) -> list:
+        """Move loose .archive files to archive/pc/mod (Cyberpunk mod structure)."""
+        return [self._move_loose_archives]
+
+    def _move_loose_archives(self, dest_root: Path, mod_name: str, log_fn) -> None:
+        """Move loose .archive files (direct children of mod root) into archive/pc/mod."""
+        archive_mod_dir = dest_root / "archive" / "pc" / "mod"
+        archive_mod_dir.mkdir(parents=True, exist_ok=True)
+        to_move = []
+        for path in dest_root.iterdir():
+            if path.is_file() and path.suffix.lower() == ".archive":
+                to_move.append(path)
+        for path in to_move:
+            dest = archive_mod_dir / path.name
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(path), str(dest))
+        if to_move:
+            log_fn(f"Cyberpunk: moved {len(to_move)} loose .archive file(s) to archive/pc/mod/")
     
     @property
     def frameworks(self) -> dict[str, str]:
