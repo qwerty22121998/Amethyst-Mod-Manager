@@ -4571,7 +4571,7 @@ class DisablePluginsPanel(ctk.CTkFrame):
 
 _CUSTOM_HANDLERS_API_URL = (
     "https://api.github.com/repos/ChrisDKN/Amethyst-Mod-Manager/contents/"
-    "Custom%20Handlers?ref=Main"
+    "Custom%20Handlers?ref=main"
 )
 
 
