@@ -684,6 +684,7 @@ class App(ctk.CTk):
             show_wizard_panel_fn=self.show_wizard_panel,
             show_nexus_panel_fn=self.show_nexus_panel,
             show_custom_game_panel_fn=self.show_custom_game_panel,
+            show_download_custom_handler_fn=self.show_download_custom_handler_panel,
         )
         self._topbar.grid(row=0, column=0, sticky="ew", pady=(4, 0))
 
@@ -886,6 +887,7 @@ class App(ctk.CTk):
             on_game_selected=_on_selected,
             on_cancel=_on_cancel,
             show_custom_game_panel_fn=self.show_custom_game_panel,
+            show_download_custom_handler_fn=self.show_download_custom_handler_panel,
         )
         self._game_picker_panel.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._game_picker_panel.lift()
@@ -1233,6 +1235,34 @@ class App(ctk.CTk):
 
     def hide_missing_reqs_panel(self):
         self._hide_plugin_overlay("_missing_reqs_panel")
+
+    # -- Download Custom Handler panel (overlays plugin panel) --------------
+
+    def show_download_custom_handler_panel(self):
+        """Show overlay listing custom handlers from GitHub for download."""
+        from gui.dialogs import DownloadCustomHandlerPanel
+
+        def _on_done(p):
+            self._hide_plugin_overlay("_download_custom_handler_panel")
+
+        def _on_downloaded():
+            # Refresh game picker immediately when a handler is downloaded
+            panel = getattr(self, "_game_picker_panel", None)
+            if panel is not None:
+                panel.refresh()
+
+        self._show_plugin_overlay(
+            "_download_custom_handler_panel",
+            lambda: DownloadCustomHandlerPanel(
+                self._plugin_panel_container,
+                on_done=_on_done,
+                on_downloaded=_on_downloaded,
+                log_fn=self._status.log,
+            ),
+        )
+
+    def hide_download_custom_handler_panel(self):
+        self._hide_plugin_overlay("_download_custom_handler_panel")
 
     def _startup_log(self):
         configured = sum(1 for g in _GAMES.values() if g.is_configured())

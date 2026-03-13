@@ -1,0 +1,25 @@
+{
+  "name": "Clair Obscur: Expedition 33",
+  "game_id": "Clair_Obscur__Expedition_33",
+  "exe_name": "Expedition33_Steam.exe",
+  "deploy_type": "ue5",
+  "mod_data_path": "Sandfall",
+  "steam_id": "1903340",
+  "nexus_game_domain": "clairobscurexpedition33",
+  "image_url": "https://cdn2.steamgriddb.com/icon/5fd2e6e3604c8ebacfcc8104c8e24daa/32/256x256.png",
+  "mod_folder_strip_prefixes": [
+    "Sandfall"
+  ],
+  "conflict_ignore_filenames": [],
+  "mod_folder_strip_prefixes_post": [],
+  "mod_install_prefix": "",
+  "mod_required_top_level_folders": [],
+  "mod_auto_strip_until_required": false,
+  "mod_required_file_types": [],
+  "mod_install_as_is_if_no_match": false,
+  "heroic_app_names": [],
+  "restore_before_deploy": true,
+  "normalize_folder_case": true,
+  "wine_dll_overrides": {},
+  "custom_routing_rules": []
+}

@@ -63,7 +63,8 @@ class TopBar(ctk.CTkFrame):
     def __init__(self, parent, log_fn=None, show_add_game_panel_fn=None,
                  show_reconfigure_panel_fn=None, show_proton_panel_fn=None,
                  show_wizard_panel_fn=None, show_nexus_panel_fn=None,
-                 show_custom_game_panel_fn=None):
+                 show_custom_game_panel_fn=None,
+                 show_download_custom_handler_fn=None):
         super().__init__(parent, fg_color=BG_PANEL, corner_radius=0)
         self._log = log_fn or (lambda msg: None)
         self._show_add_game_panel_fn = show_add_game_panel_fn
@@ -72,6 +73,7 @@ class TopBar(ctk.CTkFrame):
         self._show_wizard_panel_fn = show_wizard_panel_fn
         self._show_nexus_panel_fn = show_nexus_panel_fn
         self._show_custom_game_panel_fn = show_custom_game_panel_fn
+        self._show_download_custom_handler_fn = show_download_custom_handler_fn
         self._two_rows: bool | None = None  # unknown until first configure
 
         # ── Content area (above separator) ───────────────────────────────────
@@ -557,7 +559,10 @@ class TopBar(ctk.CTkFrame):
             self._show_add_game_panel_fn(all_names, self._handle_game_picked)
         else:
             # Fallback: original modal dialog
-            picker = _GamePickerDialog(self.winfo_toplevel(), all_names, games=_gh._GAMES)
+            picker = _GamePickerDialog(
+                self.winfo_toplevel(), all_names, games=_gh._GAMES,
+                show_download_custom_handler_fn=self._show_download_custom_handler_fn,
+            )
             self.winfo_toplevel().wait_window(picker)
             if picker.result is None:
                 return

@@ -44,7 +44,7 @@ from gui.theme import (
 )
 import gui.theme as _theme
 from gui.path_utils import _to_wine_path
-from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir, get_vcredist_cache_path
+from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir, get_vcredist_cache_path, get_custom_games_dir
 from Utils.exe_args_builder import EXE_PROFILES
 from Utils.xdg import xdg_open, open_url
 
@@ -178,8 +178,10 @@ class _GamePickerDialog(ctk.CTkToplevel):
     _COLS    = 4
     _PAD     = 12
 
-    def __init__(self, parent, game_names: list[str], games: dict | None = None):
+    def __init__(self, parent, game_names: list[str], games: dict | None = None,
+                 show_download_custom_handler_fn=None):
         super().__init__(parent, fg_color=BG_DEEP)
+        self._show_download_custom_handler_fn = show_download_custom_handler_fn
         self.title("Add Game")
         self.resizable(True, True)
         self.transient(parent)
@@ -239,6 +241,11 @@ class _GamePickerDialog(ctk.CTkToplevel):
             fg_color="#2d7a2d", hover_color="#3a9a3a", text_color="white",
             command=self._on_define_custom_game,
         ).pack(side="left", padx=(12, 4), pady=10)
+        ctk.CTkButton(
+            btn_bar, text="Download Custom Handler", width=180, height=30, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_download_custom_handler,
+        ).pack(side="left", padx=4, pady=10)
 
         cols = self._COLS
         w = cols * (self._CARD_W + self._PAD) + self._PAD + 8
@@ -384,6 +391,10 @@ class _GamePickerDialog(ctk.CTkToplevel):
             self.grab_release()
             self.destroy()
 
+    def _on_download_custom_handler(self):
+        if self._show_download_custom_handler_fn:
+            self._show_download_custom_handler_fn()
+
     def _cancel(self):
         self.grab_release()
         self.destroy()
@@ -422,6 +433,7 @@ class GamePickerPanel(tk.Frame):
         on_game_selected=None,
         on_cancel=None,
         show_custom_game_panel_fn=None,
+        show_download_custom_handler_fn=None,
     ):
         super().__init__(parent, bg=BG_DEEP)
         self._game_names = game_names
@@ -430,6 +442,7 @@ class GamePickerPanel(tk.Frame):
         self._on_game_selected = on_game_selected or (lambda n, c: None)
         self._on_cancel = on_cancel or (lambda: None)
         self._show_custom_game_panel_fn = show_custom_game_panel_fn
+        self._show_download_custom_handler_fn = show_download_custom_handler_fn
 
         self._img_refs: list = []
         self._img_labels: dict = {}           # game_id → (img_lbl, img_frame)
@@ -535,6 +548,12 @@ class GamePickerPanel(tk.Frame):
             fg_color="#2d7a2d", hover_color="#3a9a3a", text_color="white",
             command=self._on_define_custom_game,
         ).pack(side="left", padx=(12, 4), pady=10)
+        ctk.CTkButton(
+            btn_bar, text="Download Custom Handler",
+            width=180, height=30, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_download_custom_handler,
+        ).pack(side="left", padx=4, pady=10)
 
     # ------------------------------------------------------------------
     # Card building
@@ -723,6 +742,36 @@ class GamePickerPanel(tk.Frame):
             self.winfo_toplevel().wait_window(dlg)
             if dlg.saved_game is not None:
                 self._on_game_selected(dlg.saved_game.name, False)
+
+    def _on_download_custom_handler(self):
+        if self._show_download_custom_handler_fn:
+            self._show_download_custom_handler_fn()
+
+    def refresh(self):
+        """Reload game registry and rebuild cards (e.g. after downloading a custom handler)."""
+        from gui.game_helpers import _load_games, _GAMES
+        _load_games()  # Repopulates _GAMES including newly downloaded custom games
+        self._game_names = sorted(_GAMES.keys())
+        self._games = _GAMES
+        # Clear existing cards
+        for w in self._card_widgets:
+            try:
+                w.destroy()
+            except Exception:
+                pass
+        self._card_widgets.clear()
+        self._img_labels.clear()
+        self._img_refs.clear()
+        # Rebuild cards
+        for name in self._game_names:
+            self._build_card(name)
+        self._regrid_cards()
+        # Restart banner image downloads for any new custom games
+        try:
+            from Games.Custom.custom_game import download_missing_custom_game_images
+            download_missing_custom_game_images(on_done=self._on_image_downloaded)
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -4513,6 +4562,168 @@ class DisablePluginsPanel(ctk.CTkFrame):
         self._on_done(self)
 
     def _on_cancel(self):
+        self._on_done(self)
+
+
+# ---------------------------------------------------------------------------
+# Download Custom Handler panel — overlay to download JSON handlers from GitHub
+# ---------------------------------------------------------------------------
+
+_CUSTOM_HANDLERS_API_URL = (
+    "https://api.github.com/repos/ChrisDKN/Amethyst-Mod-Manager/contents/"
+    "Custom%20Handlers?ref=Main"
+)
+
+
+class DownloadCustomHandlerPanel(ctk.CTkFrame):
+    """
+    Overlay on the plugin panel listing custom game handlers from GitHub.
+    User can download .json files into ~/.config/AmethystModManager/custom_games/
+    """
+
+    def __init__(self, parent, on_done=None, on_downloaded=None, log_fn=None):
+        super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
+        self._on_done = on_done or (lambda p: None)
+        self._on_downloaded = on_downloaded or (lambda: None)
+        self._log_fn = log_fn or (lambda msg: None)
+        self._handlers: list[dict] = []
+        self._status_var = tk.StringVar(value="Loading …")
+
+        # Title bar
+        title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=36)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+        ctk.CTkLabel(
+            title_bar, text="Download Custom Handler",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12)
+        ctk.CTkButton(
+            title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
+            fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_close,
+        ).pack(side="right", padx=4)
+        ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
+
+        # Content
+        ctk.CTkLabel(
+            self,
+            text="Handlers from the Amethyst Mod Manager repository",
+            font=FONT_SMALL,
+            text_color=TEXT_DIM,
+            anchor="w",
+            justify="left",
+        ).pack(anchor="w", padx=16, pady=(12, 4))
+
+        self._status_lbl = ctk.CTkLabel(
+            self, textvariable=self._status_var,
+            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
+        )
+        self._status_lbl.pack(anchor="w", padx=16, pady=(0, 8))
+
+        self._scroll = ctk.CTkScrollableFrame(self, fg_color=BG_PANEL, corner_radius=6)
+        self._scroll.pack(fill="both", expand=True, padx=12, pady=(0, 4))
+        self._scroll.grid_columnconfigure(0, weight=1)
+
+        # Bottom bar
+        bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
+        bar.pack(fill="x")
+        bar.pack_propagate(False)
+        ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(side="top", fill="x")
+        ctk.CTkButton(
+            bar, text="Close", width=80, height=28, font=FONT_NORMAL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_close,
+        ).pack(side="right", padx=(4, 12), pady=12)
+
+        # Fetch handlers in background
+        threading.Thread(target=self._fetch_handlers, daemon=True).start()
+
+    def _fetch_handlers(self):
+        """Fetch the list of JSON files from GitHub API and extract game names."""
+        import json as _json
+        import urllib.request as _urllib
+        try:
+            req = _urllib.Request(
+                _CUSTOM_HANDLERS_API_URL,
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+            with _urllib.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read().decode("utf-8", errors="replace"))
+            handlers = [e for e in data if isinstance(e, dict) and e.get("name", "").endswith(".json")]
+            # Fetch each file to get the "name" field from inside the JSON
+            for h in handlers:
+                display_name = h.get("name", "").removesuffix(".json").replace("_", " ")
+                download_url = h.get("download_url")
+                if download_url:
+                    try:
+                        r = _urllib.Request(download_url, headers={"User-Agent": "Amethyst-Mod-Manager"})
+                        with _urllib.urlopen(r, timeout=10) as resp:
+                            parsed = _json.loads(resp.read().decode("utf-8", errors="replace"))
+                        if isinstance(parsed, dict) and parsed.get("name"):
+                            display_name = parsed["name"]
+                    except Exception:
+                        pass
+                h["_display_name"] = display_name
+            self.after(0, lambda: self._on_handlers_loaded(handlers))
+        except Exception as e:
+            self.after(0, lambda: self._on_fetch_error(str(e)))
+
+    def _on_handlers_loaded(self, handlers: list):
+        self._handlers = handlers
+        self._status_var.set(f"{len(handlers)} handler(s) available" if handlers else "No handlers found")
+        for row, h in enumerate(handlers):
+            display_name = h.get("_display_name", h.get("name", ""))
+            filename = h.get("name", "")
+            download_url = h.get("download_url")
+            if not download_url:
+                continue
+            row_frame = ctk.CTkFrame(self._scroll, fg_color="transparent")
+            row_frame.grid(row=row, column=0, sticky="ew", padx=8, pady=3)
+            row_frame.grid_columnconfigure(0, weight=1)
+            ctk.CTkLabel(
+                row_frame, text=display_name, font=FONT_NORMAL, text_color=TEXT_MAIN,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=(0, 8))
+            ctk.CTkButton(
+                row_frame, text="Download", width=90, height=24, font=FONT_SMALL,
+                fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+                command=lambda u=download_url, n=filename: self._download_handler(u, n),
+            ).grid(row=0, column=1, padx=4, pady=2)
+
+    def _on_fetch_error(self, err: str):
+        self._status_var.set(f"Error loading list: {err}")
+        self._log_fn(f"Download Custom Handler: {err}")
+
+    def _download_handler(self, download_url: str, filename: str):
+        """Download a handler JSON and save to custom_games dir."""
+        def _do():
+            import json as _json
+            import urllib.request as _urllib
+            try:
+                req = _urllib.Request(download_url, headers={"User-Agent": "Amethyst-Mod-Manager"})
+                with _urllib.urlopen(req, timeout=15) as resp:
+                    data = resp.read().decode("utf-8", errors="replace")
+                # Validate JSON
+                _json.loads(data)
+                dest = get_custom_games_dir() / filename
+                dest.write_text(data, encoding="utf-8")
+                self.after(0, lambda: self._on_download_done(filename, None))
+            except Exception as e:
+                self.after(0, lambda: self._on_download_done(filename, str(e)))
+
+        self._status_var.set(f"Downloading {filename} …")
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_download_done(self, filename: str, err: str | None):
+        if err:
+            self._status_var.set(f"Error: {err}")
+            self._log_fn(f"Download Custom Handler: failed to download {filename}: {err}")
+        else:
+            self._status_var.set(f"Saved to custom_games: {filename}")
+            self._log_fn(f"Download Custom Handler: saved {filename} to custom_games folder")
+            self._on_downloaded()  # Refresh game picker so new handler appears
+
+    def _on_close(self):
         self._on_done(self)
 
 
