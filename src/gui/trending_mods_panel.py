@@ -1,12 +1,11 @@
 """
-Browse Mods panel — displays Trending / Latest Added / Latest Updated mods
-from Nexus Mods for the currently selected game.
+Trending Mods panel — displays trending mods from Nexus Mods for the
+currently selected game.
 
-Fetches mod lists via the Nexus v1 REST API.  The API already returns full
-mod info objects so no per-mod enrichment is needed (unlike Tracked/Endorsed).
-
-Each mod is shown as a CTkCard with: mod image, name/author/stats, summary,
-and View + Install buttons.  Right-click also offers Track Mod and Endorse Mod.
+Trending = mods published in the last 7 days, sorted by endorsements (highest first).
+Uses the Nexus GraphQL API with createdAt filter and endorsements sort.
+Each mod is shown as a CTkCard with image, name, stats, summary, View/Install.
+Right-click offers Open on Nexus, Install Mod, Track Mod, Endorse Mod.
 """
 
 from __future__ import annotations
@@ -37,45 +36,28 @@ from gui.theme import (
     FONT_SMALL,
 )
 
-# Mods per page when browsing
-PAGE_SIZE = 30
+# Mods per page when browsing trending
+PAGE_SIZE = 20
 
 
 @dataclass
-class BrowseModEntry:
-    """A mod entry from the browse endpoints."""
+class TrendingModEntry:
+    """A trending mod (published in last 7 days, by endorsements)."""
     mod_id: int = 0
     domain_name: str = ""
     name: str = ""
     author: str = ""
     version: str = ""
     summary: str = ""
-    description: str = ""
     endorsement_count: int = 0
     downloads_total: int = 0
     picture_url: str = ""
 
 
-CATEGORIES = [
-    ("Trending",        "get_trending"),
-    ("Latest Added",    "get_latest_added"),
-    ("Latest Updated",  "get_latest_updated"),
-    ("Top Downloaded",  "get_top_mods"),
-]
-
-# Only the categories shown in the UI — the others remain in CATEGORIES
-# above so they can be re-enabled by moving them here.
-VISIBLE_CATEGORIES = [
-    ("Top Downloaded",  "get_top_mods"),
-]
-
-
-class BrowseModsPanel:
+class TrendingModsPanel:
     """
-    Card-grid panel listing browseable mods from Nexus (Trending / Latest
-    Added / Latest Updated / Top Downloaded).
-
-    Built into an existing parent widget (a tab frame from CTkTabview).
+    Card-grid panel listing trending mods for the selected game.
+    Trending = mods published in the last 7 days, sorted by endorsements.
     """
 
     def __init__(
@@ -85,29 +67,25 @@ class BrowseModsPanel:
         get_api: Optional[Callable] = None,
         get_game_domain: Optional[Callable] = None,
         install_fn: Optional[Callable] = None,
-        visible_categories: Optional[list[tuple[str, str]]] = None,
     ):
         self._parent = parent_tab
         self._log = log_fn or (lambda msg: None)
         self._get_api = get_api or (lambda: None)
         self._get_game_domain = get_game_domain or (lambda: "")
         self._install_fn = install_fn or (lambda entry: None)
-        self._visible_categories = visible_categories if visible_categories is not None else VISIBLE_CATEGORIES
 
-        self._entries: list[BrowseModEntry] = []
+        self._entries: list[TrendingModEntry] = []
         self._cards: list[ModCard] = []
         self._loading: bool = False
-        self._cat_idx: int = 0
         self._page: int = 0
-        self._search_active: bool = False
         self._selected_cat_names: list[str] = []
         self._categories_cache: dict[str, list] = {}
         self._active_game_domain: str = ""
         self._img_cache: dict[str, ctk.CTkImage] = {}
         self._img_loading: set[str] = set()
         self._cols: int = CARD_COLS
-        self._context_menu: CTkPopupMenu | None = None
         self._regrid_after_id = None
+        self._context_menu: CTkPopupMenu | None = None
         self._cat_panel_open: bool = False
 
         self._build(parent_tab)
@@ -118,7 +96,6 @@ class BrowseModsPanel:
 
     def _build(self, tab):
         tab.grid_rowconfigure(1, weight=1)
-        tab.grid_rowconfigure(2, weight=0)
         tab.grid_columnconfigure(0, weight=0, minsize=0)  # categories side panel
         tab.grid_columnconfigure(1, weight=1)            # main content
 
@@ -129,21 +106,12 @@ class BrowseModsPanel:
         toolbar.grid(row=0, column=1, sticky="ew")
         toolbar.grid_propagate(False)
 
-        # Category cycle button
-        self._cat_btn = ctk.CTkButton(
-            toolbar, text=f"▸ {self._visible_categories[0][0]}", width=100, height=26,
-            fg_color=BG_HEADER, hover_color=BG_ROW, text_color=TEXT_MAIN,
-            font=FONT_HEADER, command=self._cycle_category,
-        )
-        if len(self._visible_categories) > 1:
-            self._cat_btn.pack(side="left", padx=8, pady=2)
-
         self._refresh_btn = ctk.CTkButton(
             toolbar, text="↺ Refresh", width=72, height=26,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             font=FONT_HEADER, command=self.refresh,
         )
-        self._refresh_btn.pack(side="left", padx=4, pady=2)
+        self._refresh_btn.pack(side="left", padx=8, pady=2)
 
         self._cat_filter_btn = ctk.CTkButton(
             toolbar, text="Categories", width=80, height=26,
@@ -169,12 +137,12 @@ class BrowseModsPanel:
         self._next_btn.pack(side="left", padx=4, pady=2)
 
         self._status_label = ctk.CTkLabel(
-            toolbar, text="Click Refresh to browse mods", anchor="w",
+            toolbar, text="Click Refresh to load trending mods", anchor="w",
             font=FONT_SMALL, text_color=TEXT_DIM, fg_color=BG_HEADER,
         )
         self._status_label.pack(side="left", padx=4, fill="x", expand=True)
 
-        # Scrollable card area using canvas + inner CTk frame
+        # Scrollable card area
         canvas_frame = tk.Frame(tab, bg=BG_DEEP, bd=0, highlightthickness=0)
         canvas_frame.grid(row=1, column=1, sticky="nsew")
         canvas_frame.grid_rowconfigure(0, weight=1)
@@ -189,12 +157,10 @@ class BrowseModsPanel:
             bg="#383838", troughcolor=BG_DEEP, activebackground=ACCENT,
             highlightthickness=0, bd=0,
         )
-
         self._canvas.configure(yscrollcommand=self._vsb.set)
         self._canvas.grid(row=0, column=0, sticky="nsew")
         self._vsb.grid(row=0, column=1, sticky="ns")
 
-        # Inner frame that holds the card grid
         self._inner = ctk.CTkFrame(self._canvas, fg_color=BG_DEEP)
         self._inner_id = self._canvas.create_window((0, 0), window=self._inner, anchor="nw")
 
@@ -203,45 +169,32 @@ class BrowseModsPanel:
         self._canvas.bind("<Button-4>",   lambda e: self._scroll(-100))
         self._canvas.bind("<Button-5>",   lambda e: self._scroll(100))
         self._canvas.bind("<MouseWheel>", self._on_mousewheel)
-        self._inner.bind("<Button-4>",    lambda e: self._scroll(-100))
-        self._inner.bind("<Button-5>",    lambda e: self._scroll(100))
-        self._inner.bind("<MouseWheel>",  self._on_mousewheel)
+        self._inner.bind("<Button-4>",   lambda e: self._scroll(-100))
+        self._inner.bind("<Button-5>",   lambda e: self._scroll(100))
+        self._inner.bind("<MouseWheel>", self._on_mousewheel)
 
-        # Search bar
-        search_bar = tk.Frame(tab, bg=BG_HEADER, height=30)
-        search_bar.grid(row=2, column=1, sticky="ew")
-        search_bar.grid_propagate(False)
+    def _on_inner_configure(self, _event=None):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
 
-        ctk.CTkLabel(
-            search_bar, text="Search:",
-            font=FONT_SMALL, text_color=TEXT_DIM, fg_color=BG_HEADER,
-        ).pack(side="left", padx=(8, 4), pady=4)
+    def _on_canvas_configure(self, event):
+        self._canvas.itemconfig(self._inner_id, width=event.width)
+        if self._regrid_after_id:
+            self._canvas.after_cancel(self._regrid_after_id)
+        self._regrid_after_id = self._canvas.after(250, self._regrid_cards)
 
-        self._search_var = tk.StringVar()
-        self._search_entry = ctk.CTkEntry(
-            search_bar,
-            textvariable=self._search_var,
-            fg_color=BG_ROW, text_color=TEXT_MAIN,
-            font=FONT_SMALL, height=26,
-            border_width=0,
-        )
-        self._search_entry.pack(side="left", fill="x", expand=True, pady=4, padx=(0, 4))
-        self._search_entry.bind("<Return>",    lambda _e: self._do_search())
-        self._search_entry.bind("<Control-a>", lambda _e: (self._search_entry.select_range(0, "end"), self._search_entry.icursor("end"), "break")[-1])
+    def _scroll(self, units: int):
+        self._canvas.yview_scroll(units, "units")
 
-        self._search_btn = ctk.CTkButton(
-            search_bar, text="Search", width=64, height=26,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-            font=FONT_HEADER, command=self._do_search,
-        )
-        self._search_btn.pack(side="left", padx=2, pady=4)
+    def _on_mousewheel(self, event):
+        direction = -1 if event.delta > 0 else 1
+        self._scroll(direction * 10)
 
-        self._clear_btn = ctk.CTkButton(
-            search_bar, text="✕", width=32, height=26,
-            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
-            font=FONT_HEADER, command=self._clear_search,
-        )
-        self._clear_btn.pack(side="left", padx=(0, 8), pady=4)
+    def _bind_scroll(self, widget):
+        widget.bind("<Button-4>",   lambda e: self._scroll(-50), add="+")
+        widget.bind("<Button-5>",   lambda e: self._scroll(50),  add="+")
+        widget.bind("<MouseWheel>", self._on_mousewheel, add="+")
+        for child in widget.winfo_children():
+            self._bind_scroll(child)
 
     # ------------------------------------------------------------------
     # Categories side panel
@@ -250,12 +203,11 @@ class BrowseModsPanel:
     def _build_cat_side_panel(self, tab):
         """Build the categories side panel (column 0, initially hidden)."""
         panel = ctk.CTkFrame(tab, fg_color=BG_PANEL, corner_radius=0, width=280)
-        panel.grid(row=0, column=0, rowspan=3, sticky="nsew")
+        panel.grid(row=0, column=0, rowspan=2, sticky="nsew")
         panel.grid_propagate(False)
         panel.grid_remove()
         self._cat_side_panel = panel
 
-        # Header
         header = tk.Frame(panel, bg=BG_HEADER, height=36)
         header.pack(fill="x", side="top")
         header.pack_propagate(False)
@@ -282,18 +234,16 @@ class BrowseModsPanel:
 
         tk.Frame(panel, bg=BORDER, height=1).pack(fill="x")
 
-        # Scrollable checkbox area (populated when we have categories)
         self._cat_scroll = ctk.CTkScrollableFrame(
             panel, fg_color="transparent", corner_radius=0,
         )
         self._cat_scroll.pack(fill="both", expand=True, padx=8, pady=6)
 
-        # Button row: Select All, Clear All
         btn_row = tk.Frame(panel, bg=BG_PANEL)
         btn_row.pack(fill="x", padx=8, pady=4)
 
         def _select_all_cats():
-            for name, var in self._cat_check_vars.items():
+            for var in self._cat_check_vars.values():
                 var.set(True)
             self._update_cat_panel_status()
             self._apply_cat_filters()
@@ -322,7 +272,6 @@ class BrowseModsPanel:
         self._cat_check_vars: dict[str, tk.BooleanVar] = {}
 
     def _populate_cat_sidebar(self, categories: list):
-        """Clear and repopulate the category checkboxes."""
         for w in self._cat_scroll.winfo_children():
             w.destroy()
         self._cat_check_vars.clear()
@@ -379,7 +328,6 @@ class BrowseModsPanel:
         self._bind_cat_wheel_recursive(self._cat_scroll)
 
     def _bind_cat_wheel_recursive(self, widget):
-        """Bind scroll wheel to widget and all descendants so wheel works everywhere in the sidebar."""
         def _scroll(e):
             try:
                 canv = self._cat_scroll._parent_canvas
@@ -404,22 +352,27 @@ class BrowseModsPanel:
             self._cat_panel_status.configure(text="all categories", fg=TEXT_DIM)
 
     def _apply_cat_filters(self):
-        """Apply selected categories and refresh."""
         self._selected_cat_names = [
             name for name, v in self._cat_check_vars.items() if v.get()
         ]
         self._cat_filter_btn.configure(text_color="white", fg_color="#2d7a2d")
         self.refresh()
 
+    def _sync_game_domain(self, domain: str) -> None:
+        if not domain or domain == self._active_game_domain:
+            return
+        self._active_game_domain = domain
+        self._selected_cat_names = []
+        self._cat_filter_btn.configure(fg_color="#2d7a2d", text_color="white")
+
     def _toggle_cat_sidebar(self):
-        """Toggle the categories side panel (load categories if needed)."""
         api = self._get_api()
         if api is None:
-            self._log("Browse: Set your Nexus API key first.")
+            self._log("Trending: Set your Nexus API key first.")
             return
         domain = self._get_game_domain()
         if not domain:
-            self._log("Browse: No game selected.")
+            self._log("Trending: No game selected.")
             return
         self._sync_game_domain(domain)
 
@@ -446,13 +399,12 @@ class BrowseModsPanel:
             except Exception as exc:
                 def _err(exc=exc):
                     self._cat_filter_btn.configure(state="normal", text="Categories")
-                    self._log(f"Browse: Failed to load categories — {exc}")
+                    self._log(f"Trending: Failed to load categories — {exc}")
                 self._parent.after(0, _err)
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def _open_cat_sidebar(self, domain: str, categories: list):
-        """Show the categories side panel and populate it."""
         self._cat_panel_open = True
         self._parent.grid_columnconfigure(0, minsize=280)
         self._cat_side_panel.grid()
@@ -460,39 +412,20 @@ class BrowseModsPanel:
         self._cat_filter_btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
 
     def _close_cat_sidebar(self):
-        """Hide the categories side panel."""
         self._cat_panel_open = False
         self._cat_side_panel.grid_remove()
         self._parent.grid_columnconfigure(0, minsize=0)
         self._cat_filter_btn.configure(fg_color="#2d7a2d", hover_color="#3a9e3a")
 
-    # ------------------------------------------------------------------
-    # Canvas / scroll helpers
-    # ------------------------------------------------------------------
+    def _go_prev_page(self):
+        if self._page > 0 and not self._loading:
+            self._page -= 1
+            self._load_page()
 
-    def _on_inner_configure(self, _event=None):
-        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
-
-    def _on_canvas_configure(self, event):
-        self._canvas.itemconfig(self._inner_id, width=event.width)
-        if self._regrid_after_id:
-            self._canvas.after_cancel(self._regrid_after_id)
-        self._regrid_after_id = self._canvas.after(250, self._regrid_cards)
-
-    def _scroll(self, units: int):
-        self._canvas.yview_scroll(units, "units")
-
-    def _on_mousewheel(self, event):
-        direction = -1 if event.delta > 0 else 1
-        self._scroll(direction * 10)
-
-    def _bind_scroll(self, widget):
-        """Recursively bind scroll events on a widget and all its children."""
-        widget.bind("<Button-4>",   lambda e: self._scroll(-50), add="+")
-        widget.bind("<Button-5>",   lambda e: self._scroll(50),  add="+")
-        widget.bind("<MouseWheel>", self._on_mousewheel,          add="+")
-        for child in widget.winfo_children():
-            self._bind_scroll(child)
+    def _go_next_page(self):
+        if not self._loading and len(self._entries) >= PAGE_SIZE:
+            self._page += 1
+            self._load_page()
 
     # ------------------------------------------------------------------
     # Card rendering
@@ -503,8 +436,7 @@ class BrowseModsPanel:
             c.card.destroy()
         self._cards.clear()
 
-    def _make_card(self, entry: BrowseModEntry) -> ModCard:
-        """Create a single ModCard and bind scroll events to it."""
+    def _make_card(self, entry: TrendingModEntry) -> ModCard:
         url = f"https://www.nexusmods.com/{entry.domain_name}/mods/{entry.mod_id}"
         card = ModCard(
             self._inner, entry,
@@ -516,7 +448,6 @@ class BrowseModsPanel:
         return card
 
     def _build_cards(self):
-        """Replace all cards with the current entries."""
         self._clear_cards()
         for entry in self._entries:
             self._cards.append(self._make_card(entry))
@@ -524,11 +455,9 @@ class BrowseModsPanel:
         self._load_images()
 
     def _regrid_cards(self):
-        """Place cards in a grid, recomputing column count from canvas width."""
         canvas_w = self._canvas.winfo_width() or (self._cols * (CARD_W + CARD_PAD * 2))
         self._cols = max(1, canvas_w // (CARD_W + CARD_PAD * 2))
 
-        # Determine padding to centre the grid
         total_card_w = self._cols * CARD_W + (self._cols - 1) * CARD_PAD
         x_pad = max(CARD_PAD, (canvas_w - total_card_w) // 2)
 
@@ -542,13 +471,10 @@ class BrowseModsPanel:
                 pady=CARD_PAD,
                 sticky="n",
             )
-
-        # Ensure inner frame columns expand uniformly
         for c in range(self._cols):
             self._inner.grid_columnconfigure(c, weight=1)
 
     def _load_images(self):
-        """Kick off async image loads for cards."""
         for mc in self._cards:
             mc.load_image_async(
                 getattr(mc._entry, "picture_url", "") or "",
@@ -558,54 +484,23 @@ class BrowseModsPanel:
             )
 
     # ------------------------------------------------------------------
-    # Category cycling
-    # ------------------------------------------------------------------
-
-    def _cycle_category(self):
-        self._cat_idx = (self._cat_idx + 1) % len(self._visible_categories)
-        label, _ = self._visible_categories[self._cat_idx]
-        self._cat_btn.configure(text=f"▸ {label}")
-        self.refresh()
-
-    def _sync_game_domain(self, domain: str) -> None:
-        if not domain:
-            return
-        if domain == self._active_game_domain:
-            return
-        self._active_game_domain = domain
-        self._selected_cat_names = []
-        self._cat_filter_btn.configure(fg_color="#2d7a2d", text_color="white")
-
-    # ------------------------------------------------------------------
     # Refresh / Pagination
     # ------------------------------------------------------------------
 
     def refresh(self):
-        """Fetch page 0 of the current category and rebuild cards."""
+        """Fetch page 0 of trending mods."""
         self._page = 0
         self._load_page()
 
-    def _go_prev_page(self):
-        if self._page > 0 and not self._loading and not self._search_active:
-            self._page -= 1
-            self._load_page()
-
-    def _go_next_page(self):
-        if not self._loading and not self._search_active:
-            # Only allow next if we got a full page last time (more might exist)
-            if len(self._entries) >= PAGE_SIZE:
-                self._page += 1
-                self._load_page()
-
     def _load_page(self):
-        """Fetch the current page and replace cards."""
+        """Fetch the current page of trending mods."""
         api = self._get_api()
         if api is None:
-            self._log("Browse: Set your Nexus API key first.")
+            self._log("Trending: Set your Nexus API key first.")
             return
         domain = self._get_game_domain()
         if not domain:
-            self._log("Browse: No game selected.")
+            self._log("Trending: No game selected.")
             return
         self._sync_game_domain(domain)
 
@@ -615,159 +510,71 @@ class BrowseModsPanel:
         self._refresh_btn.configure(state="disabled")
         self._prev_btn.configure(state="disabled")
         self._next_btn.configure(state="disabled")
-        cat_label, cat_method = self._visible_categories[self._cat_idx]
         page = self._page
-        self._status_label.configure(text=f"Loading {cat_label} (page {page + 1})…")
+        self._status_label.configure(
+            text=f"Loading trending (page {page + 1})…"
+        )
 
         def _worker():
             try:
-                entries = self._fetch_page(api, cat_method, domain, page=page,
-                                           cat_names=self._selected_cat_names or None)
+                mod_infos = api.get_trending_mods_graphql(
+                    domain,
+                    count=PAGE_SIZE,
+                    offset=page * PAGE_SIZE,
+                    category_names=self._selected_cat_names or None,
+                )
+                entries: list[TrendingModEntry] = []
+                for info in mod_infos:
+                    entries.append(TrendingModEntry(
+                        mod_id=info.mod_id,
+                        domain_name=getattr(info, "domain_name", domain),
+                        name=info.name or f"Mod {info.mod_id}",
+                        author=info.author or "",
+                        version=info.version or "",
+                        summary=info.summary or "",
+                        endorsement_count=info.endorsement_count or 0,
+                        downloads_total=info.downloads_total or 0,
+                        picture_url=info.picture_url or "",
+                    ))
 
                 def _done():
                     self._entries = entries
                     self._loading = False
                     self._refresh_btn.configure(state="normal")
-                    self._prev_btn.configure(state="normal" if page > 0 else "disabled")
+                    self._prev_btn.configure(
+                        state="normal" if page > 0 else "disabled"
+                    )
                     self._next_btn.configure(
                         state="normal" if len(entries) >= PAGE_SIZE else "disabled"
                     )
                     self._build_cards()
                     self._canvas.yview_moveto(0)
                     self._status_label.configure(
-                        text=f"{cat_label}: page {page + 1}"
+                        text=f"Trending: page {page + 1}"
                     )
-                    self._log(f"Browse: Loaded page {page + 1} — {len(entries)} {cat_label.lower()} mod(s).")
+                    self._log(
+                        f"Trending: Loaded page {page + 1} — {len(entries)} mod(s)"
+                    )
 
                 self._parent.after(0, _done)
 
             except Exception as exc:
-                def _err(exc=exc):
+                def _err():
                     self._loading = False
                     self._refresh_btn.configure(state="normal")
                     self._prev_btn.configure(state="normal")
                     self._next_btn.configure(state="normal")
                     self._status_label.configure(text="Error")
-                    self._log(f"Browse: Failed — {exc}")
+                    self._log(f"Trending: Failed — {exc}")
                 self._parent.after(0, _err)
 
         threading.Thread(target=_worker, daemon=True).start()
-
-    @staticmethod
-    def _fetch_page(api, cat_method: str, domain: str, page: int,
-                    cat_names: list | None = None) -> list[BrowseModEntry]:
-        """Call the API and return a list of BrowseModEntry for one page."""
-        if cat_method == "get_top_mods":
-            mod_infos = api.get_top_mods(
-                domain, count=PAGE_SIZE, offset=page * PAGE_SIZE, category_names=cat_names
-            )
-        else:
-            mod_infos = getattr(api, cat_method)(domain)
-
-        entries: list[BrowseModEntry] = []
-        for info in mod_infos:
-            get = info.get if isinstance(info, dict) else lambda k, d=None: getattr(info, k, d)
-            entries.append(BrowseModEntry(
-                mod_id=get("mod_id", 0),
-                domain_name=get("domain_name", domain),
-                name=get("name", "") or f"Mod {get('mod_id', 0)}",
-                author=get("author", ""),
-                version=get("version", ""),
-                summary=get("summary", ""),
-                description=get("description", ""),
-                endorsement_count=get("endorsement_count", 0),
-                downloads_total=get("downloads_total", 0),
-                picture_url=get("picture_url", ""),
-            ))
-        return entries
-
-    # ------------------------------------------------------------------
-    # Search
-    # ------------------------------------------------------------------
-
-    def _do_search(self):
-        query_text = self._search_var.get().strip()
-        if not query_text:
-            return
-        api = self._get_api()
-        if api is None:
-            self._log("Browse: Set your Nexus API key first.")
-            return
-        domain = self._get_game_domain()
-        if not domain:
-            self._log("Browse: No game selected.")
-            return
-        self._sync_game_domain(domain)
-        if self._loading:
-            return
-
-        self._search_active = True
-        self._loading = True
-        self._prev_btn.configure(state="disabled")
-        self._next_btn.configure(state="disabled")
-        self._search_btn.configure(state="disabled")
-        self._status_label.configure(text=f"Searching '{query_text}'…")
-
-        def _worker():
-            try:
-                cat_names = self._selected_cat_names or None
-                mod_infos = api.search_mods(domain, query_text, category_names=cat_names)
-                entries: list[BrowseModEntry] = []
-                for info in mod_infos:
-                    get = info.get if isinstance(info, dict) else lambda k, d=None: getattr(info, k, d)
-                    entries.append(BrowseModEntry(
-                        mod_id=get("mod_id", 0),
-                        domain_name=get("domain_name", domain),
-                        name=get("name", "") or f"Mod {get('mod_id', 0)}",
-                        author=get("author", ""),
-                        version=get("version", ""),
-                        summary=get("summary", ""),
-                        description=get("description", ""),
-                        endorsement_count=get("endorsement_count", 0),
-                        downloads_total=get("downloads_total", 0),
-                        picture_url=get("picture_url", ""),
-                    ))
-
-                def _done():
-                    self._entries = entries
-                    self._loading = False
-                    self._search_btn.configure(state="normal")
-                    self._prev_btn.configure(state="disabled")
-                    self._next_btn.configure(state="disabled")
-                    self._status_label.configure(
-                        text=f"{len(entries)} result(s) for '{query_text}'"
-                    )
-                    self._build_cards()
-                    self._canvas.yview_moveto(0)
-                    self._log(f"Browse: {len(entries)} search result(s) for '{query_text}' in {domain}.")
-
-                self._parent.after(0, _done)
-
-            except Exception as exc:
-                def _err(exc=exc):
-                    self._loading = False
-                    self._search_btn.configure(state="normal")
-                    self._status_label.configure(text="Search error")
-                    self._log(f"Browse: Search failed — {exc}")
-                self._parent.after(0, _err)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _clear_search(self):
-        self._search_var.set("")
-        self._search_active = False
-        self._entries = []
-        self._clear_cards()
-        self._prev_btn.configure(state="disabled")
-        self._next_btn.configure(state="disabled")
-        cat_label, _ = self._visible_categories[self._cat_idx]
-        self._status_label.configure(text=f"▸ {cat_label} — click Refresh")
 
     # ------------------------------------------------------------------
     # Right-click context menu
     # ------------------------------------------------------------------
 
-    def _show_context_menu(self, event, entry: BrowseModEntry, url: str):
+    def _show_context_menu(self, event, entry: TrendingModEntry, url: str):
         if self._context_menu is None:
             self._context_menu = CTkPopupMenu(
                 self._parent.winfo_toplevel(), width=200, title=""
@@ -781,36 +588,36 @@ class BrowseModsPanel:
         menu.add_command("Endorse Mod", lambda: self._endorse_mod(entry))
         menu.popup(event.x_root, event.y_root)
 
-    def _track_mod(self, entry: BrowseModEntry):
+    def _track_mod(self, entry: TrendingModEntry):
         api = self._get_api()
         if api is None:
-            self._log("Browse: No API key set.")
+            self._log("Trending: No API key set.")
             return
 
         def _worker():
             try:
                 api.track_mod(entry.domain_name, entry.mod_id)
                 self._parent.after(0,
-                    lambda: self._log(f"Browse: Now tracking '{entry.name}' ({entry.mod_id})."))
+                    lambda: self._log(f"Trending: Now tracking '{entry.name}' ({entry.mod_id})."))
             except Exception as exc:
                 self._parent.after(0,
-                    lambda: self._log(f"Browse: Track failed — {exc}"))
+                    lambda: self._log(f"Trending: Track failed — {exc}"))
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _endorse_mod(self, entry: BrowseModEntry):
+    def _endorse_mod(self, entry: TrendingModEntry):
         api = self._get_api()
         if api is None:
-            self._log("Browse: No API key set.")
+            self._log("Trending: No API key set.")
             return
 
         def _worker():
             try:
                 api.endorse_mod(entry.domain_name, entry.mod_id, entry.version)
                 self._parent.after(0,
-                    lambda: self._log(f"Browse: Endorsed '{entry.name}' ({entry.mod_id})."))
+                    lambda: self._log(f"Trending: Endorsed '{entry.name}' ({entry.mod_id})."))
             except Exception as exc:
                 self._parent.after(0,
-                    lambda: self._log(f"Browse: Endorse failed — {exc}"))
+                    lambda: self._log(f"Trending: Endorse failed — {exc}"))
 
         threading.Thread(target=_worker, daemon=True).start()

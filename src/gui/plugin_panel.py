@@ -1,6 +1,7 @@
 """
-Plugin panel: Plugins, Mod Files, Data, Downloads, Tracked, Endorsed tabs.
+Plugin panel: Plugins, Mod Files, Data, Downloads tabs.
 Used by App. Imports theme, game_helpers, dialogs, install_mod, subpanels.
+Browse/Tracked/Endorsed are shown in the Nexus overlay on the modlist panel.
 """
 
 import json
@@ -41,9 +42,7 @@ from gui.dialogs import _PriorityDialog, _ExeConfigDialog, _ExeFilterDialog
 from gui.install_mod import install_mod_from_archive
 from gui.mod_name_utils import _suggest_mod_names as suggest_mod_names
 from gui.downloads_panel import DownloadsPanel
-from gui.tracked_mods_panel import TrackedModsPanel
-from gui.endorsed_mods_panel import EndorsedModsPanel
-from gui.browse_mods_panel import BrowseModsPanel
+from gui.download_locations_overlay import DownloadLocationsOverlay
 from gui.ctk_components import CTkTreeview
 
 from Utils.config_paths import get_exe_args_path, get_game_config_dir
@@ -63,7 +62,7 @@ from Utils.plugins import (
 )
 from Utils.plugin_parser import check_missing_masters
 from LOOT.loot_sorter import sort_plugins as loot_sort, is_available as loot_available
-from Nexus.nexus_meta import build_meta_from_download, write_meta, read_meta
+from Nexus.nexus_meta import write_meta, read_meta
 
 
 def _read_prefix_runner(compat_data: Path) -> str:
@@ -181,6 +180,7 @@ class PluginPanel(ctk.CTkFrame):
         self._pool_lock_rects: list[int] = []
         self._pool_lock_marks: list[int] = []
         self._predraw_after_id: str | None = None
+        self._marker_strip_after_id: str | None = None
 
         # Canvas dimensions
         self._pcanvas_w: int = 400
@@ -260,16 +260,13 @@ class PluginPanel(ctk.CTkFrame):
         )
         self._tabs.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
 
-        for name in ("Plugins", "Mod Files", "Data", "Downloads", "Tracked", "Endorsed", "Browse"):
+        for name in ("Plugins", "Mod Files", "Data", "Downloads"):
             self._tabs.add(name)
 
         self._build_plugins_tab()
         self._build_mod_files_tab()
         self._build_data_tab()
         self._build_downloads_tab()
-        self._build_tracked_tab()
-        self._build_endorsed_tab()
-        self._build_browse_tab()
 
     # ------------------------------------------------------------------
     # Executable toolbar — scan / run
@@ -1809,491 +1806,29 @@ class PluginPanel(ctk.CTkFrame):
             tab,
             log_fn=self._log,
             install_fn=self._install_from_downloads,
+            on_open_locations=self._on_open_download_locations,
         )
 
-    def _build_tracked_tab(self):
-        tab = self._tabs.tab("Tracked")
-
-        def _get_api():
-            app = self.winfo_toplevel()
-            return getattr(app, "_nexus_api", None)
-
-        def _get_game_domain():
-            app = self.winfo_toplevel()
-            topbar = getattr(app, "_topbar", None)
-            if topbar is None:
-                return ""
-            game = _GAMES.get(topbar._game_var.get())
-            if game is None or not game.is_configured():
-                return ""
-            return game.nexus_game_domain
-
-        self._tracked_panel = TrackedModsPanel(
-            tab,
-            log_fn=self._log,
-            get_api=_get_api,
-            get_game_domain=_get_game_domain,
-            install_fn=self._install_from_tracked,
+    def _on_open_download_locations(self):
+        """Show the download locations overlay over the plugin panel."""
+        self._close_download_locations_overlay()
+        panel = DownloadLocationsOverlay(
+            self,
+            on_close=self._close_download_locations_overlay,
+            on_saved=lambda: self._downloads_panel.refresh(),
         )
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._download_locations_overlay = panel
 
-    def _install_from_tracked(self, entry):
-        """Download and install a mod from the Tracked Mods panel.
-
-        For premium users: finds the latest MAIN file, downloads it directly,
-        and triggers the standard install flow.
-        For free users: opens the mod's files page in the browser so they can
-        click "Download with Mod Manager".
-        """
-        app = self.winfo_toplevel()
-        api = getattr(app, "_nexus_api", None)
-        if api is None:
-            self._log("Tracked Mods: Set your Nexus API key first.")
-            return
-
-        topbar = getattr(app, "_topbar", None)
-        game = _GAMES.get(topbar._game_var.get()) if topbar else None
-        if game is None or not game.is_configured():
-            self._log("Tracked Mods: No configured game selected.")
-            return
-
-        domain = entry.domain_name
-        mod_id = entry.mod_id
-        mod_name = entry.name or f"Mod {mod_id}"
-
-        self._log(f"Tracked Mods: Installing '{mod_name}'...")
-
-        mod_panel = getattr(app, "_mod_panel", None)
-        cancel_event_tracked = mod_panel.get_download_cancel_event() if mod_panel else None
-        if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_event_tracked)
-        log_fn = self._log
-
-        def _worker():
-            downloader = getattr(app, "_nexus_downloader", None)
-            if downloader is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
-                    log_fn("Tracked Mods: Downloader not initialised."),
-                ))
-                return
-
-            # Check if the user is premium
-            is_premium = False
+    def _close_download_locations_overlay(self):
+        """Destroy the download locations overlay."""
+        panel = getattr(self, "_download_locations_overlay", None)
+        if panel is not None:
             try:
-                user = api.validate()
-                is_premium = user.is_premium
+                panel.destroy()
             except Exception:
                 pass
-
-            if not is_premium:
-                files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
-                def _fallback():
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_event_tracked)
-                    log_fn("Tracked Mods: Premium required for direct download.")
-                    log_fn(f"Tracked Mods: Opening files page — click \"Download with Mod Manager\" there.")
-                    log_fn(f"Tracked Mods: {files_url}")
-                    try:
-                        open_url(files_url)
-                    except Exception as exc:
-                        log_fn(f"Tracked Mods: Could not open browser — {exc}")
-                app.after(0, _fallback)
-                return
-
-            # Premium user — find the latest MAIN file and download directly
-            file_info = None
-            try:
-                files_resp = api.get_mod_files(domain, mod_id)
-                main_files = [f for f in files_resp.files
-                              if f.category_name == "MAIN"]
-                if main_files:
-                    file_info = max(main_files,
-                                    key=lambda f: f.uploaded_timestamp)
-                elif files_resp.files:
-                    file_info = max(files_resp.files,
-                                    key=lambda f: f.uploaded_timestamp)
-            except Exception as exc:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
-                    log_fn(f"Tracked Mods: Could not fetch file list — {exc}"),
-                ))
-                return
-
-            if file_info is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
-                    log_fn(f"Tracked Mods: No files found for '{mod_name}'."),
-                ))
-                return
-
-            result = downloader.download_file(
-                game_domain=domain,
-                mod_id=mod_id,
-                file_id=file_info.file_id,
-                progress_cb=lambda cur, total: app.after(
-                    0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t, cancel=cancel_event_tracked)
-                        if mod_panel else None
-                    )
-                ),
-                cancel=cancel_event_tracked,
-                known_file_name=file_info.file_name,
-            )
-
-            if result.success and result.file_path:
-                def _install():
-                    # Defer if a modal dialog (e.g. FOMOD wizard) currently has
-                    # the input grab — running install_mod_from_archive inside
-                    # wait_window's event loop causes the UI to freeze.
-                    try:
-                        if app.grab_current() is not None:
-                            app.after(500, _install)
-                            return
-                    except Exception:
-                        pass
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_event_tracked)
-                    log_fn(f"Tracked Mods: Installing '{mod_name}'...")
-                    try:
-                        _prebuilt = build_meta_from_download(
-                            game_domain=domain,
-                            mod_id=mod_id,
-                            file_id=file_info.file_id,
-                            archive_name=result.file_name,
-                            mod_info=entry,
-                            file_info=file_info,
-                        )
-                    except Exception:
-                        _prebuilt = None
-                    install_mod_from_archive(
-                        str(result.file_path), app, log_fn, game, mod_panel,
-                        prebuilt_meta=_prebuilt)
-                app.after(0, _install)
-            else:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_tracked) if mod_panel else None,
-                    log_fn(f"Tracked Mods: Download failed — {result.error}"),
-                ))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _build_endorsed_tab(self):
-        tab = self._tabs.tab("Endorsed")
-
-        def _get_api():
-            app = self.winfo_toplevel()
-            return getattr(app, "_nexus_api", None)
-
-        def _get_game_domain():
-            app = self.winfo_toplevel()
-            topbar = getattr(app, "_topbar", None)
-            if topbar is None:
-                return ""
-            game = _GAMES.get(topbar._game_var.get())
-            if game is None or not game.is_configured():
-                return ""
-            return game.nexus_game_domain
-
-        self._endorsed_panel = EndorsedModsPanel(
-            tab,
-            log_fn=self._log,
-            get_api=_get_api,
-            get_game_domain=_get_game_domain,
-            install_fn=self._install_from_endorsed,
-        )
-
-    def _install_from_endorsed(self, entry):
-        """Download and install a mod from the Endorsed Mods panel.
-
-        For premium users: finds the latest MAIN file, downloads it directly,
-        and triggers the standard install flow.
-        For free users: opens the mod's files page in the browser so they can
-        click "Download with Mod Manager".
-        """
-        app = self.winfo_toplevel()
-        api = getattr(app, "_nexus_api", None)
-        if api is None:
-            self._log("Endorsed Mods: Set your Nexus API key first.")
-            return
-
-        topbar = getattr(app, "_topbar", None)
-        game = _GAMES.get(topbar._game_var.get()) if topbar else None
-        if game is None or not game.is_configured():
-            self._log("Endorsed Mods: No configured game selected.")
-            return
-
-        domain = entry.domain_name
-        mod_id = entry.mod_id
-        mod_name = entry.name or f"Mod {mod_id}"
-
-        self._log(f"Endorsed Mods: Installing '{mod_name}'...")
-
-        mod_panel = getattr(app, "_mod_panel", None)
-        cancel_event_endorsed = mod_panel.get_download_cancel_event() if mod_panel else None
-        if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_event_endorsed)
-        log_fn = self._log
-
-        def _worker():
-            downloader = getattr(app, "_nexus_downloader", None)
-            if downloader is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
-                    log_fn("Endorsed Mods: Downloader not initialised."),
-                ))
-                return
-
-            # Check if the user is premium
-            is_premium = False
-            try:
-                user = api.validate()
-                is_premium = user.is_premium
-            except Exception:
-                pass
-
-            if not is_premium:
-                files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
-                def _fallback():
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_event_endorsed)
-                    log_fn("Endorsed Mods: Premium required for direct download.")
-                    log_fn(f"Endorsed Mods: Opening files page — click \"Download with Mod Manager\" there.")
-                    log_fn(f"Endorsed Mods: {files_url}")
-                    try:
-                        open_url(files_url)
-                    except Exception as exc:
-                        log_fn(f"Endorsed Mods: Could not open browser — {exc}")
-                app.after(0, _fallback)
-                return
-
-            # Premium user — find the latest MAIN file and download directly
-            file_info = None
-            try:
-                files_resp = api.get_mod_files(domain, mod_id)
-                main_files = [f for f in files_resp.files
-                              if f.category_name == "MAIN"]
-                if main_files:
-                    file_info = max(main_files,
-                                    key=lambda f: f.uploaded_timestamp)
-                elif files_resp.files:
-                    file_info = max(files_resp.files,
-                                    key=lambda f: f.uploaded_timestamp)
-            except Exception as exc:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
-                    log_fn(f"Endorsed Mods: Could not fetch file list — {exc}"),
-                ))
-                return
-
-            if file_info is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
-                    log_fn(f"Endorsed Mods: No files found for '{mod_name}'."),
-                ))
-                return
-
-            result = downloader.download_file(
-                game_domain=domain,
-                mod_id=mod_id,
-                file_id=file_info.file_id,
-                progress_cb=lambda cur, total: app.after(
-                    0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t, cancel=cancel_event_endorsed)
-                        if mod_panel else None
-                    )
-                ),
-                cancel=cancel_event_endorsed,
-                known_file_name=file_info.file_name,
-            )
-
-            if result.success and result.file_path:
-                def _install():
-                    # Defer if a modal dialog (e.g. FOMOD wizard) currently has
-                    # the input grab — running install_mod_from_archive inside
-                    # wait_window's event loop causes the UI to freeze.
-                    try:
-                        if app.grab_current() is not None:
-                            app.after(500, _install)
-                            return
-                    except Exception:
-                        pass
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_event_endorsed)
-                    log_fn(f"Endorsed Mods: Installing '{mod_name}'...")
-                    try:
-                        _prebuilt = build_meta_from_download(
-                            game_domain=domain,
-                            mod_id=mod_id,
-                            file_id=file_info.file_id,
-                            archive_name=result.file_name,
-                            mod_info=entry,
-                            file_info=file_info,
-                        )
-                    except Exception:
-                        _prebuilt = None
-                    install_mod_from_archive(
-                        str(result.file_path), app, log_fn, game, mod_panel,
-                        prebuilt_meta=_prebuilt)
-                app.after(0, _install)
-            else:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_endorsed) if mod_panel else None,
-                    log_fn(f"Endorsed Mods: Download failed — {result.error}"),
-                ))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _build_browse_tab(self):
-        tab = self._tabs.tab("Browse")
-
-        def _get_api():
-            app = self.winfo_toplevel()
-            return getattr(app, "_nexus_api", None)
-
-        def _get_game_domain():
-            app = self.winfo_toplevel()
-            topbar = getattr(app, "_topbar", None)
-            if topbar is None:
-                return ""
-            game = _GAMES.get(topbar._game_var.get())
-            if game is None or not game.is_configured():
-                return ""
-            return game.nexus_game_domain
-
-        self._browse_panel = BrowseModsPanel(
-            tab,
-            log_fn=self._log,
-            get_api=_get_api,
-            get_game_domain=_get_game_domain,
-            install_fn=self._install_from_browse,
-        )
-
-    def _install_from_browse(self, entry):
-        """Download and install a mod from the Browse panel."""
-        app = self.winfo_toplevel()
-        api = getattr(app, "_nexus_api", None)
-        if api is None:
-            self._log("Browse: Set your Nexus API key first.")
-            return
-
-        topbar = getattr(app, "_topbar", None)
-        game = _GAMES.get(topbar._game_var.get()) if topbar else None
-        if game is None or not game.is_configured():
-            self._log("Browse: No configured game selected.")
-            return
-
-        domain = entry.domain_name
-        mod_id = entry.mod_id
-        mod_name = entry.name or f"Mod {mod_id}"
-
-        self._log(f"Browse: Installing '{mod_name}'...")
-
-        mod_panel = getattr(app, "_mod_panel", None)
-        cancel_event_browse = mod_panel.get_download_cancel_event() if mod_panel else None
-        if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_event_browse)
-        log_fn = self._log
-
-        def _worker():
-            downloader = getattr(app, "_nexus_downloader", None)
-            if downloader is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
-                    log_fn("Browse: Downloader not initialised."),
-                ))
-                return
-
-            is_premium = False
-            try:
-                user = api.validate()
-                is_premium = user.is_premium
-            except Exception:
-                pass
-
-            if not is_premium:
-                files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
-                def _fallback():
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_event_browse)
-                    log_fn("Browse: Premium required for direct download.")
-                    log_fn(f'Browse: Opening files page — click "Download with Mod Manager" there.')
-                    log_fn(f"Browse: {files_url}")
-                    try:
-                        open_url(files_url)
-                    except Exception as exc:
-                        log_fn(f"Browse: Could not open browser — {exc}")
-                app.after(0, _fallback)
-                return
-
-            file_info = None
-            try:
-                files_resp = api.get_mod_files(domain, mod_id)
-                main_files = [f for f in files_resp.files
-                              if f.category_name == "MAIN"]
-                if main_files:
-                    file_info = max(main_files,
-                                    key=lambda f: f.uploaded_timestamp)
-                elif files_resp.files:
-                    file_info = max(files_resp.files,
-                                    key=lambda f: f.uploaded_timestamp)
-            except Exception as exc:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
-                    log_fn(f"Browse: Could not fetch file list — {exc}"),
-                ))
-                return
-
-            if file_info is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
-                    log_fn(f"Browse: No files found for '{mod_name}'."),
-                ))
-                return
-
-            result = downloader.download_file(
-                game_domain=domain,
-                mod_id=mod_id,
-                file_id=file_info.file_id,
-                progress_cb=lambda cur, total: app.after(
-                    0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t, cancel=cancel_event_browse)
-                        if mod_panel else None
-                    )
-                ),
-                cancel=cancel_event_browse,
-                known_file_name=file_info.file_name,
-            )
-
-            if result.success and result.file_path:
-                def _install():
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_event_browse)
-                    log_fn(f"Browse: Installing '{mod_name}'...")
-                    # Build metadata now (we already have entry + file_info)
-                    # and pass it straight into the installer so it doesn't
-                    # need to fire extra get_mod / get_mod_files API calls.
-                    try:
-                        _prebuilt = build_meta_from_download(
-                            game_domain=domain,
-                            mod_id=mod_id,
-                            file_id=file_info.file_id,
-                            archive_name=result.file_name,
-                            mod_info=entry,
-                            file_info=file_info,
-                        )
-                    except Exception:
-                        _prebuilt = None
-                    install_mod_from_archive(
-                        str(result.file_path), app, log_fn, game, mod_panel,
-                        prebuilt_meta=_prebuilt)
-                app.after(0, _install)
-            else:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_event_browse) if mod_panel else None,
-                    log_fn(f"Browse: Download failed — {result.error}"),
-                ))
-
-        threading.Thread(target=_worker, daemon=True).start()
+            self._download_locations_overlay = None
 
     def _install_from_downloads(self, archive_path: str):
         """Trigger the standard install-mod flow for an archive from Downloads."""
@@ -2338,6 +1873,8 @@ class PluginPanel(ctk.CTkFrame):
 
         self._pcanvas = tk.Canvas(canvas_frame, bg=BG_DEEP, bd=0,
                                   highlightthickness=0, yscrollincrement=1, takefocus=0)
+        self._pmarker_strip = tk.Canvas(canvas_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
+                                        width=4, takefocus=0)
         self._pvsb = tk.Scrollbar(canvas_frame, orient="vertical",
                                   command=self._pcanvas.yview,
                                   bg=BG_SEP, troughcolor=BG_DEEP,
@@ -2345,7 +1882,9 @@ class PluginPanel(ctk.CTkFrame):
                                   highlightthickness=0, bd=0)
         self._pcanvas.configure(yscrollcommand=self._pvsb.set)
         self._pcanvas.grid(row=0, column=0, sticky="nsew")
-        self._pvsb.grid(row=0, column=1, sticky="ns")
+        self._pmarker_strip.grid(row=0, column=1, sticky="ns")
+        self._pvsb.grid(row=0, column=2, sticky="ns")
+        self._pmarker_strip.bind("<Configure>", self._on_pmarker_strip_resize)
 
         self._pcanvas.bind("<Configure>",       self._on_pcanvas_resize)
         self._pcanvas.bind("<Button-4>",        self._on_pscroll_up)
@@ -2972,6 +2511,39 @@ class PluginPanel(ctk.CTkFrame):
                 self._pool_data_idx[s] = -1
 
         c.configure(scrollregion=(0, 0, cw, max(total_h, canvas_h)))
+        self._draw_marker_strip()
+
+    def _on_pmarker_strip_resize(self, _event):
+        if self._marker_strip_after_id is not None:
+            self.after_cancel(self._marker_strip_after_id)
+        self._marker_strip_after_id = self.after(250, self._draw_marker_strip)
+
+    def _draw_marker_strip(self):
+        """Draw orange tick marks on the strip beside the plugins scrollbar for
+        plugins belonging to the selected mod (_highlighted_plugins)."""
+        self._marker_strip_after_id = None
+        c = self._pmarker_strip
+        c.delete("marker")
+        entries = self._plugin_entries
+        n = len(entries)
+        if not n or not self._highlighted_plugins:
+            return
+        strip_h = c.winfo_height()
+        if strip_h <= 1:
+            return
+
+        # Row indices of highlighted plugins
+        highlighted_rows = {i for i, e in enumerate(entries) if e.name in self._highlighted_plugins}
+        if not highlighted_rows:
+            return
+
+        def _tick(row_idx: int):
+            frac = row_idx / n
+            y = max(2, min(int(frac * strip_h), strip_h - 4))
+            c.create_rectangle(0, y, 4, y + 3, fill=plugin_mod, outline="", tags="marker")
+
+        for row in highlighted_rows:
+            _tick(row)
 
     def _schedule_predraw(self) -> None:
         """Debounced _predraw — coalesces rapid scroll/resize events."""

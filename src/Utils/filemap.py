@@ -34,6 +34,7 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 import threading
 from pathlib import Path
+from functools import lru_cache
 
 import msgpack
 
@@ -211,16 +212,19 @@ def fix_flat_staging_folders(staging_root: Path) -> list[str]:
     return fixed
 
 
+@lru_cache(maxsize=2048)
+def _upper_count(s: str) -> int:
+    return sum(1 for c in s if c.isupper())
+
+
 def _pick_canonical_segment(a: str, b: str) -> str:
     """Choose the folder name with more uppercase characters.
     On a tie, prefer the one that comes first alphabetically (stable choice).
     """
-    if sum(1 for c in a if c.isupper()) >= sum(1 for c in b if c.isupper()):
-        return a
-    return b
+    return a if _upper_count(a) >= _upper_count(b) else b
 
 
-def _normalize_folder_cases(all_files: dict[str, dict[str, str]]) -> None:
+def _normalize_folder_cases(*all_files_list: dict[str, dict[str, str]]) -> None:
     """Normalize folder name casing across all mods in-place.
 
     Folder names are case-insensitive on Windows (and in the game engine), so
@@ -230,36 +234,48 @@ def _normalize_folder_cases(all_files: dict[str, dict[str, str]]) -> None:
     losing variant so the whole filemap is consistent.
 
     File *names* are left exactly as they are.
+    Accepts one or more dicts (e.g. normal and root) and builds canonical
+    casing from all in one pass, then rewrites each in turn.
     """
-    # Collect every unique folder-segment casing seen across all mods.
-    # key: segment.lower()  →  canonical casing (most uppercase wins)
+    # Collect every unique folder-segment casing seen across all dicts in one pass.
     canonical: dict[str, str] = {}
-    for files in all_files.values():
-        for rel_str in files.values():
-            parts = rel_str.split("/")
-            # All parts except the last are folder segments
-            for seg in parts[:-1]:
-                key = seg.lower()
-                if key not in canonical:
-                    canonical[key] = seg
-                else:
-                    canonical[key] = _pick_canonical_segment(canonical[key], seg)
+    for all_files in all_files_list:
+        if not all_files:
+            continue
+        for files in all_files.values():
+            for rel_str in files.values():
+                for seg in rel_str.split("/")[:-1]:
+                    key = seg.lower()
+                    if key not in canonical:
+                        canonical[key] = seg
+                    else:
+                        canonical[key] = _pick_canonical_segment(canonical[key], seg)
 
     if not canonical:
         return
 
     # Rewrite rel_str values so every folder segment uses the canonical casing.
-    # We only mutate values (never add/remove keys), so iterating keys() directly is safe.
-    for files in all_files.values():
-        for rel_key in files:
-            rel_str = files[rel_key]
-            parts = rel_str.split("/")
-            # Normalise folder segments (all but the last), leave filename alone
-            new_parts = [
-                canonical.get(seg.lower(), seg) for seg in parts[:-1]
-            ] + [parts[-1]]
-            new_rel = "/".join(new_parts)
-            if new_rel != rel_str:
+    for all_files in all_files_list:
+        if not all_files:
+            continue
+        for files in all_files.values():
+            for rel_key in files:
+                rel_str = files[rel_key]
+                if "/" not in rel_str:
+                    continue
+                parts = rel_str.split("/")
+                # Fast path: skip if all folder segments already canonical
+                changed = False
+                for seg in parts[:-1]:
+                    c = canonical.get(seg.lower(), seg)
+                    if c != seg:
+                        changed = True
+                        break
+                if not changed:
+                    continue
+                new_rel = "/".join(
+                    canonical.get(seg.lower(), seg) for seg in parts[:-1]
+                ) + "/" + parts[-1]
                 files[rel_key] = new_rel
 
 
@@ -313,12 +329,11 @@ def _write_mod_index(
 ) -> None:
     """Normalize paths, write the full index atomically, then update the cache."""
     global _index_cache
-    # Normalize folder-case across all mods before writing so build_filemap
-    # can skip the normalize step entirely on every rebuild.
-    # Skip when the game requires case-sensitive folder names (e.g. Stardew Valley).
     if normalize_folder_case:
-        _normalize_folder_cases({name: normal for name, (normal, _) in index.items()})
-        _normalize_folder_cases({name: root   for name, (_, root)   in index.items() if root})
+        _normalize_folder_cases(
+            {name: normal for name, (normal, _) in index.items()},
+            {name: root for name, (_, root) in index.items() if root},
+        )
     index_path.parent.mkdir(parents=True, exist_ok=True)
     mods = []
     for mod_name, (normal, root) in index.items():
@@ -623,19 +638,20 @@ def build_filemap(
         for _mod, _names in disabled_plugins.items():
             _disabled_lower[_mod] = {n.lower() for n in _names}
 
-    # Write sorted output
+    # Write sorted output — build lines and write in one pass to avoid 80k+ write() calls
     output_path.parent.mkdir(parents=True, exist_ok=True)
     sorted_keys = sorted(filemap)
-    count = 0
+    lines: list[str] = []
+    for rel_key in sorted_keys:
+        rel_str, mod_name = filemap[rel_key]
+        # Skip root-level files that the user has disabled for this mod
+        if _disabled_lower and "/" not in rel_key and mod_name in _disabled_lower:
+            if rel_key in _disabled_lower[mod_name]:
+                continue
+        lines.append(f"{rel_str}\t{mod_name}\n")
     with output_path.open("w", encoding="utf-8") as f:
-        for rel_key in sorted_keys:
-            rel_str, mod_name = filemap[rel_key]
-            # Skip root-level files that the user has disabled for this mod
-            if _disabled_lower and "/" not in rel_key and mod_name in _disabled_lower:
-                if rel_key in _disabled_lower[mod_name]:
-                    continue
-            f.write(f"{rel_str}\t{mod_name}\n")
-            count += 1
+        f.write("".join(lines))
+    count = len(lines)
 
     # Write root-deploy filemap if any root files were found.
     root_output = output_path.parent / "filemap_root.txt"

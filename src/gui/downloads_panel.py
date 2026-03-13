@@ -4,13 +4,19 @@ Downloads panel — scans the user's Downloads folder for archive files
 
 Right-clicking an entry triggers the standard mod-install flow as if the
 user had clicked "Install Mod" and selected that file manually.
+
+Users can add extra scan locations via the Locations button; paths are
+saved to ~/.config/AmethystModManager/download_locations.json.
 """
 
 import os
 import tkinter as tk
 from pathlib import Path
+from typing import Callable, Optional
 
+import customtkinter as ctk
 from gui.ctk_components import CTkPopupMenu
+from gui.download_locations_overlay import load_extra_download_locations
 from gui.theme import (
     BG_DEEP,
     BG_HEADER,
@@ -20,6 +26,7 @@ from gui.theme import (
     BG_HOVER,
     BG_SELECT,
     ACCENT,
+    ACCENT_HOV,
     TEXT_MAIN,
     TEXT_DIM,
     TEXT_SEP,
@@ -75,10 +82,17 @@ class DownloadsPanel:
     existing parent frame (the "Downloads" tab of PluginPanel).
     """
 
-    def __init__(self, parent_tab: tk.Widget, log_fn=None, install_fn=None):
+    def __init__(
+        self,
+        parent_tab: tk.Widget,
+        log_fn=None,
+        install_fn=None,
+        on_open_locations: Optional[Callable[[], None]] = None,
+    ):
         self._parent = parent_tab
         self._log = log_fn or (lambda msg: None)
         self._install_fn = install_fn or (lambda path: None)
+        self._on_open_locations = on_open_locations or (lambda: None)
 
         self._files: list[Path] = []
         self._sel_idx: int = -1
@@ -101,13 +115,16 @@ class DownloadsPanel:
         toolbar = tk.Frame(tab, bg=BG_HEADER, height=28)
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.grid_propagate(False)
-        tk.Button(
-            toolbar, text="↺ Refresh",
-            bg=BG_HEADER, fg=TEXT_MAIN, activebackground=BG_HOVER,
-            relief="flat", font=FONT_SMALL,
-            bd=0, cursor="hand2",
-            command=self.refresh,
+        ctk.CTkButton(
+            toolbar, text="↺ Refresh", width=72, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self.refresh,
         ).pack(side="left", padx=8, pady=2)
+        ctk.CTkButton(
+            toolbar, text="Locations", width=85, height=26,
+            fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="white",
+            font=FONT_HEADER, command=self._on_open_locations,
+        ).pack(side="left", padx=(0, 8), pady=2)
 
         self._dir_label = tk.Label(
             toolbar, text="", anchor="w",
@@ -145,23 +162,41 @@ class DownloadsPanel:
     # Scanning
     # ------------------------------------------------------------------
 
+    def _get_scan_dirs(self) -> list[Path]:
+        """Return all directories to scan: default Downloads + user-added locations."""
+        dirs: list[Path] = [_get_downloads_dir()]
+        seen: set[Path] = {dirs[0].resolve()}
+        for p in load_extra_download_locations():
+            path = Path(p).expanduser().resolve()
+            if path.is_dir() and path not in seen:
+                dirs.append(path)
+                seen.add(path)
+        return dirs
+
     def refresh(self):
-        """Scan ~/Downloads for archive files and rebuild everything."""
-        dl_dir = _get_downloads_dir()
-        self._dir_label.configure(text=str(dl_dir))
+        """Scan Downloads + extra locations for archive files and rebuild everything."""
+        scan_dirs = self._get_scan_dirs()
+        primary = scan_dirs[0]
+        self._dir_label.configure(
+            text=str(primary) + (" +" + str(len(scan_dirs) - 1) + " more" if len(scan_dirs) > 1 else "")
+        )
 
         self._files = []
-        if dl_dir.is_dir():
+        for dl_dir in scan_dirs:
+            if not dl_dir.is_dir():
+                continue
             for entry in sorted(dl_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
                 if entry.is_file() and _is_archive(entry.name):
                     self._files.append(entry)
 
+        # Sort by modification time (newest first)
+        self._files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         self._sel_idx = -1
         self._rebuild_buttons()
         self._repaint()
 
         count = len(self._files)
-        self._log(f"Downloads: found {count} archive(s) in {dl_dir}")
+        self._log(f"Downloads: found {count} archive(s) in {len(scan_dirs)} location(s)")
 
     # ------------------------------------------------------------------
     # Button management  (only recreated when the file list changes)

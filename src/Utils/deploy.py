@@ -472,83 +472,80 @@ def deploy_filemap(
     _isfile        = os.path.isfile
     sorted_strip   = sorted(_strip) if _strip else []
     nocase_cache: dict[Path, dict[str, list[Path]]] = {}
+    mod_index_cache: dict[Path, dict[str, Path]] = {}
 
-    # Single-pass: read, deduplicate, and resolve in one loop.
+    # Single-pass: read file once, then process. Avoids second disk read.
     # Using os.path.isfile (one C-level stat) instead of Path.is_file()
     # avoids the overhead of constructing Path objects for the fast path.
+    with filemap_path.open(encoding="utf-8") as f:
+        _tab_lines = [ln.rstrip("\n") for ln in f if "\t" in ln]
+    total_lines = len(_tab_lines)
     line_idx = 0
-    total_lines = 0
-    with filemap_path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if "\t" not in line:
-                continue
-            total_lines += 1
 
-    with filemap_path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if "\t" not in line:
-                continue
-            rel_str, mod_name = line.split("\t", 1)
-            rel_lower = rel_str.lower()
-            if rel_lower in already_seen:
-                continue
-            already_seen.add(rel_lower)
-            if rel_lower in _exclude:
-                continue
-            line_idx += 1
+    for line in _tab_lines:
+        rel_str, mod_name = line.split("\t", 1)
+        rel_lower = rel_str.lower()
+        if rel_lower in already_seen:
+            continue
+        already_seen.add(rel_lower)
+        if rel_lower in _exclude:
+            continue
+        line_idx += 1
 
-            # Fast path: direct string join + stat via os.path.isfile
-            if mod_name == _OVERWRITE_NAME:
-                candidate_str = _overwrite_str + "/" + rel_str
-            else:
-                candidate_str = _staging_str + "/" + mod_name + "/" + rel_str
-            if _isfile(candidate_str):
-                src = Path(candidate_str)
-            else:
-                # Slow path: case-insensitive resolution
-                mod_root = overwrite_dir if mod_name == _OVERWRITE_NAME else staging_root / mod_name
-                src = _resolve_nocase(mod_root, rel_str, cache=nocase_cache)
-                if src is None and sorted_strip:
-                    for p1 in sorted_strip:
-                        src = _resolve_nocase(mod_root, p1 + "/" + rel_str, cache=nocase_cache)
-                        if src is not None:
-                            break
-                        for p2 in sorted_strip:
-                            src = _resolve_nocase(mod_root, p1 + "/" + p2 + "/" + rel_str, cache=nocase_cache)
-                            if src is not None:
-                                break
-                        if src is not None:
-                            break
-                if src is None and mod_name != _OVERWRITE_NAME:
-                    mod_strip = _per_mod.get(mod_name)
-                    if mod_strip:
-                        path_prefixes = [p for p in mod_strip if "/" in p]
-                        for p in path_prefixes:
-                            src = _resolve_nocase(mod_root, p + "/" + rel_str, cache=nocase_cache)
-                            if src is not None:
-                                break
-                        if src is None:
-                            segment_list = [p for p in mod_strip if "/" not in p]
-                            prefix_path = ""
-                            for seg in segment_list:
-                                prefix_path = prefix_path + seg + "/" if prefix_path else seg + "/"
-                                src = _resolve_nocase(mod_root, prefix_path + rel_str, cache=nocase_cache)
-                                if src is not None:
-                                    break
-
+        # Fast path: direct string join + stat via os.path.isfile
+        if mod_name == _OVERWRITE_NAME:
+            candidate_str = _overwrite_str + "/" + rel_str
+        else:
+            candidate_str = _staging_str + "/" + mod_name + "/" + rel_str
+        if _isfile(candidate_str):
+            src = Path(candidate_str)
+        else:
+            # Slow path: use per-mod index for O(1) lookup when available
+            mod_root = overwrite_dir if mod_name == _OVERWRITE_NAME else staging_root / mod_name
+            if mod_root not in mod_index_cache:
+                mod_index_cache[mod_root] = _build_mod_index(mod_root)
+            src = mod_index_cache[mod_root].get(rel_lower)
             if src is None:
-                _log(f"  WARN: source not found — {rel_str} ({mod_name})")
-                continue
+                src = _resolve_nocase(mod_root, rel_str, cache=nocase_cache)
+            if src is None and sorted_strip:
+                for p1 in sorted_strip:
+                    src = _resolve_nocase(mod_root, p1 + "/" + rel_str, cache=nocase_cache)
+                    if src is not None:
+                        break
+                    for p2 in sorted_strip:
+                        src = _resolve_nocase(mod_root, p1 + "/" + p2 + "/" + rel_str, cache=nocase_cache)
+                        if src is not None:
+                            break
+                    if src is not None:
+                        break
+            if src is None and mod_name != _OVERWRITE_NAME:
+                mod_strip = _per_mod.get(mod_name)
+                if mod_strip:
+                    path_prefixes = [p for p in mod_strip if "/" in p]
+                    for p in path_prefixes:
+                        src = _resolve_nocase(mod_root, p + "/" + rel_str, cache=nocase_cache)
+                        if src is not None:
+                            break
+                    if src is None:
+                        segment_list = [p for p in mod_strip if "/" not in p]
+                        prefix_path = ""
+                        for seg in segment_list:
+                            prefix_path = prefix_path + seg + "/" if prefix_path else seg + "/"
+                            src = _resolve_nocase(mod_root, prefix_path + rel_str, cache=nocase_cache)
+                            if src is not None:
+                                break
 
-            effective_dir = _per_deploy.get(mod_name, deploy_dir)
-            dst = effective_dir / rel_str
-            use_symlink = symlink_exts is not None and src.suffix.lower() in symlink_exts
-            tasks.append((src, dst, rel_lower, effective_dir is not deploy_dir, use_symlink))
+        if src is None:
+            _log(f"  WARN: source not found — {rel_str} ({mod_name})")
+            continue
 
-            if progress_fn is not None and line_idx % 500 == 0:
-                progress_fn(line_idx, total_lines)
+        effective_dir = _per_deploy.get(mod_name, deploy_dir)
+        dst = effective_dir / rel_str
+        use_symlink = symlink_exts is not None and src.suffix.lower() in symlink_exts
+        tasks.append((src, dst, rel_lower, effective_dir is not deploy_dir, use_symlink))
+
+        if progress_fn is not None and line_idx % 500 == 0:
+            progress_fn(line_idx, total_lines)
 
     total = len(tasks)
     if total == 0:
@@ -1623,6 +1620,24 @@ def _path_under_root(path: Path, root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _build_mod_index(mod_root: Path) -> dict[str, Path]:
+    """Build a case-insensitive index of all files under mod_root.
+
+    Returns dict mapping lowercase rel_path -> Path for O(1) lookup.
+    Uses os.walk to avoid stat() per file (walk separates dirs from files).
+    """
+    out: dict[str, Path] = {}
+    try:
+        for dirpath, _dirnames, filenames in os.walk(mod_root):
+            for name in filenames:
+                full = Path(dirpath) / name
+                rel = full.relative_to(mod_root)
+                out[str(rel).replace("\\", "/").lower()] = full
+    except OSError:
+        pass
+    return out
 
 
 def _resolve_nocase(root: Path, rel_str: str,

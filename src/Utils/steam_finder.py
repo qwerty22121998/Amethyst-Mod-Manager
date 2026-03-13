@@ -396,6 +396,79 @@ def find_proton_for_game(steam_id: str) -> Path | None:
     return None
 
 
+def _parse_acf_installdir(acf_path: Path) -> str | None:
+    """Parse installdir from a Steam appmanifest_*.acf file. Returns None if not found."""
+    installdir_pattern = re.compile(r'"installdir"\s+"([^"]+)"')
+    try:
+        text = acf_path.read_text(encoding="utf-8", errors="replace")
+        m = installdir_pattern.search(text)
+        return m.group(1) if m else None
+    except OSError:
+        return None
+
+
+def find_game_by_steam_id(
+    libraries: list[Path], steam_id: str, exe_name: str
+) -> Path | None:
+    """
+    Locate a game's install folder using its Steam App ID and appmanifest.
+
+    When multiple games share the same exe name (e.g. Enderal and Enderal SE both
+    use "Enderal Launcher.exe"), the exe-based search returns the first match.
+    This function uses Steam's app manifest to find the exact folder for the
+    given steam_id, then verifies the exe is present.
+
+    Returns the game root directory or None if not found.
+    """
+    if not steam_id:
+        return None
+
+    exe_lower = exe_name.lower()
+    has_subdir = "/" in exe_name or "\\" in exe_name
+
+    for common in libraries:
+        steamapps = common.parent  # steamapps/common -> steamapps
+        acf = steamapps / f"appmanifest_{steam_id}.acf"
+        if not acf.is_file():
+            continue
+        installdir = _parse_acf_installdir(acf)
+        if not installdir:
+            continue
+        game_dir = common / installdir
+        if not game_dir.is_dir():
+            continue
+        if has_subdir:
+            candidate = game_dir / exe_name
+            if candidate.is_file():
+                return game_dir
+            parts = exe_lower.replace("\\", "/").split("/")
+            cur = game_dir
+            for part in parts:
+                match = None
+                try:
+                    for entry in cur.iterdir():
+                        if entry.name.lower() == part:
+                            match = entry
+                            break
+                except PermissionError:
+                    break
+                if match is None:
+                    break
+                cur = match
+            else:
+                if cur.is_file():
+                    return game_dir
+        else:
+            try:
+                for entry in game_dir.iterdir():
+                    if entry.name.lower() == exe_lower and entry.is_file():
+                        return game_dir
+            except PermissionError:
+                pass
+
+    return None
+
+
 def find_game_in_libraries(libraries: list[Path], exe_name: str) -> Path | None:
     """
     Search each library's steamapps/common/* subfolder for exe_name.

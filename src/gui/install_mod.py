@@ -51,6 +51,25 @@ def _show_set_prefix_dialog_on_main(parent_window, required, file_list, mod_name
         done_event.set()
 
 
+def _show_fomod_dialog_on_main(parent_window, config, mod_root,
+                               installed_files: set, active_files: set,
+                               saved_selections, selections_path,
+                               result_holder: list, done_event: threading.Event) -> None:
+    """Run on main thread via after(0, ...). Shows FomodDialog, stores result, signals done."""
+    try:
+        dialog = FomodDialog(parent_window, config, mod_root,
+                             installed_files=installed_files,
+                             active_files=active_files,
+                             saved_selections=saved_selections,
+                             selections_path=selections_path)
+        parent_window.wait_window(dialog)
+        result_holder[0] = dialog.result
+    except Exception:
+        result_holder[0] = None
+    finally:
+        done_event.set()
+
+
 def _show_mod_notification(parent_window, message: str, state: str = "success") -> None:
     """Show a notification on the root window, auto-dismiss after 4 s."""
     try:
@@ -638,13 +657,31 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                         except (OSError, ValueError):
                             saved_selections = None
 
-                dialog = FomodDialog(parent_window, config, mod_root,
-                                     installed_files=installed_files,
-                                     active_files=active_files,
-                                     saved_selections=saved_selections,
-                                     selections_path=sel_path)
-                parent_window.wait_window(dialog)
-                if dialog.result is None:
+                if threading.current_thread() is threading.main_thread():
+                    dialog = FomodDialog(parent_window, config, mod_root,
+                                         installed_files=installed_files,
+                                         active_files=active_files,
+                                         saved_selections=saved_selections,
+                                         selections_path=sel_path)
+                    parent_window.wait_window(dialog)
+                    dialog_result = dialog.result
+                else:
+                    with _interactive_dialog_lock:
+                        result_holder = [None]
+                        done_event = threading.Event()
+                        parent_window.after(
+                            0,
+                            lambda: _show_fomod_dialog_on_main(
+                                parent_window, config, mod_root,
+                                installed_files, active_files,
+                                saved_selections, sel_path,
+                                result_holder, done_event,
+                            ),
+                        )
+                        done_event.wait()
+                        dialog_result = result_holder[0]
+
+                if dialog_result is None:
                     log_fn("FOMOD install cancelled.")
                     return
 
@@ -652,11 +689,11 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                     sel_path = get_fomod_selections_path(game_name, mod_name)
                     try:
                         with open(sel_path, "w", encoding="utf-8") as f:
-                            json.dump(dialog.result, f, indent=2)
+                            json.dump(dialog_result, f, indent=2)
                     except OSError:
                         pass
 
-                final_selections = dialog.result
+                final_selections = dialog_result
 
             file_list = resolve_files(config, final_selections, installed_files)
             log_fn(f"FOMOD complete — {len(file_list)} file(s) to install.")

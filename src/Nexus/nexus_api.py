@@ -681,9 +681,101 @@ class NexusAPI:
         return [self._parse_mod_info(m, game_domain) for m in items]
 
     def get_trending(self, game_domain: str) -> list[NexusModInfo]:
-        """Return currently trending mods for a game."""
+        """Return trending mods for a game (REST). Prefer get_trending_mods_graphql for consistency."""
         items = self._get(f"/games/{game_domain}/mods/trending")
         return [self._parse_mod_info(m, game_domain) for m in items]
+
+    def get_trending_mods_graphql(
+        self,
+        game_domain: str,
+        count: int = 20,
+        offset: int = 0,
+        category_names: list[str] | None = None,
+    ) -> list[NexusModInfo]:
+        """
+        Fetch trending mods via GraphQL: mods published in the last 7 days,
+        sorted by endorsements (highest first).
+        """
+        seven_days_ago = int(time.time()) - (7 * 24 * 60 * 60)
+        base_filter = self._build_mods_filter(game_domain, category_names)
+        if "filter" in base_filter:
+            base_filter["filter"].append({
+                "createdAt": [{"value": str(seven_days_ago), "op": "GTE"}],
+            })
+        else:
+            base_filter = {
+                "op": "AND",
+                "filter": [
+                    base_filter,
+                    {"createdAt": [{"value": str(seven_days_ago), "op": "GTE"}]},
+                ],
+            }
+        query = """
+        query TrendingMods($filter: ModsFilter, $count: Int, $offset: Int) {
+            mods(
+                filter: $filter
+                sort: [{ endorsements: { direction: DESC } }]
+                count: $count
+                offset: $offset
+            ) {
+                nodes {
+                    modId
+                    name
+                    summary
+                    description
+                    author
+                    version
+                    endorsements
+                    downloads
+                    pictureUrl
+                }
+            }
+        }
+        """
+        variables = {
+            "filter": base_filter,
+            "count": count,
+            "offset": offset,
+        }
+        try:
+            resp = self._session.post(
+                GRAPHQL_BASE,
+                json={"query": query, "variables": variables},
+                timeout=self._timeout,
+            )
+            self._log_response("POST", "GraphQL trendingMods", resp)
+            if not resp.ok:
+                raise NexusAPIError(
+                    f"GraphQL trending query failed: {resp.status_code}",
+                    resp.status_code,
+                )
+            data = resp.json()
+            if "errors" in data:
+                raise NexusAPIError(
+                    f"GraphQL error: {data['errors'][0].get('message', 'unknown')}"
+                )
+            nodes = data.get("data", {}).get("mods", {}).get("nodes", [])
+            results: list[NexusModInfo] = []
+            for n in nodes:
+                results.append(NexusModInfo(
+                    mod_id=n.get("modId", 0),
+                    name=n.get("name", "") or "",
+                    summary=n.get("summary", "") or "",
+                    description=n.get("description", "") or "",
+                    version=n.get("version", "") or "",
+                    author=n.get("author", "") or "",
+                    category_id=0,
+                    game_id=0,
+                    domain_name=game_domain,
+                    endorsement_count=n.get("endorsements", 0) or 0,
+                    downloads_total=n.get("downloads", 0) or 0,
+                    picture_url=n.get("pictureUrl", "") or "",
+                ))
+            return results
+        except NexusAPIError:
+            raise
+        except Exception as exc:
+            raise NexusAPIError(f"GraphQL trending error: {exc}") from exc
 
     def get_updated_mods(self, game_domain: str,
                          period: str = "1w") -> list[dict]:

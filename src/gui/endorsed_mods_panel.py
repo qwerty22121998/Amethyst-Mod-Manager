@@ -31,6 +31,7 @@ from gui.theme import (
     ACCENT_HOV,
     TEXT_MAIN,
     TEXT_DIM,
+    FONT_HEADER,
     FONT_SMALL,
 )
 
@@ -96,19 +97,16 @@ class EndorsedModsPanel:
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.grid_propagate(False)
 
-        self._refresh_btn = tk.Button(
-            toolbar, text="↺ Refresh",
-            bg=ACCENT, fg="#ffffff", activebackground=ACCENT_HOV,
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self.refresh,
+        self._refresh_btn = ctk.CTkButton(
+            toolbar, text="↺ Refresh", width=72, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self.refresh,
         )
         self._refresh_btn.pack(side="left", padx=8, pady=2)
 
-        self._status_label = tk.Label(
+        self._status_label = ctk.CTkLabel(
             toolbar, text="Click Refresh to load endorsed mods", anchor="w",
-            font=FONT_SMALL, fg=TEXT_DIM, bg=BG_HEADER,
+            font=FONT_SMALL, text_color=TEXT_DIM, fg_color=BG_HEADER,
         )
         self._status_label.pack(side="left", padx=4, fill="x", expand=True)
 

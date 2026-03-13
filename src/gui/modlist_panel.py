@@ -104,6 +104,7 @@ from Utils.plugins import (
 from Utils.profile_backup import create_backup
 from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
 from gui.collections_dialog import CollectionsDialog
+from gui.nexus_browser_overlay import NexusBrowserOverlay
 from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
 from Nexus.nexus_update_checker import check_for_updates
 
@@ -280,6 +281,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_conflict_full: bool = False
         self._filter_missing_reqs: bool = False
         self._filter_has_disabled_plugins: bool = False
+        self._filter_has_plugins: bool = False
         self._filter_has_disabled_files: bool = False
         self._filter_has_updates: bool = False
         self._disabled_plugins_map: dict[str, list[str]] = {}  # mod_name → [plugin, ...]
@@ -670,6 +672,7 @@ class ModListPanel(ctk.CTkFrame):
             ("filter_full",                "Show only fully conflicted mods"),
             ("filter_missing_reqs",        "Show only missing requirements"),
             ("filter_has_disabled_plugins","Show only mods with disabled plugins"),
+            ("filter_has_plugins",         "Show only mods with plugins"),
             ("filter_has_disabled_files",  "Show mods with disabled files"),
             ("filter_has_updates",         "Show only mods with updates"),
         ]
@@ -2023,6 +2026,22 @@ class ModListPanel(ctk.CTkFrame):
                     result.append(i)
             base = result
 
+        # Step 4c2: mods with plugins filter (show only mods that have at least one plugin)
+        if self._filter_has_plugins:
+            mods_with_plugins = self._get_mods_with_plugins()
+            if mods_with_plugins:
+                result = []
+                for i in base:
+                    entry = self._entries[i]
+                    if entry.is_separator:
+                        if self._sep_block_has_plugins(i, mods_with_plugins):
+                            result.append(i)
+                    elif entry.name in mods_with_plugins:
+                        result.append(i)
+                base = result
+            else:
+                base = []  # no plugin data yet, show nothing
+
         # Step 4d: disabled mod files filter (show only mods with at least one file disabled)
         if self._filter_has_disabled_files:
             result = []
@@ -2421,6 +2440,21 @@ class ModListPanel(ctk.CTkFrame):
         for i in self._sep_block_range(sep_idx):
             if not self._entries[i].is_separator:
                 if self._entries[i].name in self._disabled_plugins_map:
+                    return True
+        return False
+
+    def _get_mods_with_plugins(self) -> set[str]:
+        """Return the set of mod names that have at least one plugin (from plugin panel's filemap)."""
+        app = self.winfo_toplevel()
+        if hasattr(app, "_plugin_panel"):
+            return set(app._plugin_panel._plugin_mod_map.values())
+        return set()
+
+    def _sep_block_has_plugins(self, sep_idx: int, mods_with_plugins: set[str]) -> bool:
+        """True if this separator's block contains at least one mod with plugins."""
+        for i in self._sep_block_range(sep_idx):
+            if not self._entries[i].is_separator:
+                if self._entries[i].name in mods_with_plugins:
                     return True
         return False
 
@@ -4714,6 +4748,37 @@ class ModListPanel(ctk.CTkFrame):
                 pass
             self._collections_panel = None
 
+    def _on_nexus_browser(self):
+        """Show the Nexus Browse/Tracked/Endorsed overlay over the modlist panel."""
+        app = self.winfo_toplevel()
+        api = getattr(app, "_nexus_api", None)
+        game = self._game
+        domain = (game.nexus_game_domain if game and game.nexus_game_domain else "") or ""
+        if not domain:
+            self._log("Nexus: No game selected or game has no Nexus domain.")
+            return
+        self._close_nexus_browser()
+        open_settings = app.get_nexus_settings_opener() if hasattr(app, "get_nexus_settings_opener") else None
+        panel = NexusBrowserOverlay(
+            self, game_domain=domain, api=api, game=game,
+            log_fn=self._log,
+            app_root=app,
+            on_close=self._close_nexus_browser,
+            on_open_settings=open_settings,
+        )
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._nexus_browser_panel = panel
+
+    def _close_nexus_browser(self):
+        """Destroy the Nexus browser overlay and restore the modlist."""
+        panel = getattr(self, "_nexus_browser_panel", None)
+        if panel is not None:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+            self._nexus_browser_panel = None
+
     def _on_check_updates(self):
         """Check for mod updates and missing requirements in one background pass."""
         app = self.winfo_toplevel()
@@ -4790,6 +4855,7 @@ class ModListPanel(ctk.CTkFrame):
         self._fsp_vars["filter_full"].set(self._filter_conflict_full)
         self._fsp_vars["filter_missing_reqs"].set(self._filter_missing_reqs)
         self._fsp_vars["filter_has_disabled_plugins"].set(self._filter_has_disabled_plugins)
+        self._fsp_vars["filter_has_plugins"].set(self._filter_has_plugins)
         self._fsp_vars["filter_has_disabled_files"].set(self._filter_has_disabled_files)
         self._fsp_vars["filter_has_updates"].set(self._filter_has_updates)
         self._filter_btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
@@ -4840,6 +4906,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_conflict_full = state.get("filter_full", False)
         self._filter_missing_reqs = state.get("filter_missing_reqs", False)
         self._filter_has_disabled_plugins = state.get("filter_has_disabled_plugins", False)
+        self._filter_has_plugins = state.get("filter_has_plugins", False)
         self._filter_has_disabled_files = state.get("filter_has_disabled_files", False)
         self._filter_has_updates = state.get("filter_has_updates", False)
         self._invalidate_derived_caches()

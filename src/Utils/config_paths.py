@@ -186,3 +186,14 @@ def get_download_cache_dir() -> Path:
     d = get_config_dir() / "download_cache"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def get_download_locations_path() -> Path:
+    """Return the path to the extra download scan locations config file.
+
+    Users can add custom folders to scan for archives in addition to ~/Downloads.
+    Stored as JSON array of path strings.
+
+    Result: ~/.config/AmethystModManager/download_locations.json
+    """
+    return get_config_dir() / "download_locations.json"

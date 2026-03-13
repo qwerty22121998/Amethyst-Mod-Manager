@@ -125,27 +125,25 @@ class ModCard:
 
         self.card.grid_rowconfigure(5, weight=1)
 
-        # Buttons
+        # Buttons — each 50% of card width with padding between
         btn_frame = ctk.CTkFrame(self.card, fg_color="transparent")
-        btn_frame.grid(row=6, column=0, padx=8, pady=(4, 8), sticky="sw", columnspan=2)
+        btn_frame.grid(row=6, column=0, padx=8, pady=(4, 8), sticky="swe", columnspan=2)
+        btn_frame.grid_columnconfigure(0, weight=1)
+        btn_frame.grid_columnconfigure(1, weight=1)
 
         view_btn = ctk.CTkButton(
             btn_frame, text="View",
-            width=80, height=30,
-            fg_color=ACCENT, hover_color=ACCENT_HOV,
-            font=("Segoe UI", 12),
-            command=on_view,
+            height=30, fg_color=ACCENT, hover_color=ACCENT_HOV,
+            font=("Segoe UI", 12), command=on_view,
         )
-        view_btn.grid(row=0, column=0, padx=(0, 6))
+        view_btn.grid(row=0, column=0, padx=(0, 4), sticky="ew")
 
         install_btn = ctk.CTkButton(
             btn_frame, text="Install",
-            width=90, height=30,
-            fg_color="#2d7a2d", hover_color="#3a9e3a",
-            font=("Segoe UI", 12),
-            command=on_install,
+            height=30, fg_color="#2d7a2d", hover_color="#3a9e3a",
+            font=("Segoe UI", 12), command=on_install,
         )
-        install_btn.grid(row=0, column=1)
+        install_btn.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
         for widget in (self.card, self._img_label, title_label, btn_frame):
             widget.bind("<ButtonRelease-3>", on_right_click)

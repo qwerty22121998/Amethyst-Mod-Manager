@@ -45,7 +45,6 @@ from gui.ctk_components import CTkAlert
 from gui.path_utils import pick_file_mod_archive
 from gui.install_mod import install_mod_from_archive, _show_mod_notification
 from gui.add_game_dialog import AddGameDialog
-from gui.nexus_settings_dialog import NexusSettingsDialog
 from gui.wizard_dialog import WizardDialog
 from Utils.config_paths import get_profiles_dir
 from Utils.deploy import deploy_root_folder, restore_root_folder, LinkMode, load_per_mod_strip_prefixes
@@ -324,17 +323,10 @@ class TopBar(ctk.CTkFrame):
             app._mod_panel._on_collections()
 
     def _on_nexus_settings(self):
-        """Open the Nexus Mods settings panel (or dialog fallback)."""
+        """Open the Nexus Browse/Tracked/Endorsed overlay on the modlist panel."""
         app = self.winfo_toplevel()
-        def _key_changed():
-            app._init_nexus_api()
-            self._log("Nexus API key updated.")
-            self.after(200, self._check_collections_visibility)
-        if self._show_nexus_panel_fn:
-            self._show_nexus_panel_fn(_key_changed, self._log)
-        else:
-            dialog = NexusSettingsDialog(app, on_key_changed=_key_changed, log_fn=self._log)
-            app.wait_window(dialog)
+        if hasattr(app, "_mod_panel"):
+            app._mod_panel._on_nexus_browser()
 
     def _on_proton_tools(self):
         game = _gh._GAMES.get(self._game_var.get())

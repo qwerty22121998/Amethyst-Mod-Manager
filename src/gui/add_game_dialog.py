@@ -21,7 +21,12 @@ from Games.base_game import BaseGame
 from Utils.portal_filechooser import pick_folder
 from Utils.deploy import LinkMode
 from Utils.xdg import xdg_open
-from Utils.steam_finder import find_steam_libraries, find_game_in_libraries, find_prefix
+from Utils.steam_finder import (
+    find_steam_libraries,
+    find_game_in_libraries,
+    find_game_by_steam_id,
+    find_prefix,
+)
 from Utils.heroic_finder import find_heroic_game, find_heroic_prefix
 
 from gui.theme import (
@@ -366,7 +371,13 @@ class AddGameDialog(ctk.CTkToplevel):
 
     def _scan_worker(self):
         libraries = find_steam_libraries()
-        found = find_game_in_libraries(libraries, self._game.exe_name)
+        steam_id = getattr(self._game, "steam_id", None)
+        if steam_id:
+            found = find_game_by_steam_id(libraries, steam_id, self._game.exe_name)
+        else:
+            found = None
+        if not found:
+            found = find_game_in_libraries(libraries, self._game.exe_name)
         source = "steam"
         if not found and self._game.heroic_app_names:
             found = find_heroic_game(self._game.heroic_app_names)
@@ -1081,7 +1092,13 @@ class ReconfigureGamePanel(ctk.CTkFrame):
 
     def _scan_worker(self):
         libraries = find_steam_libraries()
-        found = find_game_in_libraries(libraries, self._game.exe_name)
+        steam_id = getattr(self._game, "steam_id", None)
+        if steam_id:
+            found = find_game_by_steam_id(libraries, steam_id, self._game.exe_name)
+        else:
+            found = None
+        if not found:
+            found = find_game_in_libraries(libraries, self._game.exe_name)
         source = "steam"
         if not found and self._game.heroic_app_names:
             found = find_heroic_game(self._game.heroic_app_names)

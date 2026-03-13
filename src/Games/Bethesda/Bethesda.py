@@ -843,3 +843,83 @@ class Starfield(Fallout_3):
     @property
     def _script_extender_exe(self) -> str:
         return "sfse_loader.exe"
+
+class Enderal(Fallout_3):
+
+    @property
+    def name(self) -> str:
+        return "Enderal"
+
+    @property
+    def game_id(self) -> str:
+        return "enderal"
+
+    @property
+    def exe_name(self) -> str:
+        return "Enderal Launcher.exe"
+
+    @property
+    def plugin_extensions(self) -> list[str]:
+        return [".esp", ".esl", ".esm"]
+
+    @property
+    def steam_id(self) -> str:
+        return "933480"
+
+    @property
+    def nexus_game_domain(self) -> str:
+        return "enderal"
+    
+    @property
+    def loot_game_type(self) -> str:
+        return "enderal"
+
+    @property
+    def loot_masterlist_url(self) -> str:
+        return "https://raw.githubusercontent.com/loot/enderal/v0.26/masterlist.yaml"
+
+    _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/enderal")
+    
+    @property
+    def _script_extender_exe(self) -> str:
+        return "skse_loader.exe"
+    
+class EnderalSE(Fallout_3):
+
+    @property
+    def name(self) -> str:
+        return "Enderal SE"
+
+    @property
+    def game_id(self) -> str:
+        return "enderalse"
+
+    @property
+    def exe_name(self) -> str:
+        return "Enderal Launcher.exe"
+
+    @property
+    def plugin_extensions(self) -> list[str]:
+        return [".esp", ".esl", ".esm"]
+
+    @property
+    def steam_id(self) -> str:
+        return "976620"
+
+    @property
+    def nexus_game_domain(self) -> str:
+        return "enderalspecialedition"
+    
+    @property
+    def loot_game_type(self) -> str:
+        return "enderal"
+
+    @property
+    def loot_masterlist_url(self) -> str:
+        return "https://raw.githubusercontent.com/loot/enderal/v0.26/masterlist.yaml"
+
+    _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/Enderal Special Edition")
+    
+    @property
+    def _script_extender_exe(self) -> str:
+        return "skse64_loader.exe"

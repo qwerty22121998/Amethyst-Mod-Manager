@@ -1027,6 +1027,14 @@ class App(ctk.CTk):
 
     # -- Nexus Settings panel ------------------------------------------------
 
+    def get_nexus_settings_opener(self):
+        """Return a callable that opens the Nexus API settings overlay."""
+        def _key_changed():
+            self._init_nexus_api()
+            self._topbar._log("Nexus API key updated.")
+            self._topbar.after(200, self._topbar._check_collections_visibility)
+        return lambda: self.show_nexus_panel(_key_changed, self._topbar._log)
+
     def show_nexus_panel(self, on_key_changed, log_fn):
         from gui.nexus_settings_dialog import NexusSettingsPanel
         _game = _GAMES.get(self._topbar._game_var.get())

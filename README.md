@@ -36,6 +36,7 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Fallout 3 (Normal and Goty)
 - Fallout 4 (Normal and VR)
 - Fallout New Vegas
+- Enderal (Normal and SE)
 - Starfield
 - Oblivion
 - Oblivion Remastered
@@ -55,6 +56,7 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Valheim
 - Lethal Company
 - Mount & Blade II: Bannerlord
+- Slay The Spire 2
 - The manager now has the ability to define custom games. See the Wiki for the guide
 
 ## Usage

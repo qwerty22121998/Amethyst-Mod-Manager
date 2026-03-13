@@ -9,6 +9,7 @@ by name, and Prev / Next page navigation.
 
 from __future__ import annotations
 
+import os
 import re
 import threading
 import tkinter as tk
@@ -20,6 +21,7 @@ from typing import Callable, Optional
 import customtkinter as ctk
 from PIL import Image
 
+from gui.ctk_components import CTkAlert
 from gui.game_helpers import _create_profile, _profiles_for_game
 from gui.install_mod import install_mod_from_archive
 from gui.mod_card import CARD_PAD, make_placeholder_image
@@ -46,6 +48,7 @@ from gui.theme import (
     TEXT_MAIN,
     TEXT_DIM,
     BORDER,
+    FONT_HEADER,
     FONT_NORMAL,
     FONT_BOLD,
     FONT_SMALL,
@@ -145,6 +148,20 @@ def _fmt_size(n_bytes: int) -> str:
         if n_bytes >= threshold:
             return f"{n_bytes / threshold:.1f} {unit}"
     return f"{n_bytes} B"
+
+
+def _get_dir_size(path: Path) -> int:
+    """Return the total byte size of a directory (recursive). Returns 0 for missing/non-dir."""
+    if not path.is_dir():
+        return 0
+    total = 0
+    try:
+        for p in path.rglob("*"):
+            if p.is_file():
+                total += p.stat().st_size
+    except OSError:
+        pass
+    return total
 
 
 def _fomod_choices_from_collection(choices: dict) -> "dict[str, dict[str, list[str]]]":
@@ -603,6 +620,16 @@ class CollectionDetailDialog(tk.Frame):
             command=self._on_install_collection,
         ).pack(side="right", padx=(10, 0), pady=6)
 
+        self._clear_cache_btn = ctk.CTkButton(
+            ftr, text="Clear Cache (—)",
+            height=30, fg_color="#5a3a00", hover_color="#7a5200",
+            text_color="#ffffff", font=("Segoe UI", 10),
+            border_width=0,
+            command=self._on_clear_cache,
+        )
+        self._clear_cache_btn.pack(side="right", padx=(10, 0), pady=6)
+        self.after(100, self._refresh_cache_size)
+
         self._reset_btn = ctk.CTkButton(
             ftr, text="Reset Load Order",
             height=30, fg_color="#5a3a00", hover_color="#7a5200",
@@ -993,7 +1020,8 @@ class CollectionDetailDialog(tk.Frame):
         import concurrent.futures as _cf
 
         _DL_WORKERS = 3
-        _dl_results: dict[int, object] = {}  # file_id → DownloadResult|None
+        # file_id → (DownloadResult, effective_game_domain) — domain is the one we actually used
+        _dl_results: dict[int, tuple] = {}
         _dl_lock = threading.Lock()
         _dl_done = 0
         _dl_total = len(to_download)
@@ -1040,6 +1068,11 @@ class CollectionDetailDialog(tk.Frame):
                     pass
 
             # --- Download ---
+            # Enderal can use Skyrim mods; Enderal SE can use Skyrim SE mods.
+            # If we get 404, retry under the corresponding Skyrim game.
+            _ENDERAL_FALLBACKS = {"enderal": "skyrim", "enderalspecialedition": "skyrimspecialedition"}
+            result = None
+            effective_domain = self._game_domain
             try:
                 result = downloader.download_file(
                     game_domain=self._game_domain,
@@ -1051,9 +1084,29 @@ class CollectionDetailDialog(tk.Frame):
                     expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
                     dest_dir=get_download_cache_dir(),
                 )
+                err = result.error or ""
+                is_404 = "No Mod Found" in err or "No File found for mod" in err
+                if not result.success and is_404:
+                    fallback_domain = _ENDERAL_FALLBACKS.get(self._game_domain)
+                    if fallback_domain:
+                        self._log(
+                            f"Collection install: mod {mod.mod_id} not found on {self._game_domain}, "
+                            f"retrying under {fallback_domain}…"
+                        )
+                        result = downloader.download_file(
+                            game_domain=fallback_domain,
+                            mod_id=mod.mod_id,
+                            file_id=mod.file_id,
+                            progress_cb=_progress_cb,
+                            cancel=dl_cancel,
+                            known_file_name=mod.file_name or "",
+                            expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
+                            dest_dir=get_download_cache_dir(),
+                        )
+                        if result.success:
+                            effective_domain = fallback_domain
             except Exception as exc:
                 self._log(f"Collection install: download failed for '{mod.mod_name}': {exc}")
-                result = None
 
             # --- Hide popup ---
             if dl_cancel is not None and mod_panel is not None:
@@ -1064,7 +1117,7 @@ class CollectionDetailDialog(tk.Frame):
 
             with _dl_lock:
                 _dl_done += 1
-                _dl_results[mod.file_id] = result
+                _dl_results[mod.file_id] = (result, effective_domain)
                 done = _dl_done
             try:
                 self.after(0, lambda d=done, t=_dl_total: self._status_var.set(
@@ -1099,13 +1152,19 @@ class CollectionDetailDialog(tk.Frame):
         # cores and the NVMe busy without too much RAM pressure from py7zr.
         _INSTALL_WORKERS = 4
 
+        # Archives >= 1 GB are extracted one at a time to avoid CPU/I/O thrashing
+        # when multiple large extractions run in parallel.
+        _LARGE_ARCHIVE_BYTES = 1 * 1024**3
+        _large_archive_semaphore = threading.Semaphore(1)
+
         # Count uses per physical archive path so we only delete it after the
         # last consumer finishes.  Two separate collection entries can reference
         # the same physical archive (same file_id, or different file_ids whose
         # cached-archive lookup resolved to the same file on disk).
         _archive_use_count: dict[str, int] = {}
         for _m in to_download:
-            _r = _dl_results.get(_m.file_id) if _m.file_id else None
+            _entry = _dl_results.get(_m.file_id) if _m.file_id else None
+            _r = _entry[0] if isinstance(_entry, tuple) else _entry
             if _r and _r.success and _r.file_path:
                 _key = str(_r.file_path)
                 _archive_use_count[_key] = _archive_use_count.get(_key, 0) + 1
@@ -1115,7 +1174,8 @@ class CollectionDetailDialog(tk.Frame):
         _install_results: dict[int, str] = {}  # file_id → installed folder name
 
         def _install_one(mod):
-            result = _dl_results.get(mod.file_id)
+            _entry = _dl_results.get(mod.file_id)
+            result, effective_domain = _entry if isinstance(_entry, tuple) else (_entry, self._game_domain)
             if result is None or not result.success or not result.file_path:
                 self._log(f"Collection install: download failed for '{mod.mod_name}'")
                 with _install_lock:
@@ -1129,7 +1189,7 @@ class CollectionDetailDialog(tk.Frame):
             # Build prebuilt metadata so no extra API calls are needed.
             try:
                 _pmeta = build_meta_from_download(
-                    game_domain=self._game_domain,
+                    game_domain=effective_domain,
                     mod_id=mod.mod_id,
                     file_id=mod.file_id,
                     archive_name=mod.file_name or "",
@@ -1150,15 +1210,28 @@ class CollectionDetailDialog(tk.Frame):
                 schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
             _preferred = _logical or _schema_name or mod.mod_name or ""
 
-            folder_name = install_mod_from_archive(
-                archive_path, self, self._log, self._game,
-                fomod_auto_selections=auto_fomod,
-                prebuilt_meta=_pmeta,
-                profile_dir=profile_dir,
-                headless=True,
-                preferred_name=_preferred,
-                skip_index_update=True,
-            )
+            # Serialize extraction of large archives (>=1GB) to avoid system slowdown.
+            _archive_size = 0
+            try:
+                _archive_size = os.path.getsize(archive_path)
+            except OSError:
+                pass
+            _large_sem = _large_archive_semaphore if _archive_size >= _LARGE_ARCHIVE_BYTES else None
+            if _large_sem is not None:
+                _large_sem.acquire()
+            try:
+                folder_name = install_mod_from_archive(
+                    archive_path, self, self._log, self._game,
+                    fomod_auto_selections=auto_fomod,
+                    prebuilt_meta=_pmeta,
+                    profile_dir=profile_dir,
+                    headless=True,
+                    preferred_name=_preferred,
+                    skip_index_update=True,
+                )
+            finally:
+                if _large_sem is not None:
+                    _large_sem.release()
 
             with _install_lock:
                 if folder_name:
@@ -1374,6 +1447,84 @@ class CollectionDetailDialog(tk.Frame):
         except Exception:
             pass
 
+    def _refresh_cache_size(self):
+        """Update the Clear Cache button text with the current cache folder size."""
+        cache_dir = get_download_cache_dir()
+
+        def _worker():
+            size = _get_dir_size(cache_dir)
+            try:
+                self.after(0, lambda: self._update_clear_cache_btn(size))
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _update_clear_cache_btn(self, size_bytes: int):
+        """Update the Clear Cache button label (call from main thread)."""
+        try:
+            if hasattr(self, "_clear_cache_btn") and self._clear_cache_btn.winfo_exists():
+                self._clear_cache_btn.configure(text=f"Clear Cache ({_fmt_size(size_bytes)})")
+        except Exception:
+            pass
+
+    def _on_clear_cache(self):
+        """Clear the download cache after user confirmation."""
+        cache_dir = get_download_cache_dir()
+        if not cache_dir.is_dir():
+            self._status_var.set("Download cache is empty.")
+            self._refresh_cache_size()
+            return
+
+        size = _get_dir_size(cache_dir)
+        if size <= 0:
+            self._status_var.set("Download cache is empty.")
+            self._refresh_cache_size()
+            return
+
+        alert = CTkAlert(
+            state="warning",
+            title="Clear Download Cache",
+            body_text=(
+                f"Clear {_fmt_size(size)} of cached downloads?\n\n"
+                f"Location: {cache_dir}\n\n"
+                "This removes archives downloaded for collection installs. "
+                "They will be re-downloaded if you install collections again."
+            ),
+            btn1="Clear",
+            btn2="Cancel",
+            parent=self.winfo_toplevel(),
+            height=280,
+        )
+        if alert.get() != "Clear":
+            return
+
+        def _worker():
+            cleared = 0
+            try:
+                for p in cache_dir.iterdir():
+                    try:
+                        if p.is_file():
+                            p.unlink(missing_ok=True)
+                            cleared += 1
+                        elif p.is_dir():
+                            import shutil
+                            shutil.rmtree(p, ignore_errors=True)
+                            cleared += 1
+                    except OSError:
+                        pass
+                self.after(0, lambda: self._on_clear_cache_done(cleared))
+            except Exception as exc:
+                self.after(0, lambda: self._status_var.set(f"Clear cache failed: {exc}"))
+
+        self._status_var.set("Clearing cache…")
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_clear_cache_done(self, items_cleared: int):
+        """Called after cache clear completes."""
+        self._status_var.set(f"Cache cleared ({items_cleared} items removed).")
+        self._refresh_cache_size()
+
     def _on_reset_load_order(self):
         """Show confirmation then launch background reset thread."""
         profile_dir = self._get_profile_dir()
@@ -1582,104 +1733,84 @@ class CollectionsDialog(tk.Frame):
         self.grid_columnconfigure(0, weight=1)
 
         # Toolbar
-        toolbar = tk.Frame(self, bg=BG_HEADER, height=32)
+        toolbar = tk.Frame(self, bg=BG_HEADER, height=28)
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.grid_propagate(False)
 
         # Close button — top-right, returns to modlist
-        tk.Button(
-            toolbar, text="✕ Close",
-            bg="#6b3333", fg="#ffffff", activebackground="#8c4444",
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._do_close,
-        ).pack(side="right", padx=(4, 8), pady=4)
+        ctk.CTkButton(
+            toolbar, text="✕ Close", width=72, height=26,
+            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            font=FONT_HEADER, command=self._do_close,
+        ).pack(side="right", padx=(4, 8), pady=2)
 
-        self._prev_btn = tk.Button(
-            toolbar, text="← Prev",
-            bg="#c07320", fg="#ffffff", activebackground="#d4832a",
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._go_prev_page,
+        self._prev_btn = ctk.CTkButton(
+            toolbar, text="← Prev", width=70, height=26,
+            fg_color="#c37800", hover_color="#e28b00", text_color="white",
+            font=FONT_HEADER, command=self._go_prev_page,
             state="disabled",
         )
-        self._prev_btn.pack(side="left", padx=(8, 4), pady=4)
+        self._prev_btn.pack(side="left", padx=(8, 4), pady=2)
 
-        self._next_btn = tk.Button(
-            toolbar, text="Next →",
-            bg="#c07320", fg="#ffffff", activebackground="#d4832a",
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._go_next_page,
+        self._next_btn = ctk.CTkButton(
+            toolbar, text="Next →", width=52, height=26,
+            fg_color="#c37800", hover_color="#e28b00", text_color="white",
+            font=FONT_HEADER, command=self._go_next_page,
             state="disabled",
         )
-        self._next_btn.pack(side="left", padx=4, pady=4)
+        self._next_btn.pack(side="left", padx=4, pady=2)
 
-        self._url_toggle_btn = tk.Button(
-            toolbar, text="Open URL…",
-            bg="#2d5a8e", fg="#ffffff", activebackground="#3d6faa",
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._toggle_url_bar,
+        self._url_toggle_btn = ctk.CTkButton(
+            toolbar, text="Open URL…", width=90, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._toggle_url_bar,
         )
-        self._url_toggle_btn.pack(side="left", padx=(4, 4), pady=4)
+        self._url_toggle_btn.pack(side="left", padx=4, pady=2)
 
-        self._status_label = tk.Label(
-            toolbar, text="Loading collections…",
-            font=FONT_SMALL, fg=TEXT_DIM, bg=BG_HEADER, anchor="w",
+        self._status_label = ctk.CTkLabel(
+            toolbar, text="Loading collections…", anchor="w",
+            font=FONT_SMALL, text_color=TEXT_DIM, fg_color=BG_HEADER,
         )
         self._status_label.pack(side="left", padx=8, fill="x", expand=True)
 
         # URL bar (hidden by default — shown when "Open URL" button is pressed)
-        self._url_bar = tk.Frame(self, bg=BG_HEADER, height=34)
+        self._url_bar = tk.Frame(self, bg=BG_HEADER, height=30)
         self._url_bar.grid(row=1, column=0, sticky="ew")
         self._url_bar.grid_propagate(False)
         self._url_bar.grid_remove()   # hidden until toggled
 
-        tk.Label(
+        ctk.CTkLabel(
             self._url_bar, text="Collection URL:",
-            font=FONT_SMALL, fg=TEXT_DIM, bg=BG_HEADER,
-        ).pack(side="left", padx=(8, 4), pady=5)
+            font=FONT_SMALL, text_color=TEXT_DIM, fg_color=BG_HEADER,
+        ).pack(side="left", padx=(8, 4), pady=4)
 
         self._url_var = tk.StringVar()
-        self._url_entry = tk.Entry(
+        self._url_entry = ctk.CTkEntry(
             self._url_bar,
             textvariable=self._url_var,
-            bg=BG_ROW, fg=TEXT_MAIN,
-            insertbackground=TEXT_MAIN,
-            relief="flat", font=FONT_SMALL,
-            bd=2, highlightthickness=1,
-            highlightbackground=BORDER, highlightcolor=ACCENT,
+            fg_color=BG_ROW, text_color=TEXT_MAIN,
+            font=FONT_SMALL, height=26,
+            border_width=0,
         )
-        self._url_entry.pack(side="left", fill="x", expand=True, pady=5)
+        self._url_entry.pack(side="left", fill="x", expand=True, pady=4)
         self._url_entry.bind("<Return>", lambda _e: self._go_from_url())
         self._url_entry.bind(
             "<Control-a>",
-            lambda _e: (self._url_entry.selection_range(0, "end"), "break")[-1],
+            lambda _e: (self._url_entry.select_range(0, "end"), "break")[-1],
         )
         self._url_entry.bind("<Escape>", lambda _e: self._toggle_url_bar())
 
-        tk.Button(
-            self._url_bar, text="Go",
-            bg=ACCENT, fg="#ffffff", activebackground=ACCENT_HOV,
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._go_from_url,
-        ).pack(side="left", padx=(4, 4), pady=5)
+        ctk.CTkButton(
+            self._url_bar, text="Go", width=40, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._go_from_url,
+        ).pack(side="left", padx=4, pady=4)
 
-        tk.Button(
-            self._url_bar, text="✕",
-            bg="#b33a3a", fg="#ffffff", activebackground="#c94848",
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._toggle_url_bar,
-        ).pack(side="left", padx=(0, 8), pady=5)
+        ctk.CTkButton(
+            self._url_bar, text="✕", width=32, height=26,
+            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            font=FONT_HEADER, command=self._toggle_url_bar,
+        ).pack(side="left", padx=(0, 8), pady=4)
 
         # Scrollable card canvas
         canvas_frame = tk.Frame(self, bg=BG_DEEP, bd=0, highlightthickness=0)
@@ -1711,51 +1842,43 @@ class CollectionsDialog(tk.Frame):
             w.bind("<MouseWheel>", self._on_mousewheel)
 
         # Search bar
-        search_bar = tk.Frame(self, bg=BG_HEADER, height=34)
+        search_bar = tk.Frame(self, bg=BG_HEADER, height=30)
         search_bar.grid(row=3, column=0, sticky="ew")
         search_bar.grid_propagate(False)
 
-        tk.Label(
+        ctk.CTkLabel(
             search_bar, text="Search:",
-            font=FONT_SMALL, fg=TEXT_DIM, bg=BG_HEADER,
-        ).pack(side="left", padx=(8, 4), pady=5)
+            font=FONT_SMALL, text_color=TEXT_DIM, fg_color=BG_HEADER,
+        ).pack(side="left", padx=(8, 4), pady=4)
 
         self._search_var = tk.StringVar()
-        self._search_entry = tk.Entry(
+        self._search_entry = ctk.CTkEntry(
             search_bar,
             textvariable=self._search_var,
-            bg=BG_ROW, fg=TEXT_MAIN,
-            insertbackground=TEXT_MAIN,
-            relief="flat", font=FONT_SMALL,
-            bd=2, highlightthickness=1,
-            highlightbackground=BORDER, highlightcolor=ACCENT,
+            fg_color=BG_ROW, text_color=TEXT_MAIN,
+            font=FONT_SMALL, height=26,
+            border_width=0,
         )
-        self._search_entry.pack(side="left", fill="x", expand=True, pady=5)
+        self._search_entry.pack(side="left", fill="x", expand=True, pady=4, padx=(0, 4))
         self._search_entry.bind("<Return>", lambda _e: self._do_search())
         self._search_entry.bind(
             "<Control-a>",
-            lambda _e: (self._search_entry.selection_range(0, "end"), "break")[-1],
+            lambda _e: (self._search_entry.select_range(0, "end"), "break")[-1],
         )
 
-        self._search_btn = tk.Button(
-            search_bar, text="Search",
-            bg=ACCENT, fg="#ffffff", activebackground=ACCENT_HOV,
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._do_search,
+        self._search_btn = ctk.CTkButton(
+            search_bar, text="Search", width=64, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._do_search,
         )
-        self._search_btn.pack(side="left", padx=(4, 4), pady=5)
+        self._search_btn.pack(side="left", padx=2, pady=4)
 
-        self._clear_btn = tk.Button(
-            search_bar, text="✕",
-            bg="#b33a3a", fg="#ffffff", activebackground="#c94848",
-            activeforeground="#ffffff",
-            relief="flat", font=FONT_SMALL,
-            bd=0, highlightthickness=0, cursor="hand2",
-            command=self._clear_search,
+        self._clear_btn = ctk.CTkButton(
+            search_bar, text="✕", width=32, height=26,
+            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            font=FONT_HEADER, command=self._clear_search,
         )
-        self._clear_btn.pack(side="left", padx=(0, 8), pady=5)
+        self._clear_btn.pack(side="left", padx=(0, 8), pady=4)
 
     def _do_close(self):
         """Close the collections panel and return to the modlist."""
@@ -1773,10 +1896,10 @@ class CollectionsDialog(tk.Frame):
         """Show/hide the URL input bar."""
         if self._url_bar.winfo_ismapped():
             self._url_bar.grid_remove()
-            self._url_toggle_btn.configure(bg="#2d5a8e", activebackground="#3d6faa")
+            self._url_toggle_btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
         else:
             self._url_bar.grid()
-            self._url_toggle_btn.configure(bg="#3d6faa", activebackground="#2d5a8e")
+            self._url_toggle_btn.configure(fg_color=ACCENT_HOV, hover_color=ACCENT)
             self._url_entry.focus_set()
 
     def _go_from_url(self):
@@ -1798,7 +1921,7 @@ class CollectionsDialog(tk.Frame):
 
         self._status_label.configure(text=f"Loading collection '{slug}'…")
         self._url_bar.grid_remove()
-        self._url_toggle_btn.configure(bg="#2d5a8e", activebackground="#3d6faa")
+        self._url_toggle_btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
 
         from Nexus.nexus_api import NexusCollection
         # The detail dialog fetches all data itself; we just need the slug.

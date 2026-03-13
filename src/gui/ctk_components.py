@@ -109,13 +109,13 @@ TEXT = "Some quick example text to build on the card title and make up the bulk 
 class CTkAlert(ctk.CTkToplevel):
     def __init__(self, state: str = "info", title: str = "Title",
                  body_text: str = "Body text", btn1: str = "OK", btn2: str = "Cancel",
-                 parent=None):
+                 parent=None, width: int = 420, height: int = 220):
         self._parent_ref = parent
         super().__init__(master=parent)
         self.old_y = None
         self.old_x = None
-        self.width = 420
-        self.height = 220
+        self.width = width
+        self.height = height
         self.resizable(False, False)
         self.overrideredirect(True)
         if parent is not None:
