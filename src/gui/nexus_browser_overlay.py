@@ -34,6 +34,146 @@ from gui.theme import (
 )
 
 
+def install_nexus_mod_from_entry(app, api, game, mod_panel, log_fn, entry,
+                                 label: str = "Missing Requirements"):
+    """Download and install a mod from Nexus by entry (mod_id, domain_name, name).
+    Used by missing-requirements panel and Nexus browser overlay.
+    """
+    domain = getattr(entry, "domain_name", "") or ""
+    mod_id = getattr(entry, "mod_id", 0)
+    mod_name = getattr(entry, "name", "") or f"Mod {mod_id}"
+
+    if api is None:
+        log_fn(f"{label}: Set your Nexus API key first.")
+        return
+    if game is None or not game.is_configured():
+        log_fn(f"{label}: No configured game selected.")
+        return
+
+    cancel_ev = mod_panel.get_download_cancel_event() if mod_panel else None
+    if mod_panel:
+        mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_ev)
+
+    def _worker():
+        downloader = getattr(app, "_nexus_downloader", None)
+        if downloader is None:
+            app.after(0, lambda: (
+                mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
+                log_fn(f"{label}: Downloader not initialised."),
+            ))
+            return
+
+        is_premium = False
+        try:
+            user = api.validate()
+            is_premium = user.is_premium
+        except Exception:
+            pass
+
+        if not is_premium:
+            files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
+            def _fallback():
+                if mod_panel:
+                    mod_panel.hide_download_progress(cancel=cancel_ev)
+                log_fn(f"{label}: Premium required for direct download.")
+                log_fn(f'{label}: Opening files page — click "Download with Mod Manager" there.')
+                log_fn(f"{label}: {files_url}")
+                try:
+                    open_url(files_url)
+                except Exception as exc:
+                    log_fn(f"{label}: Could not open browser — {exc}")
+            app.after(0, _fallback)
+            return
+
+        file_info = None
+        try:
+            files_resp = api.get_mod_files(domain, mod_id)
+            main_files = [f for f in files_resp.files if f.category_name == "MAIN"]
+            if main_files:
+                file_info = max(main_files, key=lambda f: f.uploaded_timestamp)
+            elif files_resp.files:
+                file_info = max(files_resp.files, key=lambda f: f.uploaded_timestamp)
+        except Exception as exc:
+            app.after(0, lambda: (
+                mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
+                log_fn(f"{label}: Could not fetch file list — {exc}"),
+            ))
+            return
+
+        if file_info is None:
+            app.after(0, lambda: (
+                mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
+                log_fn(f"{label}: No files found for '{mod_name}'."),
+            ))
+            return
+
+        mod_info_for_meta = None
+        try:
+            mod_info_for_meta, _ = api.get_mod_and_file_info_graphql(
+                domain, mod_id, file_info.file_id
+            )
+        except Exception:
+            pass
+
+        result = downloader.download_file(
+            game_domain=domain,
+            mod_id=mod_id,
+            file_id=file_info.file_id,
+            progress_cb=lambda cur, total: app.after(
+                0, lambda c=cur, t=total: (
+                    mod_panel.update_download_progress(c, t, cancel=cancel_ev)
+                    if mod_panel else None
+                )
+            ),
+            cancel=cancel_ev,
+            known_file_name=file_info.file_name,
+            dest_dir=get_download_cache_dir(),
+        )
+
+        if result.success and result.file_path:
+            _archive_path = result.file_path
+
+            def _install():
+                try:
+                    if app.grab_current() is not None:
+                        app.after(500, _install)
+                        return
+                except Exception:
+                    pass
+                if mod_panel:
+                    mod_panel.hide_download_progress(cancel=cancel_ev)
+                log_fn(f"{label}: Installing '{mod_name}'...")
+                try:
+                    _mod_info = mod_info_for_meta if mod_info_for_meta is not None else entry
+                    _prebuilt = build_meta_from_download(
+                        game_domain=domain,
+                        mod_id=mod_id,
+                        file_id=file_info.file_id,
+                        archive_name=result.file_name,
+                        mod_info=_mod_info,
+                        file_info=file_info,
+                    )
+                except Exception:
+                    _prebuilt = None
+
+                def _cleanup():
+                    delete_archive_and_sidecar(Path(_archive_path))
+
+                install_mod_from_archive(
+                    str(_archive_path), app, log_fn, game, mod_panel,
+                    prebuilt_meta=_prebuilt,
+                    on_installed=_cleanup)
+            app.after(0, _install)
+        else:
+            app.after(0, lambda: (
+                mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
+                log_fn(f"{label}: Download failed — {result.error}"),
+            ))
+
+    log_fn(f"{label}: Installing '{mod_name}'...")
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 class NexusBrowserOverlay(tk.Frame):
     """
     Browse / Tracked / Endorsed mods panel — embeds inside the ModListPanel area.
@@ -232,132 +372,9 @@ class NexusBrowserOverlay(tk.Frame):
 
     def _install_nexus_mod(self, entry, label: str, extract_fn: Callable):
         """Download and install a mod from Nexus (Tracked/Endorsed/Browse)."""
-        app = self._app_root
-        api = self._api
-        game = self._game
-        mod_panel = getattr(app, "_mod_panel", None)
-
-        if api is None:
-            self._log(f"{label}: Set your Nexus API key first.")
-            return
-        if game is None or not game.is_configured():
-            self._log(f"{label}: No configured game selected.")
-            return
-
         domain, mod_id, mod_name = extract_fn(entry)
-        mod_name = mod_name or f"Mod {mod_id}"
-        self._log(f"{label}: Installing '{mod_name}'...")
-
-        cancel_ev = mod_panel.get_download_cancel_event() if mod_panel else None
-        if mod_panel:
-            mod_panel.show_download_progress(f"Installing: {mod_name}", cancel=cancel_ev)
-        log_fn = self._log
-
-        def _worker():
-            downloader = getattr(app, "_nexus_downloader", None)
-            if downloader is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
-                    log_fn(f"{label}: Downloader not initialised."),
-                ))
-                return
-
-            is_premium = False
-            try:
-                user = api.validate()
-                is_premium = user.is_premium
-            except Exception:
-                pass
-
-            if not is_premium:
-                files_url = f"https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files"
-                def _fallback():
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_ev)
-                    log_fn(f"{label}: Premium required for direct download.")
-                    log_fn(f'{label}: Opening files page — click "Download with Mod Manager" there.')
-                    log_fn(f"{label}: {files_url}")
-                    try:
-                        open_url(files_url)
-                    except Exception as exc:
-                        log_fn(f"{label}: Could not open browser — {exc}")
-                app.after(0, _fallback)
-                return
-
-            file_info = None
-            try:
-                files_resp = api.get_mod_files(domain, mod_id)
-                main_files = [f for f in files_resp.files if f.category_name == "MAIN"]
-                if main_files:
-                    file_info = max(main_files, key=lambda f: f.uploaded_timestamp)
-                elif files_resp.files:
-                    file_info = max(files_resp.files, key=lambda f: f.uploaded_timestamp)
-            except Exception as exc:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
-                    log_fn(f"{label}: Could not fetch file list — {exc}"),
-                ))
-                return
-
-            if file_info is None:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
-                    log_fn(f"{label}: No files found for '{mod_name}'."),
-                ))
-                return
-
-            result = downloader.download_file(
-                game_domain=domain,
-                mod_id=mod_id,
-                file_id=file_info.file_id,
-                progress_cb=lambda cur, total: app.after(
-                    0, lambda c=cur, t=total: (
-                        mod_panel.update_download_progress(c, t, cancel=cancel_ev)
-                        if mod_panel else None
-                    )
-                ),
-                cancel=cancel_ev,
-                known_file_name=file_info.file_name,
-                dest_dir=get_download_cache_dir(),
-            )
-
-            if result.success and result.file_path:
-                _archive_path = result.file_path
-
-                def _install():
-                    try:
-                        if app.grab_current() is not None:
-                            app.after(500, _install)
-                            return
-                    except Exception:
-                        pass
-                    if mod_panel:
-                        mod_panel.hide_download_progress(cancel=cancel_ev)
-                    log_fn(f"{label}: Installing '{mod_name}'...")
-                    try:
-                        _prebuilt = build_meta_from_download(
-                            game_domain=domain,
-                            mod_id=mod_id,
-                            file_id=file_info.file_id,
-                            archive_name=result.file_name,
-                            mod_info=entry,
-                            file_info=file_info,
-                        )
-                    except Exception:
-                        _prebuilt = None
-
-                    def _cleanup():
-                        delete_archive_and_sidecar(Path(_archive_path))
-
-                    install_mod_from_archive(
-                        str(_archive_path), app, log_fn, game, mod_panel,
-                        prebuilt_meta=_prebuilt,
-                        on_installed=_cleanup)
-                app.after(0, _install)
-            else:
-                app.after(0, lambda: (
-                    mod_panel.hide_download_progress(cancel=cancel_ev) if mod_panel else None,
-                    log_fn(f"{label}: Download failed — {result.error}"),
-                ))
-
-        threading.Thread(target=_worker, daemon=True).start()
+        from types import SimpleNamespace
+        e = SimpleNamespace(domain_name=domain, mod_id=mod_id, name=mod_name)
+        app = self._app_root
+        mod_panel = getattr(app, "_mod_panel", None)
+        install_nexus_mod_from_entry(app, self._api, self._game, mod_panel, self._log, e, label)

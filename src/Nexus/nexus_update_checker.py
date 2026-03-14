@@ -234,32 +234,32 @@ def check_for_updates(
                 staging_root=staging_root,
                 save_results=save_results,
                 _log=_log,
+                category_id=info.category_id if info else 0,
+                category_name=info.category_name if info else "",
             )
 
     if not gql_info:
         _log("  GraphQL returned no results — falling back to REST for all mods.")
     else:
-        _log(f"  GraphQL check complete. {len(rest_fallback)} mod(s) need REST fallback.")
+        _log(f"  GraphQL check complete. {len(rest_fallback)} mod(s) need file-level check.")
 
     # -----------------------------------------------------------------------
-    # 4. REST fallback — threaded, for the small set without an install date
+    # 4. File-level check — use batch files when available, REST only when
+    #    GraphQL didn't return the mod (avoids N REST calls for batched mods).
     # -----------------------------------------------------------------------
     if rest_fallback:
         _lock = threading.Lock()
 
-        def _check_rest(mod_id: int, metas: list[NexusModMeta]) -> None:
-            try:
-                files_resp = api.get_mod_files(game_domain, mod_id)
-            except NexusAPIError as exc:
-                _log(f"  {metas[0].mod_name}: could not fetch files ({exc})")
-                return
-
-            if not files_resp.files:
+        def _check_with_files(mod_id: int, metas: list[NexusModMeta], files: list) -> None:
+            """Process mod(s) using file list — from GraphQL batch or REST."""
+            gql_mod_info = gql_info.get(mod_id)
+            cat_id = gql_mod_info.category_id if gql_mod_info else 0
+            if not files:
                 return
 
             for meta in metas:
                 installed_file = (
-                    next((f for f in files_resp.files if f.file_id == meta.file_id), None)
+                    next((f for f in files if f.file_id == meta.file_id), None)
                     if meta.file_id > 0
                     else None
                 )
@@ -267,7 +267,7 @@ def check_for_updates(
 
                 # Find candidates with the exact same display name (all versions of that file)
                 if installed_name:
-                    name_matches = [f for f in files_resp.files if f.name == installed_name]
+                    name_matches = [f for f in files if f.name == installed_name]
                 else:
                     name_matches = []
 
@@ -275,7 +275,7 @@ def check_for_updates(
                     latest = max(name_matches, key=lambda f: f.uploaded_timestamp)
                 else:
                     # Can't identify the exact file — flag for browser fallback
-                    latest = max(files_resp.files, key=lambda f: f.uploaded_timestamp) if files_resp.files else None
+                    latest = max(files, key=lambda f: f.uploaded_timestamp) if files else None
 
                 if latest is None:
                     continue
@@ -306,15 +306,34 @@ def check_for_updates(
                         staging_root=staging_root,
                         save_results=save_results,
                         _log=_log,
+                        category_id=cat_id,
+                        category_name=gql_mod_info.category_name if gql_mod_info else "",
                     )
 
-        with ThreadPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(_check_rest, mid, metas): mid
-                for mid, metas in rest_fallback.items()
-            }
-            for future in as_completed(futures):
-                future.result()
+        # Use batch files when GraphQL returned them; REST only for mods not in gql_info
+        rest_only: dict[int, list[NexusModMeta]] = {}
+        for mid, metas in rest_fallback.items():
+            info = gql_info.get(mid)
+            if info and info.files:
+                _check_with_files(mid, metas, info.files)
+            else:
+                rest_only[mid] = metas
+
+        if rest_only:
+            def _check_rest(mod_id: int, metas: list[NexusModMeta]) -> None:
+                try:
+                    files_resp = api.get_mod_files(game_domain, mod_id)
+                    _check_with_files(mod_id, metas, files_resp.files)
+                except NexusAPIError as exc:
+                    _log(f"  {metas[0].mod_name}: could not fetch files ({exc})")
+
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(_check_rest, mid, metas): mid
+                    for mid, metas in rest_only.items()
+                }
+                for future in as_completed(futures):
+                    future.result()
 
     _log(f"Update check complete: {len(updates)} update(s) available.")
 
@@ -348,6 +367,8 @@ def _apply_update_result(
     staging_root: Path,
     save_results: bool,
     _log: Callable,
+    category_id: int = 0,
+    category_name: str = "",
 ) -> None:
     """Record an update (or clear the flag) and persist to meta.ini."""
     if has_update:
@@ -368,6 +389,10 @@ def _apply_update_result(
             meta.latest_file_id = latest_file_id
             meta.latest_version = latest_version
             meta.has_update = True
+            if category_id > 0:
+                meta.category_id = category_id
+            if category_name:
+                meta.category_name = category_name
             write_meta(staging_root / meta.mod_name / "meta.ini", meta)
     else:
         if save_results:
@@ -380,6 +405,12 @@ def _apply_update_result(
                 changed = True
             if latest_version and meta.latest_version != latest_version:
                 meta.latest_version = latest_version
+                changed = True
+            if category_id > 0 and meta.category_id != category_id:
+                meta.category_id = category_id
+                changed = True
+            if category_name and meta.category_name != category_name:
+                meta.category_name = category_name
                 changed = True
             if changed:
                 write_meta(staging_root / meta.mod_name / "meta.ini", meta)

@@ -5890,18 +5890,16 @@ class MissingReqsPanel(ctk.CTkFrame):
                 idx = len(view_btns)
                 req = missing_list[idx]
                 url = req.url or f"https://www.nexusmods.com/{self._domain or req.game_domain}/mods/{req.mod_id}"
-                vb = tk.Button(
-                    canvas, text="View",
-                    bg=ACCENT, fg="#ffffff", activebackground=ACCENT_HOV,
-                    relief="flat", font=("Segoe UI", _theme.FS10), bd=0,
-                    highlightthickness=0, cursor="hand2",
+                vb = ctk.CTkButton(
+                    self, text="View", width=VIEW_W, height=28,
+                    fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="#ffffff",
+                    font=("Segoe UI", _theme.FS10), cursor="hand2",
                     command=lambda u=url: open_url(u),
                 )
-                ib = tk.Button(
-                    canvas, text="Install",
-                    bg="#2d7a2d", fg="#ffffff", activebackground="#3a9e3a",
-                    relief="flat", font=("Segoe UI", _theme.FS10), bd=0,
-                    highlightthickness=0, cursor="hand2",
+                ib = ctk.CTkButton(
+                    self, text="Install", width=BTN_W, height=28,
+                    fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="#ffffff",
+                    font=("Segoe UI", _theme.FS10), cursor="hand2",
                     command=lambda r=req: self._on_install(r),
                 )
                 view_btns.append(vb)

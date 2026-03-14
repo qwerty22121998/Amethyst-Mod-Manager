@@ -22,7 +22,12 @@ import customtkinter as ctk
 from PIL import Image
 
 from gui.ctk_components import CTkAlert
-from gui.game_helpers import _create_profile, _profiles_for_game
+from gui.game_helpers import (
+    _create_profile,
+    _profiles_for_game,
+    get_collection_url_from_profile,
+    save_collection_url_to_profile,
+)
 from gui.install_mod import install_mod_from_archive
 from gui.mod_card import CARD_PAD, make_placeholder_image
 from gui.mod_name_utils import _suggest_mod_names
@@ -31,6 +36,7 @@ from Utils.filemap import rebuild_mod_index
 from Utils.config_paths import get_download_cache_dir
 from Nexus.nexus_download import delete_archive_and_sidecar
 from Nexus.nexus_meta import build_meta_from_download
+from Utils.xdg import open_url
 
 # Collections-specific card dimensions (5-column grid)
 _COLL_COLS  = 5
@@ -468,7 +474,7 @@ class CollectionDetailDialog(tk.Frame):
     _TV_COLS = ("Order", "Mod Name", "Author", "File", "Size", "Opt")
     _TV_WIDTHS = (50, 250, 120, 200, 80, 40)
 
-    def __init__(self, parent, collection, game_domain: str, api, game=None, app_root=None, log_fn=None, on_close=None):
+    def __init__(self, parent, collection, game_domain: str, api, game=None, app_root=None, log_fn=None, on_close=None, profile_dir=None):
         super().__init__(parent, bg=BG_DEEP)
         self._collection = collection
         self._game_domain = game_domain
@@ -477,7 +483,9 @@ class CollectionDetailDialog(tk.Frame):
         self._app_root = app_root
         self._log = log_fn or (lambda *a: None)
         self._on_close = on_close or self.destroy
+        self._profile_dir_override = profile_dir  # when set, use instead of deriving from collection name
 
+        self._name_var = tk.StringVar(value=collection.name or collection.slug or "Collection")
         self._size_var = tk.StringVar(value="Loading\u2026")
         self._status_var = tk.StringVar(value="Fetching mod list\u2026")
         self._loaded_mods: list = []
@@ -489,7 +497,7 @@ class CollectionDetailDialog(tk.Frame):
 
         self._build_ui()
         self._fetch()
-        self.after(100, self._update_reset_btn_visibility)  # check after widget is placed
+        self.after(100, lambda: (self._update_reset_btn_visibility(), self._update_open_missing_btn_visibility()))
 
     # ------------------------------------------------------------------
     def _build_ui(self):
@@ -500,7 +508,7 @@ class CollectionDetailDialog(tk.Frame):
         hdr.pack(fill="x", side="top")
 
         tk.Label(
-            hdr, text=col.name,
+            hdr, textvariable=self._name_var,
             bg=BG_HEADER, fg=TEXT_MAIN,
             font=("Segoe UI", 13, "bold"),
             anchor="w",
@@ -629,6 +637,16 @@ class CollectionDetailDialog(tk.Frame):
             command=self._on_clear_cache,
         )
         self._clear_cache_btn.pack(side="right", padx=(10, 0), pady=6)
+
+        self._open_missing_btn = ctk.CTkButton(
+            ftr, text="Open Missing on Nexus",
+            height=30, fg_color="#5a3a00", hover_color="#7a5200",
+            text_color="#ffffff", font=("Segoe UI", 10),
+            border_width=0,
+            command=self._on_open_missing_on_nexus,
+        )
+        # Shown only when collection is installed and has missing mods; see _update_open_missing_btn_visibility()
+
         self.after(100, self._refresh_cache_size)
 
         self._reset_btn = ctk.CTkButton(
@@ -681,8 +699,13 @@ class CollectionDetailDialog(tk.Frame):
             # downloading the archive a second time.
             self._collection_schema_cache = cj
 
+            # Update collection name from API (fixes slug-only placeholder when opened via URL/nxm)
+            if name:
+                self._collection.name = name
             try:
-                self.after(0, lambda: self._populate(total_size, mod_count, mods, dl_path, schema_order))
+                self.after(0, lambda: self._populate(
+                    name or self._collection.slug or "Collection",
+                    total_size, mod_count, mods, dl_path, schema_order))
             except Exception:
                 pass
         except Exception as exc:
@@ -692,8 +715,9 @@ class CollectionDetailDialog(tk.Frame):
             except Exception:
                 pass
 
-    def _populate(self, total_size: int, mod_count: int, mods, dl_path: str = "", schema_order=None):
+    def _populate(self, collection_name: str, total_size: int, mod_count: int, mods, dl_path: str = "", schema_order=None):
         schema_order = schema_order or {}
+        self._name_var.set(collection_name)
         self._size_var.set(f"Total size: {_fmt_size(total_size)}  |  {mod_count:,} mods")
         self._loaded_mods = mods
         self._download_link_path = dl_path
@@ -755,6 +779,8 @@ class CollectionDetailDialog(tk.Frame):
             )
             if mod.file_id:
                 self._file_id_to_tree_iid[mod.file_id] = iid
+
+        self._update_open_missing_btn_visibility()
 
     def _mark_row_installed(self, file_id: int) -> None:
         """Switch a treeview row to the green 'installed' tag (called on main thread)."""
@@ -835,6 +861,10 @@ class CollectionDetailDialog(tk.Frame):
             return
 
         self._log(f"Collection install: created profile '{profile_name}' at {profile_dir}")
+        # Store collection URL in profile_settings.json for "Open Current" button
+        game_domain = getattr(self._game, "nexus_game_domain", None) or self._game_domain
+        collection_url = f"https://www.nexusmods.com/{game_domain}/collections/{self._collection.slug}"
+        save_collection_url_to_profile(profile_dir, collection_url)
         # Refresh the profile dropdown immediately so the new profile is visible
         self._refresh_profile_menu()
         self._status_var.set(f"Starting install of {len(mods)} mods into '{profile_name}'…")
@@ -1377,12 +1407,15 @@ class CollectionDetailDialog(tk.Frame):
         )
         self._refresh_profile_menu()
         self._update_reset_btn_visibility()
+        self._update_open_missing_btn_visibility()
 
     # ------------------------------------------------------------------
     # Reset load order
     # ------------------------------------------------------------------
     def _get_profile_dir(self) -> "Path | None":
         """Return the profile directory for this collection, or None if it doesn't exist."""
+        if self._profile_dir_override is not None and self._profile_dir_override.is_dir():
+            return self._profile_dir_override
         raw = self._collection.name or self._collection.slug or "Collection"
         profile_name = re.sub(r"[^\w\s\-]", "", raw).strip().replace(" ", "_")[:64] or "Collection"
         game = self._game
@@ -1447,6 +1480,56 @@ class CollectionDetailDialog(tk.Frame):
                 self._reset_btn.pack_forget()
         except Exception:
             pass
+
+    def _update_open_missing_btn_visibility(self):
+        """Show 'Open Missing on Nexus' only when collection is installed and has missing mods."""
+        if not hasattr(self, "_open_missing_btn") or self._open_missing_btn is None:
+            return
+        try:
+            if self._get_profile_dir() is None:
+                self._open_missing_btn.pack_forget()
+                return
+            missing_mod_ids = self._get_missing_mod_ids()
+            if missing_mod_ids:
+                self._open_missing_btn.pack(side="right", padx=(10, 0), pady=6)
+            else:
+                self._open_missing_btn.pack_forget()
+        except Exception:
+            self._open_missing_btn.pack_forget()
+
+    def _get_missing_mod_ids(self) -> set[int]:
+        """Return mod_ids of collection mods that are not installed (deduped)."""
+        installed_names, file_id_to_folder = self._get_installed_mod_info()
+        if installed_names is None:
+            return set()
+        missing: set[int] = set()
+        for mod in getattr(self, "_loaded_mods", []) or []:
+            if mod.mod_id <= 0:
+                continue
+            is_installed = False
+            if mod.file_id and mod.file_id in file_id_to_folder:
+                is_installed = True
+            elif installed_names:
+                for raw in (mod.mod_name or "", mod.file_name or ""):
+                    if raw:
+                        for s in _suggest_mod_names(raw):
+                            if s and s.lower() in installed_names:
+                                is_installed = True
+                                break
+                    if is_installed:
+                        break
+            if not is_installed:
+                missing.add(mod.mod_id)
+        return missing
+
+    def _on_open_missing_on_nexus(self):
+        """Open Nexus pages for all mods in the collection that are not installed."""
+        missing = self._get_missing_mod_ids()
+        if not missing:
+            return
+        for mod_id in sorted(missing):
+            url = f"https://www.nexusmods.com/{self._game_domain}/mods/{mod_id}"
+            open_url(url)
 
     def _refresh_cache_size(self):
         """Update the Clear Cache button text with the current cache folder size."""
@@ -1678,6 +1761,8 @@ class CollectionsDialog(tk.Frame):
         log_fn: Optional[Callable] = None,
         app_root: Optional[tk.Widget] = None,
         on_close: Optional[Callable] = None,
+        initial_slug: Optional[str] = None,
+        initial_game_domain: Optional[str] = None,
     ):
         super().__init__(parent, bg=BG_DEEP)
         self._game_domain = game_domain
@@ -1686,6 +1771,8 @@ class CollectionsDialog(tk.Frame):
         self._app_root = app_root or parent.winfo_toplevel()
         self._log = log_fn or (lambda msg: None)
         self._on_close = on_close
+        self._initial_slug = initial_slug
+        self._initial_game_domain = (initial_game_domain or game_domain).lower()
 
         self._collections: list = []
         self._cards: list[CollectionCard] = []
@@ -1698,6 +1785,8 @@ class CollectionsDialog(tk.Frame):
 
         self._build()
         self.after(50, self._load_page)
+        if initial_slug:
+            self.after(150, self._open_initial_collection)
 
     # ------------------------------------------------------------------
     # Build UI
@@ -1706,6 +1795,17 @@ class CollectionsDialog(tk.Frame):
     # ------------------------------------------------------------------
     # URL parsing helper
     # ------------------------------------------------------------------
+
+    def _open_initial_collection(self):
+        """Open the collection specified by initial_slug (from nxm:// link)."""
+        slug = self._initial_slug
+        if not slug:
+            return
+        self._initial_slug = None  # only once
+        from Nexus.nexus_api import NexusCollection
+        domain = self._initial_game_domain or self._game_domain
+        col = NexusCollection(slug=slug, name=slug, game_domain=domain)
+        self._open_detail(col)
 
     @staticmethod
     def _parse_collection_url(url: str) -> tuple[str, str]:
@@ -1760,6 +1860,15 @@ class CollectionsDialog(tk.Frame):
             state="disabled",
         )
         self._next_btn.pack(side="left", padx=4, pady=2)
+
+        self._open_current_btn = ctk.CTkButton(
+            toolbar, text="Open Current", width=95, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._open_current_collection,
+        )
+        # Only show if current profile has a collection URL
+        self._open_current_url: str | None = None
+        self._update_open_current_visibility()
 
         self._url_toggle_btn = ctk.CTkButton(
             toolbar, text="Open URL…", width=90, height=26,
@@ -1890,8 +1999,33 @@ class CollectionsDialog(tk.Frame):
             self.destroy()
 
     # ------------------------------------------------------------------
-    # Open from URL
+    # Open from URL / Open Current
     # ------------------------------------------------------------------
+
+    def _update_open_current_visibility(self):
+        """Show 'Open Current' button only if the active profile has a collection URL."""
+        self._open_current_url = None
+        profile_dir = getattr(self._game, "_active_profile_dir", None) if self._game else None
+        if profile_dir:
+            self._open_current_url = get_collection_url_from_profile(profile_dir)
+        if self._open_current_url:
+            self._open_current_btn.pack(side="left", padx=4, pady=2)
+        else:
+            self._open_current_btn.pack_forget()
+
+    def _open_current_collection(self):
+        """Open the collection in the manager (detail view) for the currently selected profile."""
+        if not self._open_current_url:
+            return
+        slug, url_domain = self._parse_collection_url(self._open_current_url)
+        if not slug:
+            return
+        game_domain = url_domain or self._game_domain
+        from Nexus.nexus_api import NexusCollection
+        col = NexusCollection(slug=slug, name=slug, game_domain=game_domain)
+        # Pass current profile dir so Reset Load Order button appears (profile name may differ from slug)
+        profile_dir = getattr(self._game, "_active_profile_dir", None) if self._game else None
+        self._open_detail(col, profile_dir=profile_dir)
 
     def _toggle_url_bar(self):
         """Show/hide the URL input bar."""
@@ -1979,13 +2113,14 @@ class CollectionsDialog(tk.Frame):
         self._regrid_cards()
         self._load_images()
 
-    def _open_detail(self, collection):
+    def _open_detail(self, collection, profile_dir=None):
         self._close_detail()
         panel = CollectionDetailDialog(
             self, collection=collection,
             game_domain=self._game_domain, api=self._api,
             game=self._game, app_root=self._app_root, log_fn=self._log,
             on_close=self._close_detail,
+            profile_dir=profile_dir,
         )
         panel.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._detail_panel = panel

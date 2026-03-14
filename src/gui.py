@@ -79,7 +79,7 @@ from Utils.plugins import (
 from Nexus.nexus_api import NexusAPI, load_api_key, clear_api_key
 from Nexus.nexus_oauth import load_oauth_tokens
 from Nexus.nexus_download import NexusDownloader, delete_archive_and_sidecar
-from Nexus.nxm_handler import NxmLink, NxmHandler, NxmIPC
+from Nexus.nxm_handler import NxmLink, NxmCollectionLink, NxmHandler, NxmIPC, parse_nxm_url
 from Nexus.nexus_meta import build_meta_from_download, write_meta
 from Utils.config_paths import get_download_cache_dir
 
@@ -483,16 +483,16 @@ class App(ctk.CTk):
         self._process_nxm_link(nxm_url)
 
     def _process_nxm_link(self, nxm_url: str):
-        """Download a mod from an nxm:// link and install it."""
+        """Handle an nxm:// link — either download a mod or open a collection."""
         log = self._status.log
 
-        if self._nexus_api is None or self._nexus_downloader is None:
-            log("Nexus: No API key configured — cannot download.")
+        if self._nexus_api is None:
+            log("Nexus: No API key configured — cannot use Nexus features.")
             log("Open the Nexus button in the toolbar to set your API key.")
             from tkinter import messagebox
             messagebox.showwarning(
                 "Nexus API Key Required",
-                "You need to set your Nexus Mods API key before downloading.\n\n"
+                "You need to set your Nexus Mods API key.\n\n"
                 "Click the \"Nexus\" button in the toolbar to enter your key.\n\n"
                 "Get your key from:\nnexusmods.com → Settings → API Keys",
                 parent=self,
@@ -500,11 +500,20 @@ class App(ctk.CTk):
             return
 
         try:
-            link = NxmLink.parse(nxm_url)
+            mod_link, coll_link = parse_nxm_url(nxm_url)
         except ValueError as exc:
             log(f"Nexus: Bad nxm:// URL — {exc}")
             return
 
+        if coll_link is not None:
+            self._process_nxm_collection_link(coll_link)
+            return
+
+        if self._nexus_downloader is None:
+            log("Nexus: No downloader configured — cannot download mods.")
+            return
+
+        link = mod_link
         log(f"Nexus: Downloading mod {link.mod_id} file {link.file_id} "
             f"from {link.game_domain}...")
 
@@ -568,6 +577,46 @@ class App(ctk.CTk):
                 ))
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _process_nxm_collection_link(self, coll_link: NxmCollectionLink):
+        """Switch to the matching game and open the collection page."""
+        log = self._status.log
+        log(f"Nexus: Opening collection '{coll_link.slug}' from {coll_link.game_domain}")
+
+        # Find the game matching the collection's domain
+        matched_game = None
+        for name, game in _GAMES.items():
+            if game.nexus_game_domain == coll_link.game_domain and game.is_configured():
+                matched_game = (name, game)
+                break
+
+        if not matched_game:
+            log(f"Nexus: No configured game found for domain '{coll_link.game_domain}' — cannot open collection.")
+            tkinter.messagebox.showinfo(
+                "Collection Link",
+                f"No configured game found for Nexus domain '{coll_link.game_domain}'.\n\n"
+                "Add and configure the game (e.g. Stardew Valley) to open collections.",
+                parent=self,
+            )
+            return
+
+        # Switch to the matching game if different
+        current = self._topbar._game_var.get()
+        if current != matched_game[0]:
+            self._topbar._game_var.set(matched_game[0])
+            self._topbar._on_game_change(matched_game[0])
+            log(f"Nexus: Switched to game '{matched_game[0]}'")
+
+        # Open collections panel with this slug (after a short delay so mod panel is ready)
+        def _open():
+            mod_panel = getattr(self, "_mod_panel", None)
+            if mod_panel:
+                mod_panel._on_collections(
+                    initial_slug=coll_link.slug,
+                    initial_game_domain=coll_link.game_domain,
+                )
+
+        self.after(200, _open)
 
     def _nxm_install(self, result, matched_game, mod_info=None, file_info=None):
         """Install a downloaded NXM file into the current game.

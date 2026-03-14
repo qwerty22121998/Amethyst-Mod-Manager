@@ -111,6 +111,39 @@ from Utils.config_paths import get_download_cache_dir
 from Nexus.nexus_update_checker import check_for_updates
 
 
+_truncate_cache: dict[tuple, str] = {}
+
+
+def _truncate_text_for_width(widget: tk.Widget, text: str, font: tuple, max_px: int) -> str:
+    """Return *text* truncated with '…' so it fits within *max_px* pixels.
+    Results are cached by (text, font, max_px) to avoid repeated Tcl font measure
+    calls (same pattern as plugin_panel — prevents lag during scroll/redraw)."""
+    key = (text, font, max_px)
+    cached = _truncate_cache.get(key)
+    if cached is not None:
+        return cached
+    if max_px <= 0 or not text:
+        _truncate_cache[key] = text
+        return text
+    try:
+        if widget.tk.call("font", "measure", font, text) <= max_px:
+            _truncate_cache[key] = text
+            return text
+        ellipsis = "…"
+        ellipsis_w = widget.tk.call("font", "measure", font, ellipsis)
+        out = text
+        while out and widget.tk.call("font", "measure", font, out) + ellipsis_w > max_px:
+            out = out[:-1]
+        result = out + ellipsis
+        _truncate_cache[key] = result
+        return result
+    except Exception:
+        max_chars = max(1, (max_px - 12) // 7)
+        result = (text[: max_chars - 1] + "…") if len(text) > max_chars else text
+        _truncate_cache[key] = result
+        return result
+
+
 def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
     """Pure scan over meta.ini; returns dict of results. Safe to run in thread."""
     update_mods: set[str] = set()
@@ -119,6 +152,7 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
     endorsed_mods: set[str] = set()
     install_dates: dict[str, str] = {}
     install_datetimes: dict[str, datetime] = {}
+    category_names: dict[str, str] = {}
     today = datetime.now().date()
     for entry in entries:
         if entry.is_separator:
@@ -151,6 +185,8 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
                 else:
                     install_dates[entry.name] = dt.strftime("%-m/%-d/%y")
                 install_datetimes[entry.name] = dt
+            if meta.category_name:
+                category_names[entry.name] = meta.category_name
         except Exception:
             pass
     return {
@@ -160,6 +196,7 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
         "endorsed_mods": endorsed_mods,
         "install_dates": install_dates,
         "install_datetimes": install_datetimes,
+        "category_names": category_names,
     }
 
 
@@ -281,6 +318,7 @@ class ModListPanel(ctk.CTkFrame):
 
         # Map mod name → install date display string
         self._install_dates: dict[str, str] = {}
+        self._category_names: dict[str, str] = {}
         # Map mod name → install datetime for sorting (parallel to _install_dates)
         self._install_datetimes: dict[str, datetime] = {}
 
@@ -339,6 +377,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_has_plugins: bool = False
         self._filter_has_disabled_files: bool = False
         self._filter_has_updates: bool = False
+        self._filter_categories: frozenset[str] = frozenset()  # when non-empty, show only these categories
         self._disabled_plugins_map: dict[str, list[str]] = {}  # mod_name → [plugin, ...]
         self._excluded_mod_files_map: dict[str, list[str]] = {}  # mod_name → [rel_key, ...]
         self._visible_indices: list[int] = []  # entry indices matching current filter
@@ -370,6 +409,7 @@ class ModListPanel(ctk.CTkFrame):
         self._pool_flag_icon: list[int] = []         # image canvas item ids (flags column)
         self._pool_conflict_icon1: list[int] = []    # image canvas item ids (conflict col left)
         self._pool_conflict_icon2: list[int] = []    # image canvas item ids (conflict col right)
+        self._pool_category_text: list[int] = []     # text canvas item ids (category)
         self._pool_install_text: list[int] = []      # text canvas item ids (install date)
         self._pool_priority_text: list[int] = []     # text canvas item ids (priority)
         self._pool_sep_icon: list[int] = []          # image canvas item ids (collapse arrow)
@@ -557,6 +597,7 @@ class ModListPanel(ctk.CTkFrame):
         self._marker_strip.bind("<Configure>", self._on_marker_strip_resize)
 
         self._canvas_w = 600   # updated on first <Configure>
+        self._layout_columns(600)  # init before first _redraw (avoids IndexError on _COL_X[6])
         self._canvas.bind("<Configure>",      self._on_canvas_resize)
         self._canvas.bind("<Button-4>",       self._on_scroll_up)
         self._canvas.bind("<Button-5>",       self._on_scroll_down)
@@ -749,9 +790,78 @@ class ModListPanel(ctk.CTkFrame):
                 command=self._on_filter_panel_change,
             ).pack(anchor="w", pady=3)
 
+        # Category filter section
+        ctk.CTkLabel(
+            scroll_frame, text="", height=8, fg_color="transparent",
+        ).pack(anchor="w")
+        ctk.CTkLabel(
+            scroll_frame, text="Show only categories:",
+            font=_theme.FONT_SMALL, text_color=TEXT_DIM, anchor="w",
+        ).pack(anchor="w")
+        self._fsp_category_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
+        self._fsp_category_frame.pack(anchor="w", pady=(2, 0))
+        self._fsp_category_vars: dict[str, tk.BooleanVar] = {}
+
+        self._filter_scroll_frame = scroll_frame
+        self._bind_filter_panel_scroll()
+
+    def _bind_filter_panel_scroll(self) -> None:
+        """Bind mouse wheel to the filter panel's scroll frame (Linux Button-4/5, Windows MouseWheel)."""
+        scroll_frame = getattr(self, "_filter_scroll_frame", None)
+        if not scroll_frame or not hasattr(scroll_frame, "_parent_canvas"):
+            return
+
+        def _on_wheel(evt):
+            num = getattr(evt, "num", None)
+            delta = getattr(evt, "delta", 0) or 0
+            if num == 4 or delta > 0:
+                scroll_frame._parent_canvas.yview_scroll(-30, "units")
+            elif num == 5 or delta < 0:
+                scroll_frame._parent_canvas.yview_scroll(30, "units")
+
+        def _bind_recursive(w):
+            w.bind("<MouseWheel>", _on_wheel)
+            w.bind("<Button-4>", _on_wheel)
+            w.bind("<Button-5>", _on_wheel)
+            for child in w.winfo_children():
+                _bind_recursive(child)
+
+        _bind_recursive(scroll_frame)
+
+    def _refresh_filter_category_list(self) -> None:
+        """Populate category checkboxes from current _category_names. Call when opening filter panel."""
+        for w in self._fsp_category_frame.winfo_children():
+            w.destroy()
+        self._fsp_category_vars.clear()
+        categories = sorted(
+            set(self._category_names.values()) | {""},
+            key=lambda c: ("(Uncategorized)" if c == "" else c).lower(),
+        )
+        for cat in categories:
+            label = "(Uncategorized)" if cat == "" else cat
+            var = tk.BooleanVar(value=cat in self._filter_categories)
+            self._fsp_category_vars[cat] = var
+            ctk.CTkCheckBox(
+                self._fsp_category_frame,
+                text=label,
+                variable=var,
+                font=_theme.FONT_SMALL,
+                text_color=TEXT_MAIN,
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOV,
+                border_color=BORDER,
+                checkmark_color="white",
+                command=self._on_filter_panel_change,
+            ).pack(anchor="w", pady=2)
+
+        self._bind_filter_panel_scroll()
+
     def _on_filter_panel_change(self):
         """Called when any checkbox in the inline filter panel changes."""
         state = {k: v.get() for k, v in self._fsp_vars.items()}
+        state["filter_categories"] = frozenset(
+            c for c, v in self._fsp_category_vars.items() if v.get()
+        )
         self._apply_modlist_filters(state)
 
     def _reposition_all_dl_popups(self, *_) -> None:
@@ -870,38 +980,46 @@ class ModListPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _layout_columns(self, canvas_w: int):
-        """Compute column x positions given the current canvas width."""
-        # col 0: checkbox   28px
-        # col 1: name       fills
-        # col 2: flags      50px
-        # col 3: conflicts  90px
-        # col 4: installed  95px
-        # col 5: priority   64px  (+ 14px scrollbar gap)
-        right_cols = 50 + 90 + 95 + 64 + 14
+        """Compute column x positions given the current canvas width.
+
+        Right-side columns scale with window size (1.0x at 700px, up to 1.4x) and
+        have gaps between them to prevent overlap.
+        """
+        # Base widths at 700px; scale up for larger windows
+        scale = min(1.4, max(1.0, canvas_w / 700))
+        gap = 10
+        cat_w = int(130 * scale)    # category (fits "Visuals and Graphics", "Modding Tools")
+        flags_w = int(56 * scale)
+        conflicts_w = int(95 * scale)
+        installed_w = int(100 * scale)
+        priority_w = int(72 * scale)
+        scroll_gap = 14
+        right_cols = gap * 5 + cat_w + flags_w + conflicts_w + installed_w + priority_w + scroll_gap
         name_w = max(80, canvas_w - 28 - right_cols)
-        self._COL_X = [
-            4,                               # checkbox
-            32,                              # name left edge
-            32 + name_w,                     # flags
-            32 + name_w + 50,                # conflicts
-            32 + name_w + 50 + 90,           # installed
-            32 + name_w + 50 + 90 + 95,      # priority
-        ]
+        # Column left edges (x positions)
+        x0, x1 = 4, 32
+        x2 = x1 + name_w + gap
+        x3 = x2 + cat_w + gap
+        x4 = x3 + flags_w + gap
+        x5 = x4 + conflicts_w + gap
+        x6 = x5 + installed_w + gap
+        self._COL_X = [x0, x1, x2, x3, x4, x5, x6]
+        self._COL_W = [28, name_w, cat_w, flags_w, conflicts_w, installed_w, priority_w]
         self._canvas_w = canvas_w
-        self._name_col_right = 32 + name_w - 4
+        self._name_col_right = x1 + name_w - 4
 
     # Map header index → sort key name (index 0 is checkbox, not sortable)
-    _HEADER_SORT_KEYS = {1: "name", 2: "flags", 3: "conflicts", 4: "installed", 5: "priority"}
+    _HEADER_SORT_KEYS = {1: "name", 2: "category", 3: "flags", 4: "conflicts", 5: "installed", 6: "priority"}
 
     def _update_header(self, canvas_w: int):
         for lbl in self._header_labels:
             lbl.destroy()
         self._header_labels.clear()
 
-        titles  = ["", "Mod Name", "Flags", "Conflicts", "Installed", "Priority"]
+        titles  = ["", "Mod Name", "Category", "Flags", "Conflicts", "Installed", "Priority"]
         x_pos   = self._COL_X
-        anchors = ["center", "w", "center", "center", "center", "center"]
-        widths  = [28, self._name_col_right - 32, 50, 90, 95, 64]
+        anchors = ["center", "w", "center", "center", "center", "center", "center"]
+        widths  = self._COL_W
         for i, (title, x, anc, w) in enumerate(zip(titles, x_pos, anchors, widths)):
             sort_key = self._HEADER_SORT_KEYS.get(i)
             # Show sort arrow on the active column
@@ -1149,6 +1267,7 @@ class ModListPanel(ctk.CTkFrame):
         self._endorsed_mods.clear()
         self._install_dates.clear()
         self._install_datetimes.clear()
+        self._category_names.clear()
         self._vis_dirty = True
         if self._modlist_path is None or not self._staging_root.is_dir():
             return
@@ -1179,6 +1298,9 @@ class ModListPanel(ctk.CTkFrame):
         self._endorsed_mods = results["endorsed_mods"]
         self._install_dates = results["install_dates"]
         self._install_datetimes = results["install_datetimes"]
+        self._category_names = results.get("category_names", {})
+        if self._filter_panel_open:
+            self._refresh_filter_category_list()
         self._vis_dirty = True
         self._redraw()
         self._update_info()
@@ -1264,6 +1386,9 @@ class ModListPanel(ctk.CTkFrame):
             # Conflict icons (left slot and right slot)
             conf1_id = c.create_image(0, -200, anchor="center", state="hidden")
             conf2_id = c.create_image(0, -200, anchor="center", state="hidden")
+            # Category text
+            cat_id = c.create_text(0, -200, text="", anchor="center", fill="",
+                                  font=("Segoe UI", _theme.FS10), state="hidden")
             # Install date text
             inst_id = c.create_text(0, -200, text="", anchor="center", fill="",
                                     font=("Segoe UI", _theme.FS10), state="hidden")
@@ -1284,6 +1409,7 @@ class ModListPanel(ctk.CTkFrame):
             self._pool_flag_icon.append(flag_id)
             self._pool_conflict_icon1.append(conf1_id)
             self._pool_conflict_icon2.append(conf2_id)
+            self._pool_category_text.append(cat_id)
             self._pool_install_text.append(inst_id)
             self._pool_priority_text.append(prio_id)
             self._pool_sep_icon.append(sep_icon_id)
@@ -1556,7 +1682,7 @@ class ModListPanel(ctk.CTkFrame):
 
                     # Overwrite row conflict icons in conflict column
                     if is_overwrite and self._overrides.get(OVERWRITE_NAME):
-                        cx = self._COL_X[3] + 45
+                        cx = self._COL_X[4] + self._COL_W[4] // 2
                         if self._icon_minus:
                             c.coords(self._pool_conflict_icon1[s], cx - 8, y_mid)
                             c.itemconfigure(self._pool_conflict_icon1[s],
@@ -1575,6 +1701,7 @@ class ModListPanel(ctk.CTkFrame):
 
                     # Hide mod-only items
                     c.itemconfigure(self._pool_flag_icon[s], state="hidden")
+                    c.itemconfigure(self._pool_category_text[s], state="hidden")
                     c.itemconfigure(self._pool_install_text[s], state="hidden")
                     c.itemconfigure(self._pool_priority_text[s], state="hidden")
 
@@ -1695,11 +1822,14 @@ class ModListPanel(ctk.CTkFrame):
                     c.coords(self._pool_bg[s], 0, y_top, cw, y_bot)
                     c.itemconfigure(self._pool_bg[s], fill=bg, outline="", state="normal")
 
-                    # Name text
+                    # Name text (truncate if it would overlap the category column)
                     name_color = TEXT_DIM if not entry.enabled else TEXT_MAIN
+                    name_font = ("Segoe UI", _theme.FS11)
+                    name_width = self._COL_W[1] - 4  # leave 4px padding
+                    display_name = _truncate_text_for_width(c, entry.name, name_font, name_width)
                     c.coords(self._pool_name[s], self._COL_X[1], y_mid)
-                    c.itemconfigure(self._pool_name[s], text=entry.name, anchor="w",
-                                    fill=name_color, font=("Segoe UI", _theme.FS11), state="normal")
+                    c.itemconfigure(self._pool_name[s], text=display_name, anchor="w",
+                                    fill=name_color, font=name_font, state="normal")
 
                     # Hide separator-only items
                     c.itemconfigure(self._pool_sep_icon[s], state="hidden")
@@ -1707,8 +1837,22 @@ class ModListPanel(ctk.CTkFrame):
                     c.itemconfigure(self._pool_sep_line_r[s], state="hidden")
                     c.itemconfigure(self._pool_sep_badge[s], state="hidden")
 
+                    # Category text (truncate if it would overlap the flags column)
+                    cat_text = self._category_names.get(entry.name, "")
+                    if cat_text:
+                        cat_font = ("Segoe UI", _theme.FS10)
+                        cat_width = self._COL_W[2] - 4
+                        display_cat = _truncate_text_for_width(c, cat_text, cat_font, cat_width)
+                        cat_cx = self._COL_X[2] + self._COL_W[2] // 2
+                        c.coords(self._pool_category_text[s], cat_cx, y_mid)
+                        c.itemconfigure(self._pool_category_text[s],
+                                        text=display_cat, anchor="center",
+                                        fill=TEXT_DIM, font=cat_font, state="normal")
+                    else:
+                        c.itemconfigure(self._pool_category_text[s], state="hidden")
+
                     # Flags icon
-                    flag_x = self._COL_X[2] + 10
+                    flag_x = self._COL_X[3] + self._COL_W[3] // 2
                     if (entry.name in self._missing_reqs
                             and entry.name not in self._ignored_missing_reqs
                             and self._icon_warning):
@@ -1753,7 +1897,7 @@ class ModListPanel(ctk.CTkFrame):
                     # Conflict icons (non-locked rows; locked rows' icons already set above)
                     if not entry.locked:
                         conflict = self._conflict_map.get(entry.name, CONFLICT_NONE)
-                        cx = self._COL_X[3] + 45
+                        cx = self._COL_X[4] + self._COL_W[4] // 2
                         if conflict == CONFLICT_WINS and self._icon_plus:
                             c.coords(self._pool_conflict_icon1[s], cx, y_mid)
                             c.itemconfigure(self._pool_conflict_icon1[s],
@@ -1783,7 +1927,8 @@ class ModListPanel(ctk.CTkFrame):
                         # Install date text
                         install_text = self._install_dates.get(entry.name, "")
                         if install_text:
-                            c.coords(self._pool_install_text[s], self._COL_X[4] + 47, y_mid)
+                            inst_cx = self._COL_X[5] + self._COL_W[5] // 2
+                            c.coords(self._pool_install_text[s], inst_cx, y_mid)
                             c.itemconfigure(self._pool_install_text[s],
                                             text=install_text, anchor="center",
                                             fill=TEXT_DIM, font=("Segoe UI", _theme.FS10), state="normal")
@@ -1791,7 +1936,8 @@ class ModListPanel(ctk.CTkFrame):
                             c.itemconfigure(self._pool_install_text[s], state="hidden")
 
                         # Priority text
-                        c.coords(self._pool_priority_text[s], self._COL_X[5] + 32, y_mid)
+                        prio_cx = self._COL_X[6] + self._COL_W[6] // 2
+                        c.coords(self._pool_priority_text[s], prio_cx, y_mid)
                         c.itemconfigure(self._pool_priority_text[s],
                                         text=str(priorities.get(i, "")), anchor="center",
                                         fill=TEXT_DIM, font=("Segoe UI", _theme.FS10), state="normal")
@@ -1799,11 +1945,13 @@ class ModListPanel(ctk.CTkFrame):
                         # locked row — install date / priority still shown
                         install_text = self._install_dates.get(entry.name, "")
                         if install_text:
-                            c.coords(self._pool_install_text[s], self._COL_X[4] + 47, y_mid)
-                            c.itemconfigure(self._pool_install_text[s],
-                                            text=install_text, anchor="center",
-                                            fill=TEXT_DIM, font=("Segoe UI", _theme.FS10), state="normal")
-                        c.coords(self._pool_priority_text[s], self._COL_X[5] + 32, y_mid)
+                            c.coords(self._pool_install_text[s],
+                                      self._COL_X[5] + self._COL_W[5] // 2, y_mid)
+                        c.itemconfigure(self._pool_install_text[s],
+                                        text=install_text, anchor="center",
+                                        fill=TEXT_DIM, font=("Segoe UI", _theme.FS10), state="normal")
+                        c.coords(self._pool_priority_text[s],
+                                 self._COL_X[6] + self._COL_W[6] // 2, y_mid)
                         c.itemconfigure(self._pool_priority_text[s],
                                         text=str(priorities.get(i, "")), anchor="center",
                                         fill=TEXT_DIM, font=("Segoe UI", _theme.FS10), state="normal")
@@ -1834,6 +1982,7 @@ class ModListPanel(ctk.CTkFrame):
                 c.itemconfigure(self._pool_flag_icon[s], state="hidden")
                 c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
                 c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
+                c.itemconfigure(self._pool_category_text[s], state="hidden")
                 c.itemconfigure(self._pool_install_text[s], state="hidden")
                 c.itemconfigure(self._pool_priority_text[s], state="hidden")
                 c.itemconfigure(self._pool_sep_icon[s], state="hidden")
@@ -2077,6 +2226,21 @@ class ModListPanel(ctk.CTkFrame):
                     result.append(i)
             base = result
 
+        # Step 4f: category filter (show only mods in selected categories)
+        if self._filter_categories:
+            allowed = self._filter_categories
+            result = []
+            for i in base:
+                entry = self._entries[i]
+                if entry.is_separator:
+                    if self._sep_block_has_category(i, allowed):
+                        result.append(i)
+                else:
+                    cat = self._category_names.get(entry.name, "") or ""
+                    if cat in allowed:
+                        result.append(i)
+            base = result
+
         # Step 5: apply column sort (visual only)
         if self._sort_column is not None:
             base = self._apply_column_sort(base)
@@ -2186,6 +2350,8 @@ class ModListPanel(ctk.CTkFrame):
             return _conflict_key
         elif col == "priority":
             return lambda i: priorities.get(i, 0)
+        elif col == "category":
+            return lambda i: (self._category_names.get(self._entries[i].name, "") or "\uffff").lower()
         else:
             return lambda i: i
 
@@ -2198,6 +2364,7 @@ class ModListPanel(ctk.CTkFrame):
         self._canvas_resize_after_id = None
         self._layout_columns(width)
         self._update_header(width)
+        _truncate_cache.clear()
         self._redraw()
 
     def _schedule_redraw(self) -> None:
@@ -2294,11 +2461,18 @@ class ModListPanel(ctk.CTkFrame):
                         self._sel_idx = idx
                     self._redraw()
                     return
-                # Shift+click on separator: extend selection range
+                # Shift+click on separator: extend selection range (in display order)
                 if shift and self._sel_idx >= 0:
-                    lo, hi = sorted((self._sel_idx, idx))
-                    vis_set = set(self._compute_visible_indices())
-                    self._sel_set = {j for j in range(lo, hi + 1) if j in vis_set}
+                    vis = self._compute_visible_indices()
+                    try:
+                        lo_row = vis.index(self._sel_idx)
+                        hi_row = vis.index(idx)
+                    except ValueError:
+                        self._sel_set = {idx}
+                        self._sel_idx = idx
+                    else:
+                        lo_row, hi_row = min(lo_row, hi_row), max(lo_row, hi_row)
+                        self._sel_set = set(vis[lo_row : hi_row + 1])
                     self._redraw()
                     return
                 self._sel_idx = idx
@@ -2337,11 +2511,18 @@ class ModListPanel(ctk.CTkFrame):
             self._update_info()
             return
 
-        # Shift+click: extend selection from anchor to clicked row
+        # Shift+click: extend selection from anchor to clicked row (in display order)
         if shift and self._sel_idx >= 0:
-            lo, hi = sorted((self._sel_idx, idx))
-            vis_set = set(self._compute_visible_indices())
-            self._sel_set = {j for j in range(lo, hi + 1) if j in vis_set}
+            vis = self._compute_visible_indices()
+            try:
+                lo_row = vis.index(self._sel_idx)
+                hi_row = vis.index(idx)
+            except ValueError:
+                self._sel_set = {idx}
+                self._sel_idx = idx
+            else:
+                lo_row, hi_row = min(lo_row, hi_row), max(lo_row, hi_row)
+                self._sel_set = set(vis[lo_row : hi_row + 1])
             self._redraw()
             self._update_info()
             return
@@ -2482,6 +2663,15 @@ class ModListPanel(ctk.CTkFrame):
         for i in self._sep_block_range(sep_idx):
             if not self._entries[i].is_separator:
                 if self._entries[i].name in self._update_mods:
+                    return True
+        return False
+
+    def _sep_block_has_category(self, sep_idx: int, allowed_categories: frozenset[str]) -> bool:
+        """True if this separator's block contains at least one mod in the allowed categories."""
+        for i in self._sep_block_range(sep_idx):
+            if not self._entries[i].is_separator:
+                cat = self._category_names.get(self._entries[i].name, "") or ""
+                if cat in allowed_categories:
                     return True
         return False
 
@@ -2657,8 +2847,8 @@ class ModListPanel(ctk.CTkFrame):
 
         # Show tooltip when hovering over the flags column warning icon
         x = event.x
-        flags_col_start = self._COL_X[2]
-        flags_col_end = self._COL_X[3] if len(self._COL_X) > 3 else flags_col_start + 50
+        flags_col_start = self._COL_X[3]
+        flags_col_end = self._COL_X[4] if len(self._COL_X) > 4 else flags_col_start + 56
         if flags_col_start <= x < flags_col_end and 0 <= row < len(vis):
             entry = self._entries[vis[row]]
             if (not entry.is_separator
@@ -4225,15 +4415,15 @@ class ModListPanel(ctk.CTkFrame):
                 except ValueError:
                     pass
 
-        # Resolve install_from_browse callback
-        _app = app
-        for _ in range(5):
-            if hasattr(_app, "_install_from_browse"):
-                break
-            _app = getattr(_app, "master", None) or getattr(_app, "parent", None)
-            if _app is None:
-                break
-        install_from_browse = getattr(_app, "_install_from_browse", None) if _app else None
+        # Install callback: download and install directly from Nexus (or open browser if not premium)
+        from gui.nexus_browser_overlay import install_nexus_mod_from_entry
+        mod_panel = self
+        game = self._game
+        api_for_install = api
+        log_fn_install = self._log
+        install_from_browse = (
+            lambda entry: install_nexus_mod_from_entry(app, api_for_install, game, mod_panel, log_fn_install, entry)
+        ) if (api_for_install and game and game.is_configured()) else None
 
         if hasattr(app, "show_missing_reqs_panel"):
             app.show_missing_reqs_panel(
@@ -4735,8 +4925,12 @@ class ModListPanel(ctk.CTkFrame):
     # Toolbar button handlers
     # ------------------------------------------------------------------
 
-    def _on_collections(self):
-        """Slide the Collections browser over the modlist panel."""
+    def _on_collections(self, initial_slug: str | None = None, initial_game_domain: str | None = None):
+        """Slide the Collections browser over the modlist panel.
+
+        If initial_slug is provided (e.g. from an nxm:// collection link), the
+        dialog will open that collection directly.
+        """
         app = self.winfo_toplevel()
         api = getattr(app, "_nexus_api", None)
         game = self._game
@@ -4751,6 +4945,8 @@ class ModListPanel(ctk.CTkFrame):
             log_fn=self._log,
             app_root=app,
             on_close=self._close_collections,
+            initial_slug=initial_slug,
+            initial_game_domain=initial_game_domain,
         )
         panel.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._collections_panel = panel
@@ -4875,6 +5071,7 @@ class ModListPanel(ctk.CTkFrame):
         self._fsp_vars["filter_has_plugins"].set(self._filter_has_plugins)
         self._fsp_vars["filter_has_disabled_files"].set(self._filter_has_disabled_files)
         self._fsp_vars["filter_has_updates"].set(self._filter_has_updates)
+        self._refresh_filter_category_list()
         self._filter_btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
 
     def _close_filter_side_panel(self):
@@ -4926,6 +5123,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_has_plugins = state.get("filter_has_plugins", False)
         self._filter_has_disabled_files = state.get("filter_has_disabled_files", False)
         self._filter_has_updates = state.get("filter_has_updates", False)
+        self._filter_categories = state.get("filter_categories") or frozenset()
         self._invalidate_derived_caches()
         self._redraw()
 

@@ -51,6 +51,7 @@ class NexusModMeta:
     nexus_url: str = ""                # full Nexus mod page URL
     description: str = ""              # short summary
     category_id: int = 0               # Nexus category
+    category_name: str = ""            # Category display name (e.g. Armor, Weapons)
     file_category: str = ""            # MAIN / UPDATE / OPTIONAL / etc
     endorsed: bool = False             # whether the user has endorsed this mod
     latest_file_id: int = 0            # newest known file id (for update checking)
@@ -120,6 +121,7 @@ _KEY_MAP: dict[str, str] = {
     "nexusUrl":          "nexus_url",
     "description":       "description",
     "categoryId":        "category_id",
+    "categoryName":      "category_name",
     "fileCategory":      "file_category",
     "endorsed":          "endorsed",
     "latestFileId":      "latest_file_id",
@@ -248,6 +250,7 @@ def build_meta_from_download(
         meta.author = getattr(mod_info, "author", "")
         meta.description = getattr(mod_info, "summary", "")
         meta.category_id = getattr(mod_info, "category_id", 0)
+        meta.category_name = getattr(mod_info, "category_name", "") or ""
         meta.nexus_url = (
             f"https://www.nexusmods.com/{game_domain}/mods/{mod_id}"
         )
@@ -380,7 +383,12 @@ def resolve_nexus_meta_for_archive(
     if fn_info and fn_info.mod_id > 0:
         _log(f"Nexus: Detected mod ID {fn_info.mod_id} from filename.")
         try:
-            mod_info = api.get_mod(game_domain, fn_info.mod_id)
+            # Use GraphQL for mod info (avoids 2 REST calls: get_mod + get_game_categories)
+            mod_info, _ = api.get_mod_and_file_info_graphql(
+                game_domain, fn_info.mod_id, file_id=0
+            )
+            if mod_info is None:
+                mod_info = api.get_mod(game_domain, fn_info.mod_id)  # fallback to REST
             meta = build_meta_from_download(
                 game_domain=game_domain,
                 mod_id=fn_info.mod_id,
@@ -433,6 +441,7 @@ def resolve_nexus_meta_for_archive(
             mod_data = hit.get("mod", {})
             file_data = hit.get("file_details", {})
 
+            cat_name = mod_data.get("category_name", "") or mod_data.get("category", "") or ""
             meta = NexusModMeta(
                 game_domain=game_domain,
                 mod_id=mod_data.get("mod_id", 0),
@@ -444,6 +453,7 @@ def resolve_nexus_meta_for_archive(
                 installed=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
                 description=mod_data.get("summary", ""),
                 category_id=mod_data.get("category_id", 0),
+                category_name=cat_name if isinstance(cat_name, str) else "",
                 file_category=file_data.get("category_name", ""),
                 nexus_url=f"https://www.nexusmods.com/{game_domain}/mods/{mod_data.get('mod_id', 0)}",
             )

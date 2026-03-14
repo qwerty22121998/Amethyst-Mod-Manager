@@ -75,6 +75,32 @@ def profile_uses_specific_mods(profile_dir: Path) -> bool:
         return False
 
 
+def get_collection_url_from_profile(profile_dir: Path) -> str | None:
+    """Return the collection URL from profile_settings.json, or None if not set."""
+    settings_path = profile_dir / "profile_settings.json"
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        return data.get("collection_url") or None
+    except (OSError, ValueError):
+        return None
+
+
+def save_collection_url_to_profile(profile_dir: Path, collection_url: str) -> None:
+    """Save collection_url to profile_settings.json, merging with existing settings."""
+    settings_path = profile_dir / "profile_settings.json"
+    try:
+        data = (
+            json.loads(settings_path.read_text(encoding="utf-8"))
+            if settings_path.exists()
+            else {}
+        )
+    except (OSError, ValueError):
+        data = {}
+    data["collection_url"] = collection_url
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
 def _create_profile(
     game_name: str,
     profile_name: str,

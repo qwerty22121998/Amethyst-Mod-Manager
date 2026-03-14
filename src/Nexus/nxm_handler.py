@@ -3,9 +3,14 @@ nxm_handler.py
 NXM protocol handler — parses ``nxm://`` links and registers the app
 as a handler on Linux via XDG and .desktop files.
 
-NXM link format
----------------
+NXM link formats
+----------------
+    Mod download:
     nxm://<game_domain>/mods/<mod_id>/files/<file_id>?key=<key>&expires=<expires>
+
+    Collection:
+    nxm://<game_domain>/collections/<slug>
+    nxm://<game_domain>/collections/<slug>/revisions/<revision_id>
 
 Free users must click "Download with Manager" on the Nexus website;
 the browser fires an ``nxm://`` URL containing a one-time key + expiry.
@@ -115,6 +120,86 @@ class NxmLink:
             expires=expires,
             raw=url,
         )
+
+
+@dataclass
+class NxmCollectionLink:
+    """
+    Parsed components of an nxm:// collection URL.
+
+    Attributes
+    ----------
+    game_domain : str   e.g. "stardewvalley"
+    slug        : str   e.g. "tckf0m"
+    revision_id : int   revision number (0 if absent)
+    raw         : str   the original URL string
+    """
+    game_domain: str
+    slug: str
+    revision_id: int = 0
+    raw: str = ""
+
+    # nxm://stardewvalley/collections/tckf0m
+    # nxm://stardewvalley/collections/tckf0m/revisions/104
+    _PATH_RE = re.compile(
+        r"^/collections/(?P<slug>[A-Za-z0-9_-]+)(?:/revisions/(?P<revision_id>\d+))?$",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def parse(cls, url: str) -> NxmCollectionLink:
+        """
+        Parse an nxm:// collection URL into its components.
+
+        Raises ValueError if the URL is malformed.
+        """
+        parsed = urlparse(url)
+
+        if parsed.scheme.lower() != "nxm":
+            raise ValueError(f"Not an nxm:// URL: {url!r}")
+
+        game_domain = parsed.netloc or parsed.hostname or ""
+        if not game_domain:
+            raise ValueError(f"Missing game domain in NXM URL: {url!r}")
+
+        match = cls._PATH_RE.match(parsed.path)
+        if not match:
+            raise ValueError(
+                f"Cannot parse collection slug from NXM URL path: {parsed.path!r}"
+            )
+
+        slug = match.group("slug")
+        rev_str = match.group("revision_id") or "0"
+        try:
+            revision_id = int(rev_str)
+        except ValueError:
+            revision_id = 0
+
+        return cls(
+            game_domain=game_domain.lower(),
+            slug=slug,
+            revision_id=revision_id,
+            raw=url,
+        )
+
+
+def parse_nxm_url(url: str) -> tuple[NxmLink | None, NxmCollectionLink | None]:
+    """
+    Parse an nxm:// URL as either a mod download link or a collection link.
+
+    Returns (NxmLink, None) for mod links, (None, NxmCollectionLink) for
+    collection links, or raises ValueError if neither matches.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme.lower() != "nxm":
+        raise ValueError(f"Not an nxm:// URL: {url!r}")
+
+    path = parsed.path or ""
+    if "/collections/" in path.lower():
+        return None, NxmCollectionLink.parse(url)
+    if NxmLink._PATH_RE.match(path):
+        return NxmLink.parse(url), None
+    raise ValueError(f"Unknown nxm:// URL format: {url!r}")
 
 
 # ---------------------------------------------------------------------------

@@ -134,6 +134,7 @@ class NexusModInfo:
     contains_adult_content: bool = False
     status: str = ""
     uploaded_by: str = ""
+    category_name: str = ""
 
 
 @dataclass
@@ -198,6 +199,9 @@ class NexusModUpdateInfo:
     updated_at: Optional[datetime] = None   # when any file was last uploaded
     viewer_update_available: Optional[bool] = None  # Nexus-native flag (requires tracking)
     requirements: list["NexusModRequirement"] = field(default_factory=list)  # mod dependencies
+    category_id: int = 0                    # Nexus mod category (e.g. Armor, Weapons)
+    category_name: str = ""                 # Category display name
+    files: list["NexusModFile"] = field(default_factory=list)  # from batch; avoids REST get_mod_files
 
 
 @dataclass
@@ -650,6 +654,26 @@ class NexusAPI:
     def get_mod(self, game_domain: str, mod_id: int) -> NexusModInfo:
         """Retrieve details about a specific mod."""
         d = self._get(f"/games/{game_domain}/mods/{mod_id}")
+        try:
+            cat_id = int(d.get("category_id", 0) or 0)
+        except (TypeError, ValueError):
+            cat_id = 0
+        cat_name = d.get("category_name", "") or ""
+        if not cat_name:
+            cat = d.get("category")
+            if isinstance(cat, dict):
+                cat_name = (cat.get("name") or "").strip()
+            elif isinstance(cat, str):
+                cat_name = cat.strip()
+        if not cat_name and cat_id:
+            # REST API often returns only category_id; look up name from game categories
+            try:
+                for c in self.get_game_categories(game_domain):
+                    if c.category_id == cat_id:
+                        cat_name = c.name or ""
+                        break
+            except Exception:
+                pass
         return NexusModInfo(
             mod_id=d["mod_id"],
             name=d["name"],
@@ -657,7 +681,8 @@ class NexusAPI:
             description=d.get("description", ""),
             version=d.get("version", ""),
             author=d.get("author", ""),
-            category_id=d.get("category_id", 0),
+            category_id=cat_id,
+            category_name=cat_name,
             game_id=d.get("game_id", 0),
             domain_name=d.get("domain_name", game_domain),
             picture_url=d.get("picture_url", ""),
@@ -1014,6 +1039,7 @@ class NexusAPI:
         Returns (NexusModInfo, NexusModFile) — either may be None on failure.
         Falls back gracefully so callers can still use partial data.
         """
+        # Mod type has no 'files' field; request mod + category only (file_info from link)
         query = """
         query NxmModAndFile($ids: [CompositeDomainWithIdInput!]!) {
             legacyModsByDomain(ids: $ids) {
@@ -1023,18 +1049,8 @@ class NexusAPI:
                     summary
                     version
                     author
-                    category { id }
+                    modCategory { categoryId name }
                     game { domainName }
-                    files {
-                        nodes {
-                            fileId
-                            name
-                            version
-                            category { name }
-                            uri
-                            sizeInBytes
-                        }
-                    }
                 }
             }
         }
@@ -1062,6 +1078,9 @@ class NexusAPI:
             n = nodes[0]
             mid = int(n.get("modId") or mod_id)
             domain = (n.get("game") or {}).get("domainName") or game_domain
+            mcat = n.get("modCategory") or {}
+            cat_id = int(mcat.get("categoryId") or 0) if isinstance(mcat.get("categoryId"), (int, str)) else 0
+            cat_name = (mcat.get("name") or "").strip() if isinstance(mcat.get("name"), str) else ""
             mod_info = NexusModInfo(
                 mod_id=mid,
                 name=n.get("name", "") or "",
@@ -1069,25 +1088,13 @@ class NexusAPI:
                 description="",
                 version=n.get("version", "") or "",
                 author=n.get("author", "") or "",
-                category_id=int((n.get("category") or {}).get("id") or 0),
+                category_id=cat_id,
+                category_name=cat_name,
                 game_id=0,
                 domain_name=domain,
             )
-            # Find the specific file in the files list
-            file_nodes = ((n.get("files") or {}).get("nodes") or [])
-            file_info: NexusModFile | None = None
-            for f in file_nodes:
-                if int(f.get("fileId") or 0) == file_id:
-                    file_info = NexusModFile(
-                        file_id=file_id,
-                        name=f.get("name", "") or "",
-                        version=f.get("version", "") or "",
-                        category_name=(f.get("category") or {}).get("name", "") or "",
-                        file_name=f.get("name", "") or "",
-                        size_in_bytes=f.get("sizeInBytes"),
-                    )
-                    break
-            return (mod_info, file_info)
+            # Mod has no 'files' field; file_info not available from this query
+            return (mod_info, None)
         except Exception as exc:
             app_log(f"GraphQL NxmModAndFile error: {exc}")
             return (None, None)
@@ -1121,6 +1128,7 @@ class NexusAPI:
                     version
                     updatedAt
                     viewerUpdateAvailable
+                    modCategory { categoryId name }
                     modRequirements {
                         nexusRequirements {
                             nodes {
@@ -1194,6 +1202,10 @@ class NexusAPI:
                             is_external=bool(rn.get("externalRequirement", False)),
                             notes=rn.get("notes", "") or "",
                         ))
+                    mcat = n.get("modCategory") or {}
+                    cat_id = int(mcat.get("categoryId") or 0) if isinstance(mcat.get("categoryId"), (int, str)) else 0
+                    cat_name = (mcat.get("name") or "").strip() if isinstance(mcat.get("name"), str) else ""
+                    # Mod type from legacyModsByDomain has no 'files' field; file-level checks use REST get_mod_files
                     results[mid] = NexusModUpdateInfo(
                         mod_id=mid,
                         name=n.get("name", "") or "",
@@ -1201,6 +1213,9 @@ class NexusAPI:
                         updated_at=updated_at,
                         viewer_update_available=None if vua is None else bool(vua),
                         requirements=reqs,
+                        category_id=cat_id,
+                        category_name=cat_name,
+                        files=[],  # Mod has no files field in GraphQL; REST used for file checks
                     )
             except Exception as exc:
                 app_log(f"GraphQL batch update check error: {exc}")
@@ -1751,6 +1766,7 @@ class NexusAPI:
 
     def _parse_mod_info(self, d: dict,
                         game_domain: str) -> NexusModInfo:
+        cat_name = d.get("category_name", "") or d.get("category", "") or ""
         return NexusModInfo(
             mod_id=d.get("mod_id", 0),
             name=d.get("name", ""),
@@ -1759,6 +1775,7 @@ class NexusAPI:
             version=d.get("version", ""),
             author=d.get("author", ""),
             category_id=d.get("category_id", 0),
+            category_name=cat_name if isinstance(cat_name, str) else "",
             game_id=d.get("game_id", 0),
             domain_name=d.get("domain_name", game_domain),
             picture_url=d.get("picture_url", ""),
