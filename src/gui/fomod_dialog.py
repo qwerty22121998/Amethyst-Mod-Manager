@@ -398,11 +398,19 @@ class FomodDialog(ctk.CTkToplevel):
             except Exception:
                 return
             if sx <= event.x_root < sx + sw and sy <= event.y_root < sy + sh:
-                direction = -1 if event.num == 4 else 1
+                num = getattr(event, "num", None)
+                delta = getattr(event, "delta", 0) or 0
+                if num == 4 or delta > 0:
+                    direction = -50
+                elif num == 5 or delta < 0:
+                    direction = 50
+                else:
+                    return
                 canvas.yview("scroll", direction, "units")
 
         self.bind_all("<Button-4>", _on_scroll, add="+")
         self.bind_all("<Button-5>", _on_scroll, add="+")
+        self.bind_all("<MouseWheel>", _on_scroll, add="+")
 
     def _bind_scroll_children(self):
         pass  # Handled globally by _setup_scroll_binding

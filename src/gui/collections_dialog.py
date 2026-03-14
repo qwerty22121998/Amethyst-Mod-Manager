@@ -29,6 +29,7 @@ from gui.mod_name_utils import _suggest_mod_names
 from Utils.modlist import write_modlist, read_modlist, ModEntry
 from Utils.filemap import rebuild_mod_index
 from Utils.config_paths import get_download_cache_dir
+from Nexus.nexus_download import delete_archive_and_sidecar
 from Nexus.nexus_meta import build_meta_from_download
 
 # Collections-specific card dimensions (5-column grid)
@@ -1242,12 +1243,12 @@ class CollectionDetailDialog(tk.Frame):
                 _install_counters["done"] += 1
                 done_so_far = _install_counters["done"]
 
-                # Delete archive once all consumers of this path are done.
+                # Delete archive and .fileid sidecar once all consumers of this path are done.
                 if archive_path in _archive_use_count:
                     _archive_use_count[archive_path] -= 1
                     if _archive_use_count[archive_path] == 0:
                         try:
-                            Path(archive_path).unlink(missing_ok=True)
+                            delete_archive_and_sidecar(Path(archive_path))
                         except Exception as _del_exc:
                             self._log(
                                 f"Collection install: could not remove archive "

@@ -9,17 +9,20 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from pathlib import Path
 from typing import Callable, Optional
 
 import customtkinter as ctk
 from Utils.xdg import open_url
+from Utils.config_paths import get_download_cache_dir
 
 from gui.tracked_mods_panel import TrackedModsPanel
 from gui.endorsed_mods_panel import EndorsedModsPanel
 from gui.browse_mods_panel import BrowseModsPanel
 from gui.trending_mods_panel import TrendingModsPanel
 from gui.install_mod import install_mod_from_archive
-from Nexus.nexus_meta import build_meta_from_download
+from Nexus.nexus_meta import build_meta_from_download, scan_installed_mods
+from Nexus.nexus_download import delete_archive_and_sidecar
 
 from gui.theme import (
     BG_DEEP,
@@ -108,6 +111,24 @@ class NexusBrowserOverlay(tk.Frame):
         def _get_game_domain():
             return self._game_domain
 
+        def _get_installed_mod_ids():
+            """Return set of Nexus mod IDs already installed for the current game."""
+            game = self._game
+            if game is None or not game.is_configured():
+                return set()
+            try:
+                staging = game.get_effective_mod_staging_path()
+                if not staging or not Path(staging).is_dir():
+                    return set()
+                installed = scan_installed_mods(Path(staging))
+                domain = (self._game_domain or "").lower()
+                return {
+                    m.mod_id for m in installed
+                    if m.mod_id > 0 and (not domain or (m.game_domain or "").lower() == domain)
+                }
+            except Exception:
+                return set()
+
         self._panel_frames = {}
         for name in ("Browse", "Tracked", "Endorsed", "Trending"):
             frame = tk.Frame(content, bg=BG_DEEP)
@@ -122,6 +143,7 @@ class NexusBrowserOverlay(tk.Frame):
             get_api=_get_api,
             get_game_domain=_get_game_domain,
             install_fn=self._install_from_tracked,
+            get_installed_mod_ids=_get_installed_mod_ids,
         )
         self._endorsed_panel = EndorsedModsPanel(
             self._panel_frames["Endorsed"],
@@ -129,6 +151,7 @@ class NexusBrowserOverlay(tk.Frame):
             get_api=_get_api,
             get_game_domain=_get_game_domain,
             install_fn=self._install_from_endorsed,
+            get_installed_mod_ids=_get_installed_mod_ids,
         )
         self._browse_panel = BrowseModsPanel(
             self._panel_frames["Browse"],
@@ -136,6 +159,7 @@ class NexusBrowserOverlay(tk.Frame):
             get_api=_get_api,
             get_game_domain=_get_game_domain,
             install_fn=self._install_from_browse,
+            get_installed_mod_ids=_get_installed_mod_ids,
         )
         self._trending_panel = TrendingModsPanel(
             self._panel_frames["Trending"],
@@ -143,6 +167,7 @@ class NexusBrowserOverlay(tk.Frame):
             get_api=_get_api,
             get_game_domain=_get_game_domain,
             install_fn=self._install_from_trending,
+            get_installed_mod_ids=_get_installed_mod_ids,
         )
 
         self._current_panel = "Browse"
@@ -293,9 +318,12 @@ class NexusBrowserOverlay(tk.Frame):
                 ),
                 cancel=cancel_ev,
                 known_file_name=file_info.file_name,
+                dest_dir=get_download_cache_dir(),
             )
 
             if result.success and result.file_path:
+                _archive_path = result.file_path
+
                 def _install():
                     try:
                         if app.grab_current() is not None:
@@ -317,9 +345,14 @@ class NexusBrowserOverlay(tk.Frame):
                         )
                     except Exception:
                         _prebuilt = None
+
+                    def _cleanup():
+                        delete_archive_and_sidecar(Path(_archive_path))
+
                     install_mod_from_archive(
-                        str(result.file_path), app, log_fn, game, mod_panel,
-                        prebuilt_meta=_prebuilt)
+                        str(_archive_path), app, log_fn, game, mod_panel,
+                        prebuilt_meta=_prebuilt,
+                        on_installed=_cleanup)
                 app.after(0, _install)
             else:
                 app.after(0, lambda: (

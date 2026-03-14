@@ -260,11 +260,12 @@ class PluginPanel(ctk.CTkFrame):
         )
         self._tabs.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
 
-        for name in ("Plugins", "Mod Files", "Data", "Downloads"):
+        for name in ("Plugins", "Mod Files", "Ini Files", "Data", "Downloads"):
             self._tabs.add(name)
 
         self._build_plugins_tab()
         self._build_mod_files_tab()
+        self._build_ini_files_tab()
         self._build_data_tab()
         self._build_downloads_tab()
 
@@ -1363,36 +1364,41 @@ class PluginPanel(ctk.CTkFrame):
         )
         self._mod_files_label.pack(side="left", padx=8, pady=4)
 
-        # Treeview — styled to match CTkTreeview / Data tab
-        from PIL import Image as _PIL_Image
-        from gui.ctk_components import ICON_PATH as _ICON_PATH, _load_icon_image as _load_iim
-        _im_open  = _load_iim(_ICON_PATH.get("arrow"))
-        _im_close = _im_open.rotate(90)
-        _im_empty = _PIL_Image.new("RGBA", (15, 15), "#00000000")
-
+        # Treeview — styled to match CTkTreeview / Data tab.
+        # Flatpak: use default Treeitem.indicator (custom has broken state handling).
+        # AppImage / native: use custom arrow images.
+        from gui.ctk_components import _is_flatpak_sandbox
         style = ttk.Style()
         style.theme_use("default")
-        # Use unique names to avoid conflicting with CTkTreeview's global elements
-        _img_open_mf  = ImageTk.PhotoImage(_im_open,  name="img_open_mf",  size=(15, 15))
-        _img_close_mf = ImageTk.PhotoImage(_im_close, name="img_close_mf", size=(15, 15))
-        _img_empty_mf = ImageTk.PhotoImage(_im_empty, name="img_empty_mf", size=(15, 15))
-        self._mf_arrow_images = (_img_open_mf, _img_close_mf, _img_empty_mf)  # keep refs
-
+        use_default_indicator = _is_flatpak_sandbox()
+        if not use_default_indicator:
+            from gui.ctk_components import ICON_PATH as _ICON_PATH, _load_icon_image as _load_iim
+            _im_open = _load_iim(_ICON_PATH.get("arrow"))
+            _im_close = _im_open.rotate(90)
+            _im_empty = PilImage.new("RGB", (15, 15), BG_DEEP)
+            _img_open_mf = ImageTk.PhotoImage(_im_open, name="img_open_mf", size=(15, 15))
+            _img_close_mf = ImageTk.PhotoImage(_im_close, name="img_close_mf", size=(15, 15))
+            _img_empty_mf = ImageTk.PhotoImage(_im_empty, name="img_empty_mf", size=(15, 15))
+            self._mf_arrow_images = (_img_open_mf, _img_close_mf, _img_empty_mf)
+            try:
+                style.element_create("Treeitem.mfindicator", "image", "img_close_mf",
+                    ("user1", "img_open_mf"), ("user2", "img_empty_mf"),
+                    sticky="w", width=15, height=15)
+            except Exception:
+                pass
         try:
-            style.element_create("Treeitem.mfindicator", "image", "img_close_mf",
-                ("user1", "!user2", "img_open_mf"), ("user2", "img_empty_mf"),
-                sticky="w", width=15, height=15)
+            indicator_elem = "Treeitem.indicator" if use_default_indicator else "Treeitem.mfindicator"
             style.layout("ModFiles.Treeview.Item", [
                 ("Treeitem.padding", {"sticky": "nsew", "children": [
-                    ("Treeitem.mfindicator", {"side": "left", "sticky": "nsew"}),
-                    ("Treeitem.image",       {"side": "left", "sticky": "nsew"}),
-                    ("Treeitem.focus",       {"side": "left", "sticky": "nsew", "children": [
-                        ("Treeitem.text",    {"side": "left", "sticky": "nsew"}),
+                    (indicator_elem, {"side": "left", "sticky": "nsew"}),
+                    ("Treeitem.image", {"side": "left", "sticky": "nsew"}),
+                    ("Treeitem.focus", {"side": "left", "sticky": "nsew", "children": [
+                        ("Treeitem.text", {"side": "left", "sticky": "nsew"}),
                     ]}),
                 ]}),
             ])
         except Exception:
-            pass  # element may already exist on re-open
+            pass  # layout may already exist on re-open
 
         _bg = BG_DEEP
         _fg = TEXT_MAIN
@@ -1442,6 +1448,278 @@ class PluginPanel(ctk.CTkFrame):
         self._mf_checked: dict[str, bool] = {}   # iid → checked state
         self._mf_iid_to_key: dict[str, str | None] = {}  # iid → rel_key (None for folders)
         self._mf_folder_iids: set[str] = set()
+
+    # ------------------------------------------------------------------
+    # Ini Files tab
+    # ------------------------------------------------------------------
+
+    _INI_JSON_EXTENSIONS = frozenset({".ini", ".json"})
+
+    def _build_ini_files_tab(self):
+        """Build the Ini Files tab: list of ini/json files with search and marker strip."""
+        tab = self._tabs.tab("Ini Files")
+        tab.grid_rowconfigure(1, weight=1)
+        tab.grid_columnconfigure(0, weight=1)
+
+        # Toolbar with Refresh and Search
+        toolbar = tk.Frame(tab, bg=BG_HEADER, height=28, highlightthickness=0)
+        toolbar.grid(row=0, column=0, sticky="ew")
+        toolbar.grid_propagate(False)
+
+        ctk.CTkButton(
+            toolbar, text="↺ Refresh", width=80, height=24,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            font=("Segoe UI", _theme.FS10), corner_radius=4,
+            command=self._refresh_ini_files_tab,
+        ).pack(side="left", padx=8, pady=2)
+
+        self._ini_search_var = tk.StringVar()
+        self._ini_search_var.trace_add("write", self._on_ini_search_changed)
+        self._ini_search_entry = tk.Entry(
+            toolbar, textvariable=self._ini_search_var,
+            bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
+            relief="flat", font=("Segoe UI", _theme.FS10), width=30,
+            highlightthickness=0, highlightbackground=BG_DEEP,
+        )
+        self._ini_search_entry.pack(side="right", padx=8, pady=3)
+        self._ini_search_entry.bind("<Escape>", lambda e: self._ini_search_var.set(""))
+        def _ini_select_all(evt):
+            evt.widget.select_range(0, tk.END)
+            evt.widget.icursor(tk.END)
+            return "break"
+        self._ini_search_entry.bind("<Control-a>", _ini_select_all)
+        tk.Label(
+            toolbar, text="Search:", bg=BG_HEADER, fg=TEXT_DIM,
+            font=("Segoe UI", _theme.FS10),
+        ).pack(side="right")
+
+        # List frame: tree | marker_strip | scrollbar
+        list_frame = tk.Frame(tab, bg=BG_DEEP)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+
+        _bg = BG_DEEP
+        _fg = TEXT_MAIN
+        _style_name = "IniFiles.Treeview"
+        style = ttk.Style()
+        style.theme_use("default")
+        style.configure(_style_name,
+            background=_bg, foreground=_fg,
+            fieldbackground=_bg, borderwidth=0,
+            rowheight=22, font=("Segoe UI", _theme.FS10),
+            focuscolor=_bg,
+        )
+        style.map(_style_name,
+            background=[("selected", _bg), ("focus", _bg)],
+            foreground=[("selected", ACCENT)],
+        )
+        style.configure(f"{_style_name}.Heading",
+            background=_bg, foreground=_fg,
+            font=("Segoe UI", _theme.FS10, "bold"), relief="flat",
+        )
+        # Remove the expand/collapse indicator (dark box) — flat list has no hierarchy
+        try:
+            style.configure(f"{_style_name}.Item", indent=0, indicatorsize=0)
+        except Exception:
+            pass
+        try:
+            style.layout(f"{_style_name}.Item", [
+                ("Treeitem.padding", {"sticky": "nsew", "children": [
+                    ("Treeitem.image", {"side": "left", "sticky": "nsew"}),
+                    ("Treeitem.focus", {"side": "left", "sticky": "nsew", "children": [
+                        ("Treeitem.text", {"side": "left", "sticky": "nsew"}),
+                    ]}),
+                ]}),
+            ])
+        except Exception:
+            pass
+
+        self._ini_files_tree = ttk.Treeview(
+            list_frame, columns=("mod",), style=_style_name,
+            selectmode="browse", show="tree headings",
+        )
+        self._ini_files_tree.heading("#0", text="File", anchor="w")
+        self._ini_files_tree.heading("mod", text="Mod", anchor="w")
+        self._ini_files_tree.column("#0", minwidth=150, stretch=True)
+        self._ini_files_tree.column("mod", minwidth=120, stretch=True)
+        self._ini_files_tree.tag_configure("mod_highlight", background=plugin_mod, foreground=TEXT_MAIN)
+
+        self._ini_marker_strip = tk.Canvas(
+            list_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
+            width=4, takefocus=0,
+        )
+        self._ini_marker_strip.bind("<Configure>", self._on_ini_marker_strip_resize)
+
+        _sb_bg = "#383838"
+        _sb_trough = "#1a1a1a"
+        _sb_active = "#0078d4"
+        self._ini_vsb = tk.Scrollbar(
+            list_frame, orient="vertical", command=self._ini_files_tree.yview,
+            bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
+            highlightthickness=0, bd=0,
+        )
+        self._ini_files_tree.configure(yscrollcommand=self._ini_vsb.set)
+
+        self._ini_files_tree.grid(row=0, column=0, sticky="nsew")
+        self._ini_marker_strip.grid(row=0, column=1, sticky="ns")
+        self._ini_vsb.grid(row=0, column=2, sticky="ns")
+
+        self._ini_files_tree.bind("<<TreeviewSelect>>", self._on_ini_file_select)
+        self._ini_files_tree.bind("<Button-4>", lambda e: self._ini_files_tree.yview_scroll(-3, "units"))
+        self._ini_files_tree.bind("<Button-5>", lambda e: self._ini_files_tree.yview_scroll(3, "units"))
+
+        self._ini_files_entries: list[tuple[str, str, Path]] = []  # full list
+        self._ini_files_displayed: list[tuple[str, str, Path]] = []  # filtered for display
+        self._ini_files_status: str | None = None  # "load"|"nofile"|None
+        self._highlighted_ini_mod: str | None = None
+        self._ini_marker_strip_after_id: str | None = None
+
+    def _resolve_ini_file_path(self, rel_path: str, mod_name: str) -> Path | None:
+        """Resolve full file path from filemap entry. Returns None if staging_root unknown."""
+        if self._staging_root is None:
+            return None
+        from Utils.filemap import OVERWRITE_NAME, ROOT_FOLDER_NAME
+        rel_path = rel_path.replace("\\", "/")
+        if mod_name == OVERWRITE_NAME:
+            base = self._staging_root.parent / "overwrite"
+        elif mod_name == ROOT_FOLDER_NAME:
+            base = self._staging_root.parent / "Root_Folder"
+        else:
+            base = self._staging_root / mod_name
+        return base / rel_path
+
+    def _refresh_ini_files_tab(self):
+        """Populate Ini Files tab from filemap.txt, filtering to .ini and .json."""
+        self._ini_files_entries.clear()
+
+        filemap_path_str = self._get_filemap_path()
+        if filemap_path_str is None or not self._staging_root:
+            self._ini_files_displayed = []
+            self._ini_files_status = "load"
+            self._build_ini_tree_from_displayed()
+            return
+
+        filemap_path = Path(filemap_path_str)
+        if not filemap_path.is_file():
+            self._ini_files_displayed = []
+            self._ini_files_status = "nofile"
+            self._build_ini_tree_from_displayed()
+            return
+        self._ini_files_status = None
+
+        entries = self._parse_filemap(filemap_path)
+        ini_entries: list[tuple[str, str, Path]] = []
+        for rel_path, mod_name in entries:
+            ext = Path(rel_path).suffix.lower()
+            if ext not in self._INI_JSON_EXTENSIONS:
+                continue
+            full_path = self._resolve_ini_file_path(rel_path, mod_name)
+            if full_path is None or not full_path.is_file():
+                continue
+            ini_entries.append((rel_path, mod_name, full_path))
+
+        self._ini_files_entries = sorted(ini_entries, key=lambda t: (t[0].lower(), t[1].lower()))
+        self._apply_ini_search_filter()
+
+    def _on_ini_search_changed(self, *_):
+        """Filter displayed ini files by search query (filename or mod name)."""
+        self._apply_ini_search_filter()
+
+    def _apply_ini_search_filter(self):
+        """Apply search filter and rebuild tree."""
+        query = self._ini_search_var.get().strip().casefold()
+        if not query:
+            self._ini_files_displayed = list(self._ini_files_entries)
+        else:
+            self._ini_files_displayed = [
+                (r, m, p) for r, m, p in self._ini_files_entries
+                if query in r.casefold() or query in m.casefold()
+            ]
+        self._build_ini_tree_from_displayed()
+
+    def _build_ini_tree_from_displayed(self):
+        """Rebuild tree from _ini_files_displayed."""
+        self._ini_files_tree.delete(*self._ini_files_tree.get_children())
+        status = getattr(self, "_ini_files_status", None)
+        if status == "load":
+            self._ini_files_tree.insert("", "end", text="(load a game first)", values=("",))
+            return
+        if status == "nofile":
+            self._ini_files_tree.insert("", "end", text="(filemap.txt not found)", values=("",))
+            return
+        if not self._ini_files_displayed:
+            if self._ini_search_var.get().strip():
+                self._ini_files_tree.insert("", "end", text="(no matches)", values=("",))
+            else:
+                self._ini_files_tree.insert("", "end", text="(no ini/json files in filemap)", values=("",))
+            return
+        for rel_path, mod_name, _ in self._ini_files_displayed:
+            tags = ("mod_highlight",) if mod_name == self._highlighted_ini_mod else ()
+            file_name = Path(rel_path).name
+            self._ini_files_tree.insert("", "end", text=file_name, values=(mod_name,), tags=tags)
+        self._draw_ini_marker_strip()
+
+    def _on_ini_marker_strip_resize(self, _event=None):
+        if self._ini_marker_strip_after_id is not None:
+            self.after_cancel(self._ini_marker_strip_after_id)
+        self._ini_marker_strip_after_id = self.after(50, self._draw_ini_marker_strip)
+
+    def _apply_ini_row_highlight(self):
+        """Update row background (orange) for items belonging to the selected mod."""
+        displayed = self._ini_files_displayed
+        children = self._ini_files_tree.get_children()
+        for i, iid in enumerate(children):
+            if i >= len(displayed):
+                break
+            _, mod_name, _ = displayed[i]
+            tags = ("mod_highlight",) if self._highlighted_ini_mod and mod_name == self._highlighted_ini_mod else ()
+            self._ini_files_tree.item(iid, tags=tags)
+
+    def _draw_ini_marker_strip(self):
+        """Draw orange tick marks for ini/json files belonging to the selected mod."""
+        self._ini_marker_strip_after_id = None
+        c = self._ini_marker_strip
+        c.delete("marker")
+        displayed = self._ini_files_displayed
+        n = len(displayed)
+        if not n or not self._highlighted_ini_mod:
+            return
+        strip_h = c.winfo_height()
+        if strip_h <= 1:
+            return
+        highlighted_rows = {
+            i for i, (_, mod_name, _) in enumerate(displayed)
+            if mod_name == self._highlighted_ini_mod
+        }
+        if not highlighted_rows:
+            return
+        for row_idx in highlighted_rows:
+            frac = row_idx / n
+            y = max(2, min(int(frac * strip_h), strip_h - 4))
+            c.create_rectangle(0, y, 4, y + 3, fill=plugin_mod, outline="", tags="marker")
+
+    def _on_ini_file_select(self, _event=None):
+        self._on_ini_file_edit()
+
+    def _on_ini_file_edit(self):
+        """Open the ini/json file editor overlay."""
+        sel = self._ini_files_tree.selection()
+        if not sel:
+            return
+        item = sel[0]
+        children = self._ini_files_tree.get_children()
+        try:
+            idx = children.index(item)
+        except ValueError:
+            return
+        if idx < 0 or idx >= len(self._ini_files_displayed):
+            return
+        rel_path, mod_name, full_path = self._ini_files_displayed[idx]
+        app = self.winfo_toplevel()
+        show_fn = getattr(app, "show_ini_editor_panel", None)
+        if show_fn:
+            show_fn(str(full_path), rel_path, mod_name)
 
     # Checkbox rendering helpers
     _MF_CHECK   = "☑"
@@ -2225,6 +2503,11 @@ class PluginPanel(ctk.CTkFrame):
         if new_highlighted != self._highlighted_plugins:
             self._highlighted_plugins = new_highlighted
             self._predraw()
+        # Also update Ini Files tab: marker strip and row highlight
+        if getattr(self, "_highlighted_ini_mod", None) != mod_name:
+            self._highlighted_ini_mod = mod_name
+            self._apply_ini_row_highlight()
+            self._draw_ini_marker_strip()
 
     # ------------------------------------------------------------------
     # Plugins tab refresh (canvas-based)
@@ -2319,6 +2602,10 @@ class PluginPanel(ctk.CTkFrame):
         self._psel_set = set()
         self._drag_idx = -1
         self._highlighted_plugins = set()
+        self._highlighted_ini_mod = None
+        if hasattr(self, "_ini_marker_strip"):
+            self._apply_ini_row_highlight()
+            self._draw_ini_marker_strip()
 
         if self._plugins_path is None or not self._plugin_extensions:
             self._plugin_entries = []
@@ -2770,6 +3057,9 @@ class PluginPanel(ctk.CTkFrame):
         self._drag_moved = False
         self._drag_slot = -1
         self._highlighted_plugins = set()  # clear mod→plugin highlight when selecting a plugin
+        self._highlighted_ini_mod = None
+        self._apply_ini_row_highlight()
+        self._draw_ini_marker_strip()
         self._predraw()
         plugin_name = self._plugin_entries[idx].name
         if self._on_mod_selected_cb is not None:

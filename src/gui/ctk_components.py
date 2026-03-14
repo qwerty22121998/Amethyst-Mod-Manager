@@ -48,6 +48,12 @@ CURRENT_PATH = os.path.dirname(os.path.realpath(__file__))
 ICON_DIR = os.path.join(os.path.dirname(CURRENT_PATH), "icons")
 
 
+def _is_flatpak_sandbox() -> bool:
+    """True when running inside a Flatpak sandbox. Custom treeview indicators have broken
+    state handling there; use the default Treeitem.indicator instead."""
+    return os.path.exists("/.flatpak-info")
+
+
 def _load_icon_image(path, size=(15, 15)):
     """Load a PIL Image from path; if missing, return a simple placeholder."""
     if path and isinstance(path, str) and os.path.isfile(path):
@@ -1031,22 +1037,37 @@ class CTkTreeview(ctk.CTkFrame):
         self.tree_style = ttk.Style(self)
         self.tree_style.theme_use('default')
 
-        self.im_open = _load_icon_image(ICON_PATH.get("arrow"))
-        self.im_close = self.im_open.rotate(90)
-        self.im_empty = Image.new("RGBA", (15, 15), "#00000000")
-
-        self.img_open = ImageTk.PhotoImage(self.im_open, name='img_open', size=(15, 15))
-        self.img_close = ImageTk.PhotoImage(self.im_close, name='img_close', size=(15, 15))
-        self.img_empty = ImageTk.PhotoImage(self.im_empty, name='img_empty', size=(15, 15))
-
-        self.tree_style.element_create('Treeitem.myindicator',
-                                       'image', 'img_close', ('user1', '!user2', 'img_open'), ('user2', 'img_empty'),
-                                       sticky='w', width=15, height=15)
+        use_default_indicator = _is_flatpak_sandbox()
+        if use_default_indicator:
+            # Flatpak: custom image indicators have broken state handling. Use built-in.
+            indicator_elem = 'Treeitem.indicator'
+        else:
+            # AppImage / native: use custom arrow images
+            self.im_open = _load_icon_image(ICON_PATH.get("arrow"))
+            self.im_close = self.im_open.rotate(90)
+            _empty_bg = self.bg_color if isinstance(self.bg_color, str) else self.bg_color[0]
+            try:
+                rgb = self.root.winfo_rgb(_empty_bg)
+                _empty_bg = f"#{rgb[0]//256:02x}{rgb[1]//256:02x}{rgb[2]//256:02x}"
+            except Exception:
+                _empty_bg = "#1a1a1a"
+            self.im_empty = Image.new("RGB", (15, 15), _empty_bg)
+            self.img_open = ImageTk.PhotoImage(self.im_open, name='img_open', size=(15, 15))
+            self.img_close = ImageTk.PhotoImage(self.im_close, name='img_close', size=(15, 15))
+            self.img_empty = ImageTk.PhotoImage(self.im_empty, name='img_empty', size=(15, 15))
+            try:
+                self.tree_style.element_create('Treeitem.myindicator',
+                                              'image', 'img_close', ('user1', 'img_open'), ('user2', 'img_empty'),
+                                              sticky='w', width=15, height=15)
+            except tk.TclError:
+                # Element already exists from a previous CTkTreeview instance
+                pass
+            indicator_elem = 'Treeitem.myindicator'
 
         self.tree_style.layout('Treeview.Item',
                                [('Treeitem.padding',
                                  {'sticky': 'nsew',
-                                  'children': [('Treeitem.myindicator', {'side': 'left', 'sticky': 'nsew'}),
+                                  'children': [(indicator_elem, {'side': 'left', 'sticky': 'nsew'}),
                                                ('Treeitem.image', {'side': 'left', 'sticky': 'nsew'}),
                                                ('Treeitem.focus',
                                                 {'side': 'left',

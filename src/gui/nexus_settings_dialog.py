@@ -275,12 +275,19 @@ class NexusSettingsDialog(ctk.CTkToplevel):
 
         # Forward mouse-wheel scroll events to the scrollable canvas
         def _fwd_scroll(event):
-            scroll._parent_canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+            num = getattr(event, "num", None)
+            delta = getattr(event, "delta", 0) or 0
+            if num == 4 or delta > 0:
+                scroll._parent_canvas.yview_scroll(-50, "units")
+            elif num == 5 or delta < 0:
+                scroll._parent_canvas.yview_scroll(50, "units")
         dlg.bind_all("<Button-4>", _fwd_scroll)
         dlg.bind_all("<Button-5>", _fwd_scroll)
+        dlg.bind_all("<MouseWheel>", _fwd_scroll)
         dlg.bind("<Destroy>", lambda e: (
             dlg.unbind_all("<Button-4>"),
             dlg.unbind_all("<Button-5>"),
+            dlg.unbind_all("<MouseWheel>"),
         ) if e.widget is dlg else None)
 
         # -- Header --
@@ -836,11 +843,18 @@ class NexusSettingsPanel(ctk.CTkFrame):
         scroll.grid_columnconfigure(0, weight=1)
 
         def _fwd_scroll(event):
-            scroll._parent_canvas.yview_scroll(-1 if event.num == 4 else 1, "units")
+            num = getattr(event, "num", None)
+            delta = getattr(event, "delta", 0) or 0
+            if num == 4 or delta > 0:
+                scroll._parent_canvas.yview_scroll(-50, "units")
+            elif num == 5 or delta < 0:
+                scroll._parent_canvas.yview_scroll(50, "units")
         dlg.bind_all("<Button-4>", _fwd_scroll)
         dlg.bind_all("<Button-5>", _fwd_scroll)
+        dlg.bind_all("<MouseWheel>", _fwd_scroll)
         dlg.bind("<Destroy>", lambda e: (
             dlg.unbind_all("<Button-4>"), dlg.unbind_all("<Button-5>"),
+            dlg.unbind_all("<MouseWheel>"),
         ) if e.widget is dlg else None)
 
         hdr = ctk.CTkFrame(scroll, fg_color="transparent")

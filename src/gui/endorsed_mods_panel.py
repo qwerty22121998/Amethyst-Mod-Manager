@@ -66,12 +66,14 @@ class EndorsedModsPanel:
         get_api: Optional[Callable] = None,
         get_game_domain: Optional[Callable] = None,
         install_fn: Optional[Callable] = None,
+        get_installed_mod_ids: Optional[Callable[[], set]] = None,
     ):
         self._parent = parent_tab
         self._log = log_fn or (lambda msg: None)
         self._get_api = get_api or (lambda: None)
         self._get_game_domain = get_game_domain or (lambda: "")
         self._install_fn = install_fn or (lambda entry: None)
+        self._get_installed_mod_ids = get_installed_mod_ids or (lambda: set())
 
         self._entries: list[EndorsedModEntry] = []
         self._cards: list[ModCard] = []
@@ -154,8 +156,14 @@ class EndorsedModsPanel:
         self._canvas.yview_scroll(units, "units")
 
     def _on_mousewheel(self, event):
-        direction = -1 if event.delta > 0 else 1
-        self._scroll(direction * 10)
+        # Linux/Flatpak: event.delta is often 0, use event.num (4=up, 5=down)
+        num = getattr(event, "num", None)
+        delta = getattr(event, "delta", 0) or 0
+        if num == 4 or delta > 0:
+            direction = -1
+        else:
+            direction = 1
+        self._scroll(direction * 50)
 
     def _bind_scroll(self, widget):
         widget.bind("<Button-4>",   lambda e: self._scroll(-50), add="+")
@@ -173,21 +181,24 @@ class EndorsedModsPanel:
             c.card.destroy()
         self._cards.clear()
 
-    def _make_card(self, entry: EndorsedModEntry) -> ModCard:
+    def _make_card(self, entry: EndorsedModEntry, installed_ids: set[int]) -> ModCard:
         url = f"https://www.nexusmods.com/{entry.domain_name}/mods/{entry.mod_id}"
+        installed = entry.mod_id in installed_ids
         card = ModCard(
             self._inner, entry,
             on_view=lambda u=url: open_url(u),
             on_install=lambda e=entry: self._install_fn(e),
             on_right_click=lambda event, e=entry, u=url: self._show_context_menu(event, e, u),
+            is_installed=installed,
         )
         self._bind_scroll(card.card)
         return card
 
     def _build_cards(self):
         self._clear_cards()
+        installed_ids = self._get_installed_mod_ids()
         for entry in self._entries:
-            self._cards.append(self._make_card(entry))
+            self._cards.append(self._make_card(entry, installed_ids))
         self._regrid_cards()
         self._load_images()
 

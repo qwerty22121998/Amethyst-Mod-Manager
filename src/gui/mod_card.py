@@ -51,6 +51,7 @@ class ModCard:
         on_view: Callable,
         on_install: Callable,
         on_right_click: Callable,
+        is_installed: bool = False,
     ):
         self._entry = entry
         self._image_loaded = False
@@ -139,8 +140,10 @@ class ModCard:
         view_btn.grid(row=0, column=0, padx=(0, 4), sticky="ew")
 
         install_btn = ctk.CTkButton(
-            btn_frame, text="Install",
-            height=30, fg_color="#2d7a2d", hover_color="#3a9e3a",
+            btn_frame, text="Reinstall" if is_installed else "Install",
+            height=30,
+            fg_color="#c37800" if is_installed else "#2d7a2d",
+            hover_color="#e28b00" if is_installed else "#3a9e3a",
             font=("Segoe UI", 12), command=on_install,
         )
         install_btn.grid(row=0, column=1, padx=(4, 0), sticky="ew")

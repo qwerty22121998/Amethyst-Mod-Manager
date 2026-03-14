@@ -65,6 +65,18 @@ def _fileid_sidecar(archive: Path) -> Path:
     return archive.with_suffix(archive.suffix + ".fileid")
 
 
+def delete_archive_and_sidecar(archive_path: Path) -> None:
+    """Remove an archive and its .fileid sidecar if present.
+
+    Safe to call even if either file is missing.
+    """
+    try:
+        archive_path.unlink(missing_ok=True)
+        _fileid_sidecar(archive_path).unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
 def _read_sidecar_file_id(archive: Path) -> int:
     """Return the file_id stored in the sidecar, or 0 if absent/unreadable."""
     try:

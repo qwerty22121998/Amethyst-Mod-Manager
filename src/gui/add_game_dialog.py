@@ -157,6 +157,19 @@ class AddGameDialog(ctk.CTkToplevel):
         body.grid(row=1, column=0, sticky="nsew")
         body.grid_columnconfigure(0, weight=1)
 
+        # Forward scroll wheel to body (CTkScrollableFrame doesn't receive wheel in Flatpak)
+        def _fwd_scroll(event):
+            num = getattr(event, "num", None)
+            delta = getattr(event, "delta", 0) or 0
+            if num == 4 or delta > 0:
+                body._parent_canvas.yview_scroll(-50, "units")
+            elif num == 5 or delta < 0:
+                body._parent_canvas.yview_scroll(50, "units")
+        self.bind_all("<Button-4>", _fwd_scroll)
+        self.bind_all("<Button-5>", _fwd_scroll)
+        self.bind_all("<MouseWheel>", _fwd_scroll)
+        self.bind("<Destroy>", self._add_game_dialog_on_destroy)
+
         # --- Game path section ---
         ctk.CTkLabel(
             body, text="Game Installation Folder",
@@ -779,6 +792,16 @@ class AddGameDialog(ctk.CTkToplevel):
         self.result = self._found_path
         self.grab_release()
         self.destroy()
+
+    def _add_game_dialog_on_destroy(self, event):
+        if event.widget is self:
+            try:
+                self.unbind_all("<Button-4>")
+                self.unbind_all("<Button-5>")
+                self.unbind_all("<MouseWheel>")
+                self.unbind("<Destroy>", self._add_game_dialog_on_destroy)
+            except Exception:
+                pass
 
     def _on_cancel(self):
         self.result = None

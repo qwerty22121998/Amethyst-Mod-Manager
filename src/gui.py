@@ -77,9 +77,10 @@ from Utils.plugins import (
 )
 from Nexus.nexus_api import NexusAPI, load_api_key, clear_api_key
 from Nexus.nexus_oauth import load_oauth_tokens
-from Nexus.nexus_download import NexusDownloader
+from Nexus.nexus_download import NexusDownloader, delete_archive_and_sidecar
 from Nexus.nxm_handler import NxmLink, NxmHandler, NxmIPC
 from Nexus.nexus_meta import build_meta_from_download, write_meta
+from Utils.config_paths import get_download_cache_dir
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
@@ -551,6 +552,7 @@ class App(ctk.CTk):
                     )
                 ),
                 cancel=cancel_event,
+                dest_dir=get_download_cache_dir(),
             )
             if result.success and result.file_path:
                 self.after(0, lambda: (
@@ -646,9 +648,9 @@ class App(ctk.CTk):
         except Exception as exc:
             log(f"Nexus: Warning — could not save metadata: {exc}")
 
-        if _installed and _archive_path and _archive_path.is_file():
+        if _installed and _archive_path:
             try:
-                _archive_path.unlink()
+                delete_archive_and_sidecar(_archive_path)
                 log(f"Nexus: Removed archive {_archive_path.name}")
             except OSError:
                 pass
@@ -707,7 +709,10 @@ class App(ctk.CTk):
         self._mod_panel_container.grid_rowconfigure(0, weight=1)
         self._mod_panel_container.grid_columnconfigure(0, weight=1)
 
-        self._mod_panel = ModListPanel(self._mod_panel_container, log_fn=log)
+        self._mod_panel = ModListPanel(
+            self._mod_panel_container, log_fn=log,
+            call_threadsafe_fn=self.call_threadsafe,
+        )
         self._mod_panel.grid(row=0, column=0, sticky="nsew")
 
         self._plugin_panel_container = ctk.CTkFrame(self, fg_color="transparent", corner_radius=0)
@@ -734,6 +739,7 @@ class App(ctk.CTk):
         self._disable_plugins_panel = None
         self._optional_mods_panel = None
         self._vramr_panel = None
+        self._ini_editor_panel = None
 
         def _on_filemap_rebuilt():
             # 1. Sync plugins.txt from the updated filemap
@@ -789,8 +795,9 @@ class App(ctk.CTk):
                 )
                 if added:
                     self._status.log(f"plugins.txt: added {added} new plugin(s).")
-            # 2. Refresh Data tab
+            # 2. Refresh Data tab and Ini Files tab
             self._plugin_panel._refresh_data_tab()
+            self._plugin_panel._refresh_ini_files_tab()
             # 3. Reload Plugins tab from updated plugins.txt
             if (self._plugin_panel._plugins_path is not None
                     and self._plugin_panel._plugin_extensions):
@@ -1145,6 +1152,25 @@ class App(ctk.CTk):
 
     def hide_deploy_paths_panel(self):
         self._hide_plugin_overlay("_deploy_paths_panel")
+
+    # -- Ini file editor panel (overlays mod list) --------------------------
+
+    def show_ini_editor_panel(self, file_path: str, rel_path: str, mod_name: str):
+        """Show the ini/json file editor overlay over the mod list."""
+        from gui.dialogs import IniFileEditorPanel
+        self._show_plugin_overlay(
+            "_ini_editor_panel",
+            lambda: IniFileEditorPanel(
+                self._mod_panel_container,
+                file_path=file_path,
+                rel_path=rel_path,
+                mod_name=mod_name,
+                on_done=lambda p: self._hide_plugin_overlay("_ini_editor_panel"),
+            ),
+        )
+
+    def hide_ini_editor_panel(self):
+        self._hide_plugin_overlay("_ini_editor_panel")
 
     # -- Separator settings panel (overlays plugin panel) -------------------
 

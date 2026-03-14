@@ -106,7 +106,61 @@ from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
 from gui.collections_dialog import CollectionsDialog
 from gui.nexus_browser_overlay import NexusBrowserOverlay
 from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
+from Nexus.nexus_download import delete_archive_and_sidecar
+from Utils.config_paths import get_download_cache_dir
 from Nexus.nexus_update_checker import check_for_updates
+
+
+def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
+    """Pure scan over meta.ini; returns dict of results. Safe to run in thread."""
+    update_mods: set[str] = set()
+    missing_reqs: set[str] = set()
+    missing_reqs_detail: dict[str, list[str]] = {}
+    endorsed_mods: set[str] = set()
+    install_dates: dict[str, str] = {}
+    install_datetimes: dict[str, datetime] = {}
+    today = datetime.now().date()
+    for entry in entries:
+        if entry.is_separator:
+            continue
+        meta_path = mods_dir / entry.name / "meta.ini"
+        if not meta_path.is_file():
+            continue
+        try:
+            meta = read_meta(meta_path)
+            if not meta.installed and ensure_installed_stamp(meta_path):
+                meta = read_meta(meta_path)
+            if meta.has_update:
+                update_mods.add(entry.name)
+            if meta.missing_requirements:
+                missing_reqs.add(entry.name)
+                names = []
+                for pair in meta.missing_requirements.split(";"):
+                    parts = pair.split(":", 1)
+                    if len(parts) == 2:
+                        names.append(parts[1])
+                    elif parts[0]:
+                        names.append(parts[0])
+                missing_reqs_detail[entry.name] = names
+            if meta.endorsed:
+                endorsed_mods.add(entry.name)
+            if meta.installed:
+                dt = datetime.fromisoformat(meta.installed)
+                if dt.date() == today:
+                    install_dates[entry.name] = dt.strftime("%-I:%M %p")
+                else:
+                    install_dates[entry.name] = dt.strftime("%-m/%-d/%y")
+                install_datetimes[entry.name] = dt
+        except Exception:
+            pass
+    return {
+        "update_mods": update_mods,
+        "missing_reqs": missing_reqs,
+        "missing_reqs_detail": missing_reqs_detail,
+        "endorsed_mods": endorsed_mods,
+        "install_dates": install_dates,
+        "install_datetimes": install_datetimes,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -129,9 +183,10 @@ class ModListPanel(ctk.CTkFrame):
     # Computed dynamically in _layout_columns(); defaults here.
     _COL_X  = [4, 32, 0, 0, 0, 0]   # patched in _layout_columns
 
-    def __init__(self, parent, log_fn=None):
+    def __init__(self, parent, log_fn=None, call_threadsafe_fn=None):
         super().__init__(parent, fg_color=BG_PANEL, corner_radius=0)
         self._log = log_fn or (lambda msg: None)
+        self._call_threadsafe = call_threadsafe_fn
 
         self._game = None
         self._entries:  list[ModEntry] = []
@@ -1072,10 +1127,8 @@ class ModListPanel(ctk.CTkFrame):
         self._load_sep_colors()
         self._load_collapsed()
         self._update_expand_collapse_all_btn()
-        self._scan_update_flags()
-        self._scan_missing_reqs_flags()
-        self._scan_endorsed_flags()
-        self._scan_install_dates()
+        # Defer meta scan to background so the window appears sooner
+        self._scan_meta_flags_async()
         self._rebuild_check_widgets()
         # Refresh always rescans all mod folders to rebuild the index from scratch.
         self._filemap_rescan_index = True
@@ -1083,59 +1136,68 @@ class ModListPanel(ctk.CTkFrame):
         self._redraw()
         self._update_info()
 
-    def _scan_update_flags(self):
-        """Scan meta.ini files to build the set of mods with updates available."""
-        self._update_mods.clear()
-        self._vis_dirty = True  # _filter_has_updates depends on this
-        if self._modlist_path is None:
-            return
-        mods_dir = self._staging_root
-        if not mods_dir.is_dir():
-            return
-        for entry in self._entries:
-            if entry.is_separator:
-                continue
-            meta_path = mods_dir / entry.name / "meta.ini"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = read_meta(meta_path)
-                if meta.has_update:
-                    self._update_mods.add(entry.name)
-            except Exception:
-                pass
+    def _scan_meta_flags(self):
+        """Single pass over meta.ini: update, missing_reqs, endorsed, install_dates (sync)."""
+        results = _scan_meta_flags_impl(self._entries, self._staging_root)
+        self._apply_meta_results(results)
 
-    def _scan_missing_reqs_flags(self):
-        """Scan meta.ini files to build the set of mods with missing requirements."""
+    def _scan_meta_flags_async(self):
+        """Run meta scan in background so the window appears sooner; apply results when done."""
+        self._update_mods.clear()
         self._missing_reqs.clear()
         self._missing_reqs_detail.clear()
-        self._vis_dirty = True  # _filter_missing_reqs depends on this
-        if self._modlist_path is None:
+        self._endorsed_mods.clear()
+        self._install_dates.clear()
+        self._install_datetimes.clear()
+        self._vis_dirty = True
+        if self._modlist_path is None or not self._staging_root.is_dir():
             return
+        if not self._call_threadsafe:
+            self._scan_meta_flags()  # Fallback: sync if no thread-safe callback
+            return
+        entries = list(self._entries)
         mods_dir = self._staging_root
-        if not mods_dir.is_dir():
-            return
-        for entry in self._entries:
-            if entry.is_separator:
-                continue
-            meta_path = mods_dir / entry.name / "meta.ini"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = read_meta(meta_path)
-                if meta.missing_requirements:
-                    self._missing_reqs.add(entry.name)
-                    # Parse "modId:name;modId:name" into readable names
-                    names = []
-                    for pair in meta.missing_requirements.split(";"):
-                        parts = pair.split(":", 1)
-                        if len(parts) == 2:
-                            names.append(parts[1])
-                        elif parts[0]:
-                            names.append(parts[0])
-                    self._missing_reqs_detail[entry.name] = names
-            except Exception:
-                pass
+        modlist_path = self._modlist_path
+        call_threadsafe = self._call_threadsafe
+
+        def _worker():
+            results = _scan_meta_flags_impl(entries, mods_dir)
+            results["_modlist_path"] = modlist_path
+            call_threadsafe(lambda: self._apply_meta_results(results))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_meta_results(self, results: dict):
+        """Merge scan results into instance state and redraw (main thread only)."""
+        # Staleness check only applies to async scans (which add _modlist_path).
+        # Sync scans (e.g. after Check Updates) don't include it; avoid rejecting them.
+        if "_modlist_path" in results and results["_modlist_path"] != self._modlist_path:
+            return  # Stale: user switched game before scan finished
+        self._update_mods = results["update_mods"]
+        self._missing_reqs = results["missing_reqs"]
+        self._missing_reqs_detail = results["missing_reqs_detail"]
+        self._endorsed_mods = results["endorsed_mods"]
+        self._install_dates = results["install_dates"]
+        self._install_datetimes = results["install_datetimes"]
+        self._vis_dirty = True
+        self._redraw()
+        self._update_info()
+
+    def _scan_update_flags(self):
+        """Scan meta.ini for update flags. Delegates to _scan_meta_flags for single-pass efficiency."""
+        self._scan_meta_flags()
+
+    def _scan_missing_reqs_flags(self):
+        """Scan meta.ini for missing requirements. Delegates to _scan_meta_flags for single-pass efficiency."""
+        self._scan_meta_flags()
+
+    def _scan_endorsed_flags(self):
+        """Scan meta.ini for endorsed mods. Delegates to _scan_meta_flags for single-pass efficiency."""
+        self._scan_meta_flags()
+
+    def _scan_install_dates(self):
+        """Scan meta.ini for install dates. Delegates to _scan_meta_flags for single-pass efficiency."""
+        self._scan_meta_flags()
 
     def _save_ignored_missing_reqs(self) -> None:
         """Persist _ignored_missing_reqs to profile's ignored_missing_requirements.txt."""
@@ -1150,57 +1212,6 @@ class ModListPanel(ctk.CTkFrame):
                 path.unlink()
         except OSError:
             pass
-
-    def _scan_endorsed_flags(self):
-        """Scan meta.ini files to build the set of endorsed mods."""
-        self._endorsed_mods.clear()
-        if self._modlist_path is None:
-            return
-        mods_dir = self._staging_root
-        if not mods_dir.is_dir():
-            return
-        for entry in self._entries:
-            if entry.is_separator:
-                continue
-            meta_path = mods_dir / entry.name / "meta.ini"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = read_meta(meta_path)
-                if meta.endorsed:
-                    self._endorsed_mods.add(entry.name)
-            except Exception:
-                pass
-
-    def _scan_install_dates(self):
-        """Scan meta.ini files to build the install date display strings per mod."""
-        self._install_dates.clear()
-        self._install_datetimes.clear()
-        if self._modlist_path is None:
-            return
-        mods_dir = self._staging_root
-        if not mods_dir.is_dir():
-            return
-        today = datetime.now().date()
-        for entry in self._entries:
-            if entry.is_separator:
-                continue
-            meta_path = mods_dir / entry.name / "meta.ini"
-            if not meta_path.is_file():
-                continue
-            try:
-                meta = read_meta(meta_path)
-                if not meta.installed and ensure_installed_stamp(meta_path):
-                    meta = read_meta(meta_path)
-                if meta.installed:
-                    dt = datetime.fromisoformat(meta.installed)
-                    if dt.date() == today:
-                        self._install_dates[entry.name] = dt.strftime("%-I:%M %p")
-                    else:
-                        self._install_dates[entry.name] = dt.strftime("%-m/%-d/%y")
-                    self._install_datetimes[entry.name] = dt
-            except Exception:
-                pass
 
     def _rebuild_check_widgets(self):
         """Rebuild per-entry BooleanVars (logical state only — visual pool is separate)."""
@@ -4405,6 +4416,7 @@ class ModListPanel(ctk.CTkFrame):
                     0, lambda c=cur, t=total: mod_panel.update_download_progress(c, t, cancel=cancel_event)
                 ),
                 cancel=cancel_event,
+                dest_dir=get_download_cache_dir(),
             )
 
             if result.success and result.file_path:
@@ -4420,8 +4432,13 @@ class ModListPanel(ctk.CTkFrame):
                         pass
                     mod_panel.hide_download_progress(cancel=cancel_event)
                     log_fn(f"Nexus: Installing update for {mod_name}...")
+
+                    def _cleanup():
+                        delete_archive_and_sidecar(Path(result.file_path))
+
                     install_mod_from_archive(
-                        str(result.file_path), app, log_fn, game, mod_panel)
+                        str(result.file_path), app, log_fn, game, mod_panel,
+                        on_installed=_cleanup)
                     # Update metadata
                     try:
                         new_meta = build_meta_from_download(

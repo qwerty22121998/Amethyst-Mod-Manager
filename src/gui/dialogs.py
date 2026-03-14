@@ -204,14 +204,20 @@ class _GamePickerDialog(ctk.CTkToplevel):
         scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=(0, 0))
 
         def _fwd_scroll(event):
-            scroll._parent_canvas.yview_scroll(
-                -1 if event.num == 4 else 1, "units"
-            )
+            # Linux: Button-4/5 use event.num; Flatpak/Wayland may send MouseWheel with event.delta
+            num = getattr(event, "num", None)
+            delta = getattr(event, "delta", 0) or 0
+            if num == 4 or delta > 0:
+                scroll._parent_canvas.yview_scroll(-50, "units")
+            elif num == 5 or delta < 0:
+                scroll._parent_canvas.yview_scroll(50, "units")
         self.bind_all("<Button-4>", _fwd_scroll)
         self.bind_all("<Button-5>", _fwd_scroll)
+        self.bind_all("<MouseWheel>", _fwd_scroll)
         self.bind("<Destroy>", lambda e: (
             self.unbind_all("<Button-4>"),
             self.unbind_all("<Button-5>"),
+            self.unbind_all("<MouseWheel>"),
         ) if e.widget is self else None)
 
         # Keep CTkImage refs alive
@@ -526,8 +532,17 @@ class GamePickerPanel(tk.Frame):
 
         # Forward scroll from anywhere in this overlay to the canvas.
         # bind_all covers every child widget (including CTkButton internals).
-        self.bind_all("<Button-4>", lambda e: self._canvas.yview_scroll(-8, "units"))
-        self.bind_all("<Button-5>", lambda e: self._canvas.yview_scroll(8, "units"))
+        # Linux: Button-4/5; Flatpak/Wayland: may send MouseWheel — handle both.
+        def _fwd_scroll(e):
+            num = getattr(e, "num", None)
+            delta = getattr(e, "delta", 0) or 0
+            if num == 4 or delta > 0:
+                self._canvas.yview_scroll(-50, "units")
+            elif num == 5 or delta < 0:
+                self._canvas.yview_scroll(50, "units")
+        self.bind_all("<Button-4>", _fwd_scroll)
+        self.bind_all("<Button-5>", _fwd_scroll)
+        self.bind_all("<MouseWheel>", _fwd_scroll)
         self.bind("<Destroy>", self._on_destroy)
 
         # Build cards
@@ -649,6 +664,7 @@ class GamePickerPanel(tk.Frame):
             try:
                 self.unbind_all("<Button-4>")
                 self.unbind_all("<Button-5>")
+                self.unbind_all("<MouseWheel>")
             except Exception:
                 pass
 
@@ -5504,6 +5520,88 @@ class DeploymentPathsPanel(ctk.CTkFrame):
                 self._tree.set(self._iid_fn(rel), "check", "\u2610")
             except tk.TclError:
                 pass
+
+
+# ---------------------------------------------------------------------------
+# IniFileEditorPanel — inline overlay for editing ini/json files
+# ---------------------------------------------------------------------------
+
+class IniFileEditorPanel(ctk.CTkFrame):
+    """Inline panel (overlays _mod_panel_container) for editing ini/json files.
+    Shows a text editor with Save and Cancel. Calls on_done(panel) on close."""
+
+    def __init__(self, parent, file_path: str, rel_path: str, mod_name: str,
+                 on_done=None):
+        super().__init__(parent, fg_color=BG_PANEL, corner_radius=0)
+        self._file_path = Path(file_path)
+        self._rel_path = rel_path
+        self._mod_name = mod_name
+        self._on_done = on_done or (lambda p: None)
+        self._original_content: str | None = None
+
+        # Title bar
+        title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=36)
+        title_bar.pack(fill="x")
+        title_bar.pack_propagate(False)
+        ctk.CTkLabel(
+            title_bar,
+            text=f"{rel_path} \u2014 {mod_name}",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12)
+        ctk.CTkButton(
+            title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=4)
+        ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
+
+        # Text editor
+        self._textbox = ctk.CTkTextbox(
+            self, font=FONT_MONO, fg_color=BG_DEEP, text_color=TEXT_MAIN,
+            wrap="none", corner_radius=4, border_width=1, border_color=BORDER,
+        )
+        self._textbox.pack(fill="both", expand=True, padx=12, pady=12)
+
+        # Button bar
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkButton(
+            btn_frame, text="Save", width=80, height=28,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            font=FONT_SMALL, corner_radius=4,
+            command=self._on_save,
+        ).pack(side="right", padx=(8, 0))
+        ctk.CTkButton(
+            btn_frame, text="Cancel", width=80, height=28,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            font=FONT_SMALL, corner_radius=4,
+            command=self._on_cancel,
+        ).pack(side="right")
+
+        self._load_file()
+
+    def _load_file(self):
+        try:
+            self._original_content = self._file_path.read_text(encoding="utf-8")
+        except Exception:
+            self._original_content = ""
+        self._textbox.delete("0.0", "end")
+        self._textbox.insert("0.0", self._original_content)
+
+    def _on_save(self):
+        try:
+            content = self._textbox.get("0.0", "end-1c")
+            self._file_path.write_text(content, encoding="utf-8")
+            self._on_done(self)
+        except OSError as e:
+            tk.messagebox.showerror(
+                "Save failed",
+                f"Could not save {self._rel_path}:\n{e}",
+                parent=self,
+            )
+
+    def _on_cancel(self):
+        self._on_done(self)
 
 
 # ---------------------------------------------------------------------------
