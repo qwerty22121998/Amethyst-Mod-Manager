@@ -49,10 +49,6 @@ class Cyberpunk2077(BaseGame):
         return "1091500"
     
     @property
-    def heroic_app_names(self) -> list[str]:
-        return ["Pewee"]  # Epic appName for Cyberpunk 2077
-
-    @property
     def nexus_game_domain(self) -> str:
         return "cyberpunk2077"
 

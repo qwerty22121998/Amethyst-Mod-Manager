@@ -29,6 +29,7 @@ class Subnautica(BaseGame):
         self._prefix_path: Path | None = None
         self._deploy_mode: LinkMode = LinkMode.HARDLINK
         self._staging_path: Path | None = None
+        self._saved_heroic_app_name: str | None = None
         self.load_paths()
 
     # -----------------------------------------------------------------------
@@ -51,9 +52,9 @@ class Subnautica(BaseGame):
     def steam_id(self) -> str:
         return "264710"
 
-    @property
-    def heroic_app_names(self) -> list[str]:
-        return ["Jaguar"]  # Epic appName for Subnautica
+    def set_heroic_app_name(self, app_name: str | None) -> None:
+        self._saved_heroic_app_name = app_name or None
+        self.save_paths()
 
     @property
     def nexus_game_domain(self) -> str:
@@ -153,6 +154,7 @@ class Subnautica(BaseGame):
             raw_staging = data.get("staging_path", "")
             if raw_staging:
                 self._staging_path = Path(raw_staging)
+            self._saved_heroic_app_name = data.get("heroic_app_name") or None
             self._validate_staging()
             if not self._prefix_path or not self._prefix_path.is_dir():
                 found = find_prefix(self.steam_id)
@@ -173,10 +175,11 @@ class Subnautica(BaseGame):
             LinkMode.COPY:    "copy",
         }.get(self._deploy_mode, "hardlink")
         data = {
-            "game_path":    str(self._game_path)    if self._game_path    else "",
-            "prefix_path":  str(self._prefix_path)  if self._prefix_path  else "",
-            "deploy_mode":  mode_str,
-            "staging_path": str(self._staging_path) if self._staging_path else "",
+            "game_path":        str(self._game_path)    if self._game_path    else "",
+            "prefix_path":      str(self._prefix_path)  if self._prefix_path  else "",
+            "deploy_mode":      mode_str,
+            "staging_path":     str(self._staging_path) if self._staging_path else "",
+            "heroic_app_name":  self._saved_heroic_app_name or "",
         }
         self._paths_file.write_text(
             json.dumps(data, indent=2), encoding="utf-8"
@@ -309,10 +312,6 @@ class Subnautica_Below_Zero(Subnautica):
         return "848450"
 
     @property
-    def heroic_app_names(self) -> list[str]:
-        return ["Niobe"]  # Epic appName for Subnautica: Below Zero
-
-    @property
     def nexus_game_domain(self) -> str:
         return "subnauticabelowzero"
 
@@ -351,10 +350,6 @@ class TCG_Card_Shop_Simulator(Subnautica):
     @property
     def steam_id(self) -> str:
         return "3070070"
-
-    @property
-    def heroic_app_names(self) -> list[str]:
-        return []
 
     @property
     def nexus_game_domain(self) -> str:
@@ -396,10 +391,6 @@ class Lethal_Company(Subnautica):
         return "1966720"
 
     @property
-    def heroic_app_names(self) -> list[str]:
-        return []
-
-    @property
     def nexus_game_domain(self) -> str:
         return "lethalcompany"
 
@@ -436,10 +427,6 @@ class Valheim(Subnautica):
     @property
     def steam_id(self) -> str:
         return "892970"
-
-    @property
-    def heroic_app_names(self) -> list[str]:
-        return []
 
     @property
     def nexus_game_domain(self) -> str:

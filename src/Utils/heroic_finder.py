@@ -11,22 +11,36 @@ No UI, no game-specific knowledge.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 _HOME = Path.home()
+_XDG_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", _HOME / ".config"))
 
 # ---------------------------------------------------------------------------
-# Heroic config root candidates (Flatpak first — most common on Steam Deck)
+# Heroic config root candidates
+# GamesConfig/<Appname>.json lives under each root; path varies by install type.
 # ---------------------------------------------------------------------------
-_HEROIC_CONFIG_CANDIDATES: list[Path] = [
-    _HOME / ".var" / "app" / "com.heroicgameslauncher.hgl" / "config" / "heroic",  # Flatpak
-    _HOME / ".config" / "heroic",  # Native / AppImage
-]
+def _heroic_config_candidates() -> list[Path]:
+    """All possible Heroic config roots, ordered by likelihood."""
+    return [
+        # Flatpak (most common on Steam Deck)
+        _HOME / ".var" / "app" / "com.heroicgameslauncher.hgl" / "config" / "heroic",
+        # Native / AppImage — respects XDG_CONFIG_HOME
+        _XDG_CONFIG / "heroic",
+        _HOME / ".config" / "heroic",  # Fallback if XDG_CONFIG was overridden
+    ]
 
 
 def _find_heroic_config_roots() -> list[Path]:
     """Return all Heroic config directories that exist on disk."""
-    return [p for p in _HEROIC_CONFIG_CANDIDATES if p.is_dir()]
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for p in _heroic_config_candidates():
+        if p not in seen and p.is_dir():
+            seen.add(p)
+            out.append(p)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -140,12 +154,21 @@ def _find_heroic_prefix_for_app(heroic_root: Path, app_name: str) -> Path | None
 
     Returns the prefix Path if it exists on disk, otherwise None.
     """
-    # 1. Per-game override
-    game_cfg_file = heroic_root / "GamesConfig" / f"{app_name}.json"
+    # 1. Per-game: heroic_root/GamesConfig/<app_name>.json
+    #    Path varies: Flatpak ~/.var/app/.../config/heroic, native ~/.config/heroic (or XDG_CONFIG_HOME)
+    games_config = heroic_root / "GamesConfig"
+    game_cfg_file = games_config / f"{app_name}.json"
     if game_cfg_file.is_file():
         try:
             cfg = json.loads(game_cfg_file.read_text(encoding="utf-8", errors="replace"))
-            wine_prefix = cfg.get("winePrefix", "")
+            # Settings nested under appName key (Heroic format)
+            inner = cfg.get(app_name, cfg)
+            wine_prefix = (
+                inner.get("winePrefix", "")
+                or inner.get("wine_prefix", "")
+                or cfg.get("winePrefix", "")
+                or cfg.get("wine_prefix", "")
+            )
             if wine_prefix:
                 p = Path(wine_prefix)
                 if p.is_dir():
@@ -233,6 +256,95 @@ def find_heroic_launch_info(app_names: list[str]) -> "tuple[str, str] | None":
                     install_path = entry.get("install_path", "")
                     if install_path and Path(install_path).is_dir():
                         return ("gog", entry_id or app_name)
+    return None
+
+
+def find_heroic_app_name_by_exe(exe_name: str) -> str | None:
+    """
+    Search Heroic's installed.json for a game whose executable matches exe_name.
+    Returns the app_name string if found, otherwise None.
+
+    exe_name should be the bare filename, e.g. 'SubnauticaZero.exe'.
+    Matching is case-insensitive.
+    """
+    info = find_heroic_game_info_by_exe(exe_name)
+    return info[2] if info else None
+
+
+def find_heroic_game_info_by_exe(exe_name: str) -> "tuple[Path, Path | None, str] | None":
+    """
+    Full Heroic detection workflow keyed by executable name from the handler:
+
+    1. Look in Heroic's installed.json (legendaryConfig/legendary/installed.json)
+       for a game whose executable matches exe_name.
+    2. Get app_name and install_path from that entry.
+    3. Look in GamesConfig/<appname>.json for the winePrefix.
+    4. Return (install_path, prefix_path, app_name) if all found.
+
+    Used for games like Subnautica Below Zero where the handler provides
+    SubnauticaZero.exe; we resolve appname (Foxglove), install path, and prefix.
+    """
+    exe_lower = exe_name.lower()
+
+    for heroic_root in _find_heroic_config_roots():
+        # 1. Epic (Legendary) installed.json
+        installed = _load_epic_installed(heroic_root)
+        for app_name, entry in installed.items():
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("executable", "").lower() != exe_lower:
+                continue
+            install_path_raw = entry.get("install_path", "")
+            if not install_path_raw:
+                continue
+            install_path = Path(install_path_raw)
+            if not install_path.is_dir():
+                continue
+            # 2. GamesConfig/<appname>.json for prefix
+            prefix_path = _find_heroic_prefix_for_app(heroic_root, app_name)
+            if prefix_path:
+                return (install_path, prefix_path, app_name)
+            # Still return install_path + app_name if prefix lookup fails;
+            # caller can retry prefix later
+            return (install_path, None, app_name)
+
+        # 3. GOG: check gog_store/installed.json for executable match
+        gog_installed = heroic_root / "gog_store" / "installed.json"
+        if gog_installed.is_file():
+            try:
+                gog_data = json.loads(gog_installed.read_text(encoding="utf-8", errors="replace"))
+                if isinstance(gog_data, dict):
+                    for app_id, entry in gog_data.items():
+                        if not isinstance(entry, dict):
+                            continue
+                        # GOG may store executable in different keys
+                        exe = (
+                            entry.get("executable", "")
+                            or entry.get("exe", "")
+                            or ""
+                        )
+                        if not exe:
+                            # Fallback: check install_path + exe
+                            inst = entry.get("install_path", "")
+                            if inst and exe_name:
+                                inst_path = Path(inst)
+                                if (inst_path / exe_name).exists():
+                                    exe = exe_name
+                        if exe.lower() != exe_lower:
+                            continue
+                        install_path_raw = entry.get("install_path", entry.get("path", ""))
+                        if not install_path_raw:
+                            continue
+                        install_path = Path(install_path_raw)
+                        if not install_path.is_dir():
+                            continue
+                        prefix_path = _find_heroic_prefix_for_app(heroic_root, app_id)
+                        if prefix_path:
+                            return (install_path, prefix_path, app_id)
+                        return (install_path, None, app_id)
+            except (OSError, json.JSONDecodeError):
+                pass
+
     return None
 
 

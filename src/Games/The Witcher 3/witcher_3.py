@@ -148,10 +148,6 @@ class Witcher3(BaseGame):
         return "bin/x64/witcher3.exe"
 
     @property
-    def heroic_app_names(self) -> list[str]:
-        return ["1207658924","1207664643","1640424747","1495134320","1207664663","The Witcher 3: Wild Hunt"]  # GOG ID + title fallback
-
-    @property
     def steam_id(self) -> str:
         return "292030"
 

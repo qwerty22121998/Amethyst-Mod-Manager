@@ -45,7 +45,7 @@ from gui.downloads_panel import DownloadsPanel
 from gui.download_locations_overlay import DownloadLocationsOverlay
 from gui.ctk_components import CTkTreeview
 
-from Utils.config_paths import get_exe_args_path, get_game_config_dir
+from Utils.config_paths import get_exe_args_path, get_game_config_dir, get_game_config_path
 from Utils.filemap import build_filemap
 from Utils.xdg import xdg_open, open_url
 from Utils.plugins import (
@@ -1001,7 +1001,7 @@ class PluginPanel(ctk.CTkFrame):
         if self._is_game_exe(exe_path):
             mode = self._load_launch_mode(exe_path.name)  # 'auto'|'steam'|'heroic'|'none'
             steam_id = getattr(game, "steam_id", "")
-            heroic_app_names = getattr(game, "heroic_app_names", [])
+            heroic_app_names = self._get_heroic_app_names_for_launch(game)
 
             if mode == "steam":
                 if steam_id:
@@ -1201,9 +1201,25 @@ class PluginPanel(ctk.CTkFrame):
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _get_heroic_app_names_for_launch(self, game) -> list:
+        """Return heroic app names for launch: from game.heroic_app_names, then from paths.json.
+        Since we no longer store appname in handlers, paths.json is the source when discovered via exe."""
+        names = list(getattr(game, "heroic_app_names", []) or [])
+        if not names and hasattr(game, "name"):
+            try:
+                paths_file = get_game_config_path(game.name)
+                if paths_file.is_file():
+                    data = json.loads(paths_file.read_text(encoding="utf-8"))
+                    saved = data.get("heroic_app_name", "").strip()
+                    if saved:
+                        names = [saved]
+            except (OSError, json.JSONDecodeError):
+                pass
+        return names
+
     def _game_is_heroic_install(self, game) -> bool:
         """Return True if Heroic knows about this game (it's in an Epic/GOG library)."""
-        app_names = getattr(game, "heroic_app_names", [])
+        app_names = self._get_heroic_app_names_for_launch(game)
         if not app_names:
             return False
         from Utils.heroic_finder import find_heroic_launch_info

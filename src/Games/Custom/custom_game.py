@@ -306,10 +306,6 @@ class StandardCustomGame(BaseGame):
         return bool(self._defn.get("mod_install_as_is_if_no_match", False))
 
     @property
-    def heroic_app_names(self) -> list[str]:
-        return _defn_to_list(self._defn, "heroic_app_names")
-
-    @property
     def wine_dll_overrides(self) -> dict[str, str]:
         return _defn_to_dll_overrides(self._defn)
 
@@ -691,10 +687,6 @@ class Ue5CustomGame(UE5Game):
     @property
     def mod_install_as_is_if_no_match(self) -> bool:
         return bool(self._defn.get("mod_install_as_is_if_no_match", False))
-
-    @property
-    def heroic_app_names(self) -> list[str]:
-        return _defn_to_list(self._defn, "heroic_app_names")
 
     @property
     def wine_dll_overrides(self) -> dict[str, str]:

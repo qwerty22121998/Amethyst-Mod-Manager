@@ -20,7 +20,6 @@
   "mod_auto_strip_until_required": false,
   "mod_required_file_types": [],
   "mod_install_as_is_if_no_match": false,
-  "heroic_app_names": [],
   "restore_before_deploy": true,
   "normalize_folder_case": true,
   "wine_dll_overrides": {},

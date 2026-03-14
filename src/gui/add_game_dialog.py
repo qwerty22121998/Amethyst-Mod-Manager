@@ -8,6 +8,7 @@ with a manual folder-picker fallback via XDG portal or zenity.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import threading
@@ -27,7 +28,8 @@ from Utils.steam_finder import (
     find_game_by_steam_id,
     find_prefix,
 )
-from Utils.heroic_finder import find_heroic_game, find_heroic_prefix
+from Utils.config_paths import get_game_config_path
+from Utils.heroic_finder import find_heroic_game, find_heroic_prefix, find_heroic_app_name_by_exe, find_heroic_game_info_by_exe
 
 from gui.theme import (
     BG_DEEP,
@@ -51,6 +53,26 @@ from gui.theme import (
     FONT_SMALL,
     FONT_MONO,
 )
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_heroic_app_names(game: BaseGame) -> list[str]:
+    """Get heroic app names from paths.json (handler heroic_app_names removed)."""
+    names = list(getattr(game, "heroic_app_names", []) or [])
+    if not names and hasattr(game, "name"):
+        try:
+            p = get_game_config_path(game.name)
+            if p.is_file():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                saved = data.get("heroic_app_name", "").strip()
+                if saved:
+                    names = [saved]
+        except (OSError, json.JSONDecodeError):
+            pass
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +123,7 @@ class AddGameDialog(ctk.CTkToplevel):
                 self._set_prefix(existing_pfx, status="configured")
             elif game.steam_id:
                 self._start_prefix_scan()
-            elif game.heroic_app_names:
+            elif _get_heroic_app_names(game):
                 self._start_heroic_prefix_scan()
             if hasattr(game, "get_deploy_mode"):
                 mode = game.get_deploy_mode()
@@ -217,7 +239,7 @@ class AddGameDialog(ctk.CTkToplevel):
             font=FONT_BOLD, text_color=TEXT_SEP, anchor="w"
         ).grid(row=5, column=0, sticky="ew", padx=16, pady=(6, 2))
 
-        _has_prefix_source = bool(self._game.steam_id or self._game.heroic_app_names)
+        _has_prefix_source = bool(self._game.steam_id or _get_heroic_app_names(self._game))
         self._prefix_status_label = ctk.CTkLabel(
             body,
             text="Scanning for prefix…" if _has_prefix_source else "No launcher ID — prefix not applicable.",
@@ -383,25 +405,50 @@ class AddGameDialog(ctk.CTkToplevel):
         thread.start()
 
     def _scan_worker(self):
-        libraries = find_steam_libraries()
-        steam_id = getattr(self._game, "steam_id", None)
-        if steam_id:
-            found = find_game_by_steam_id(libraries, steam_id, self._game.exe_name)
-        else:
-            found = None
-        if not found:
-            found = find_game_in_libraries(libraries, self._game.exe_name)
+        found: Optional[Path] = None
         source = "steam"
-        if not found and self._game.heroic_app_names:
-            found = find_heroic_game(self._game.heroic_app_names)
+        discovered_app_name: Optional[str] = None
+        found_prefix: Optional[Path] = None
+
+        # Heroic first: exe -> installed.json -> appname + path -> GamesConfig/<appname>.json -> prefix
+        # Ensures we get both path and prefix when the game is installed via Heroic.
+        exe_name = getattr(self._game, "exe_name", None)
+        if exe_name:
+            info = find_heroic_game_info_by_exe(exe_name)
+            if info:
+                found, found_prefix, discovered_app_name = info
+                source = "heroic"
+
+        if not found and _get_heroic_app_names(self._game):
+            found = find_heroic_game(_get_heroic_app_names(self._game))
             if found:
                 source = "heroic"
-        # Marshal result back to the main thread
-        self.after(0, lambda: self._on_scan_complete(found, source))
 
-    def _on_scan_complete(self, found: Optional[Path], source: str = "steam"):
+        if not found:
+            libraries = find_steam_libraries()
+            steam_id = getattr(self._game, "steam_id", None)
+            if steam_id:
+                found = find_game_by_steam_id(libraries, steam_id, self._game.exe_name)
+            if not found:
+                found = find_game_in_libraries(libraries, self._game.exe_name)
+
+        # Marshal result back to the main thread
+        self.after(0, lambda: self._on_scan_complete(found, source, discovered_app_name, found_prefix))
+
+    def _on_scan_complete(self, found: Optional[Path], source: str = "steam", discovered_app_name: Optional[str] = None, found_prefix: Optional[Path] = None):
+        if discovered_app_name and hasattr(self._game, "set_heroic_app_name"):
+            self._game.set_heroic_app_name(discovered_app_name)
         if found:
             self._set_path(found, status="found", source=source)
+            # Use prefix from exe-based discovery when available
+            if found_prefix is not None:
+                self._found_prefix = found_prefix
+                self._set_prefix_text(str(found_prefix))
+                self._prefix_status_label.configure(
+                    text="Found via Heroic Games Launcher.",
+                    text_color=TEXT_OK
+                )
+                self._prefix_open_btn.configure(state="normal")
         else:
             self._status_label.configure(
                 text="Not found automatically. Browse manually to locate the game folder.",
@@ -410,10 +457,12 @@ class AddGameDialog(ctk.CTkToplevel):
             self._set_path_text("")
             self._add_btn.configure(state="disabled")
 
-        # Kick off prefix scan regardless (game path scan result doesn't affect it)
-        if self._game.steam_id:
+        # Kick off prefix scan only when we don't already have one (e.g. from Heroic exe flow)
+        if self._found_prefix is not None:
+            pass  # Already have prefix from Heroic exe discovery
+        elif self._game.steam_id:
             self._start_prefix_scan()
-        elif self._game.heroic_app_names:
+        elif _get_heroic_app_names(self._game):
             self._start_heroic_prefix_scan()
 
     # ------------------------------------------------------------------
@@ -454,7 +503,7 @@ class AddGameDialog(ctk.CTkToplevel):
         thread.start()
 
     def _heroic_prefix_scan_worker(self):
-        found = find_heroic_prefix(self._game.heroic_app_names)
+        found = find_heroic_prefix(_get_heroic_app_names(self._game))
         self.after(0, lambda: self._on_heroic_prefix_scan_complete(found))
 
     def _on_heroic_prefix_scan_complete(self, found: Optional[Path]):
@@ -850,7 +899,7 @@ class ReconfigureGamePanel(ctk.CTkFrame):
                 self._set_prefix(existing_pfx, status="configured")
             elif game.steam_id:
                 self._start_prefix_scan()
-            elif game.heroic_app_names:
+            elif _get_heroic_app_names(game):
                 self._start_heroic_prefix_scan()
             if hasattr(game, "get_deploy_mode"):
                 mode = game.get_deploy_mode()
@@ -950,7 +999,7 @@ class ReconfigureGamePanel(ctk.CTkFrame):
             font=FONT_BOLD, text_color=TEXT_SEP, anchor="w"
         ).grid(row=5, column=0, sticky="ew", padx=16, pady=(6, 2))
 
-        _has_prefix_source = bool(self._game.steam_id or self._game.heroic_app_names)
+        _has_prefix_source = bool(self._game.steam_id or _get_heroic_app_names(self._game))
         self._prefix_status_label = ctk.CTkLabel(
             body,
             text="Scanning for prefix…" if _has_prefix_source else "No launcher ID — prefix not applicable.",
@@ -1114,24 +1163,49 @@ class ReconfigureGamePanel(ctk.CTkFrame):
         threading.Thread(target=self._scan_worker, daemon=True).start()
 
     def _scan_worker(self):
-        libraries = find_steam_libraries()
-        steam_id = getattr(self._game, "steam_id", None)
-        if steam_id:
-            found = find_game_by_steam_id(libraries, steam_id, self._game.exe_name)
-        else:
-            found = None
-        if not found:
-            found = find_game_in_libraries(libraries, self._game.exe_name)
+        found: Optional[Path] = None
         source = "steam"
-        if not found and self._game.heroic_app_names:
-            found = find_heroic_game(self._game.heroic_app_names)
+        discovered_app_name: Optional[str] = None
+        found_prefix: Optional[Path] = None
+
+        # Heroic first: exe -> installed.json -> appname + path -> GamesConfig/<appname>.json -> prefix
+        # Ensures we get both path and prefix when the game is installed via Heroic.
+        exe_name = getattr(self._game, "exe_name", None)
+        if exe_name:
+            info = find_heroic_game_info_by_exe(exe_name)
+            if info:
+                found, found_prefix, discovered_app_name = info
+                source = "heroic"
+
+        if not found and _get_heroic_app_names(self._game):
+            found = find_heroic_game(_get_heroic_app_names(self._game))
             if found:
                 source = "heroic"
-        self.after(0, lambda: self._on_scan_complete(found, source))
 
-    def _on_scan_complete(self, found: Optional[Path], source: str = "steam"):
+        if not found:
+            libraries = find_steam_libraries()
+            steam_id = getattr(self._game, "steam_id", None)
+            if steam_id:
+                found = find_game_by_steam_id(libraries, steam_id, self._game.exe_name)
+            if not found:
+                found = find_game_in_libraries(libraries, self._game.exe_name)
+
+        self.after(0, lambda: self._on_scan_complete(found, source, discovered_app_name, found_prefix))
+
+    def _on_scan_complete(self, found: Optional[Path], source: str = "steam", discovered_app_name: Optional[str] = None, found_prefix: Optional[Path] = None):
+        if discovered_app_name and hasattr(self._game, "set_heroic_app_name"):
+            self._game.set_heroic_app_name(discovered_app_name)
         if found:
             self._set_path(found, status="found", source=source)
+            if found_prefix is not None:
+                self._found_prefix = found_prefix
+                self._set_prefix_text(str(found_prefix))
+                self._prefix_status_label.configure(
+                    text="Found via Heroic Games Launcher.",
+                    text_color=TEXT_OK
+                )
+                if hasattr(self, "_prefix_open_btn"):
+                    self._prefix_open_btn.configure(state="normal")
         else:
             self._status_label.configure(
                 text="Not found automatically. Browse manually to locate the game folder.",
@@ -1139,9 +1213,11 @@ class ReconfigureGamePanel(ctk.CTkFrame):
             )
             self._set_path_text("")
             self._add_btn.configure(state="disabled")
-        if self._game.steam_id:
+        if self._found_prefix is not None:
+            pass
+        elif self._game.steam_id:
             self._start_prefix_scan()
-        elif self._game.heroic_app_names:
+        elif _get_heroic_app_names(self._game):
             self._start_heroic_prefix_scan()
 
     def _start_prefix_scan(self):
@@ -1172,7 +1248,7 @@ class ReconfigureGamePanel(ctk.CTkFrame):
         threading.Thread(target=self._heroic_prefix_scan_worker, daemon=True).start()
 
     def _heroic_prefix_scan_worker(self):
-        found = find_heroic_prefix(self._game.heroic_app_names)
+        found = find_heroic_prefix(_get_heroic_app_names(self._game))
         self.after(0, lambda: self._on_heroic_prefix_scan_complete(found))
 
     def _on_heroic_prefix_scan_complete(self, found: Optional[Path]):

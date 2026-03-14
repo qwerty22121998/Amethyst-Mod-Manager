@@ -172,7 +172,6 @@ class CustomGameDialog(ctk.CTkToplevel):
         self._auto_strip_var    = tk.BooleanVar(value=False)  # mod_auto_strip_until_required
         self._req_file_types_var = tk.StringVar()  # mod_required_file_types
         self._install_as_is_var = tk.BooleanVar(value=False)  # mod_install_as_is_if_no_match
-        self._heroic_var        = tk.StringVar()  # heroic_app_names
         self._restore_var       = tk.BooleanVar(value=True)   # restore_before_deploy
         self._norm_case_var     = tk.BooleanVar(value=True)   # normalize_folder_case
         # wine_dll_overrides stored as a plain string (dll=mode lines), set in _build_ui via textbox
@@ -197,7 +196,6 @@ class CustomGameDialog(ctk.CTkToplevel):
             self._auto_strip_var.set(bool(existing.get("mod_auto_strip_until_required", False)))
             self._req_file_types_var.set(_set_to_str(existing.get("mod_required_file_types", [])))
             self._install_as_is_var.set(bool(existing.get("mod_install_as_is_if_no_match", False)))
-            self._heroic_var.set(_list_to_str(existing.get("heroic_app_names", [])))
             self._restore_var.set(bool(existing.get("restore_before_deploy", True)))
             self._norm_case_var.set(bool(existing.get("normalize_folder_case", True)))
             self._dll_initial = _dll_to_str(existing.get("wine_dll_overrides", {}))
@@ -441,13 +439,6 @@ class CustomGameDialog(ctk.CTkToplevel):
                 "Required File Types",
                 "Comma-separated file extensions a mod must contain at its root.  "
                 "e.g. .esp, .esm — works standalone or as a fallback after Required Top-Level Folders.",
-            ),
-            (
-                "heroic_app_names",
-                self._heroic_var,
-                "Heroic App Names",
-                "Comma-separated Heroic Games Launcher app identifiers "
-                "(Epic appName or GOG product ID).  e.g. Pewee, 1207658924",
             ),
         ]
 
@@ -877,7 +868,6 @@ class CustomGameDialog(ctk.CTkToplevel):
             "mod_auto_strip_until_required":  self._auto_strip_var.get(),
             "mod_required_file_types":        _str_to_list(self._req_file_types_var.get()),
             "mod_install_as_is_if_no_match":  self._install_as_is_var.get(),
-            "heroic_app_names":               _str_to_list(self._heroic_var.get()),
             "restore_before_deploy":          self._restore_var.get(),
             "normalize_folder_case":          self._norm_case_var.get(),
             "wine_dll_overrides":             _parse_dll_text(
@@ -959,7 +949,6 @@ class CustomGamePanel(ctk.CTkFrame):
         self._auto_strip_var    = tk.BooleanVar(value=False)
         self._req_file_types_var = tk.StringVar()
         self._install_as_is_var = tk.BooleanVar(value=False)
-        self._heroic_var        = tk.StringVar()
         self._restore_var       = tk.BooleanVar(value=True)
         self._norm_case_var     = tk.BooleanVar(value=True)   # normalize_folder_case
         self._routing_rules_rows: list[dict] = []
@@ -981,7 +970,6 @@ class CustomGamePanel(ctk.CTkFrame):
             self._auto_strip_var.set(bool(existing.get("mod_auto_strip_until_required", False)))
             self._req_file_types_var.set(_set_to_str(existing.get("mod_required_file_types", [])))
             self._install_as_is_var.set(bool(existing.get("mod_install_as_is_if_no_match", False)))
-            self._heroic_var.set(_list_to_str(existing.get("heroic_app_names", [])))
             self._restore_var.set(bool(existing.get("restore_before_deploy", True)))
             self._norm_case_var.set(bool(existing.get("normalize_folder_case", True)))
             self._dll_initial = _dll_to_str(existing.get("wine_dll_overrides", {}))
@@ -1230,13 +1218,6 @@ class CustomGamePanel(ctk.CTkFrame):
                 "Required File Types",
                 "Comma-separated file extensions a mod must contain at its root.  "
                 "e.g. .esp, .esm — works standalone or as a fallback after Required Top-Level Folders.",
-            ),
-            (
-                "heroic_app_names",
-                self._heroic_var,
-                "Heroic App Names",
-                "Comma-separated Heroic Games Launcher app identifiers "
-                "(Epic appName or GOG product ID).  e.g. Pewee, 1207658924",
             ),
         ]
 
@@ -1649,7 +1630,6 @@ class CustomGamePanel(ctk.CTkFrame):
             "mod_auto_strip_until_required":  self._auto_strip_var.get(),
             "mod_required_file_types":        _str_to_list(self._req_file_types_var.get()),
             "mod_install_as_is_if_no_match":  self._install_as_is_var.get(),
-            "heroic_app_names":               _str_to_list(self._heroic_var.get()),
             "restore_before_deploy":          self._restore_var.get(),
             "normalize_folder_case":          self._norm_case_var.get(),
             "wine_dll_overrides":             _parse_dll_text(
