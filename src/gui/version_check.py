@@ -19,6 +19,11 @@ def is_appimage() -> bool:
     return bool(os.environ.get("APPIMAGE"))
 
 
+def is_flatpak() -> bool:
+    """Return True if we are running inside a Flatpak sandbox."""
+    return os.path.exists("/.flatpak-info")
+
+
 def _parse_version(s: str) -> tuple[int, ...]:
     """Convert a version string like '0.3.0' to a tuple of ints for comparison."""
     out = []

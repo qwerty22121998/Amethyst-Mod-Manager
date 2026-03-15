@@ -58,6 +58,7 @@ from gui.install_mod import install_mod_from_archive
 from gui.mod_name_utils import _suggest_mod_names
 from gui.version_check import (
     is_appimage,
+    is_flatpak,
     _fetch_latest_version,
     _fetch_aur_version,
     _is_newer_version,
@@ -151,7 +152,7 @@ def _run_installer():
 class _UpdateAvailableDialog(ctk.CTkToplevel):
     """Modal dialog when a new app version is available. Offers update via installer or open releases page."""
 
-    def __init__(self, parent, current_version: str, latest_version: str):
+    def __init__(self, parent, current_version: str, latest_version: str, *, show_installer: bool = True):
         super().__init__(parent, fg_color=BG_DEEP)
         self.title("Update available")
         self.geometry("440x220")
@@ -163,6 +164,7 @@ class _UpdateAvailableDialog(ctk.CTkToplevel):
         self._parent = parent
         self._current = current_version
         self._latest = latest_version
+        self._show_installer = show_installer
         self._build()
 
     def _make_modal(self):
@@ -189,17 +191,20 @@ class _UpdateAvailableDialog(ctk.CTkToplevel):
         btn_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 20))
         btn_frame.grid_columnconfigure(0, weight=1)
 
-        ctk.CTkButton(
-            btn_frame, text="Update via installer",
-            width=160, height=32, font=FONT_BOLD,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-            command=self._on_update
-        ).pack(side="left", padx=(0, 8))
+        if self._show_installer:
+            ctk.CTkButton(
+                btn_frame, text="Update via installer",
+                width=160, height=32, font=FONT_BOLD,
+                fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+                command=self._on_update
+            ).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
             btn_frame, text="Open releases page",
             width=140, height=32, font=FONT_NORMAL,
-            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            fg_color=ACCENT if not self._show_installer else BG_HEADER,
+            hover_color=ACCENT_HOV if not self._show_installer else BG_HOVER,
+            text_color="white" if not self._show_installer else TEXT_MAIN,
             command=self._on_releases
         ).pack(side="left", padx=(0, 8))
 
@@ -438,7 +443,16 @@ class App(ctk.CTk):
                     return
                 if _is_newer_version(__version__, latest):
                     def _show():
-                        dlg = _UpdateAvailableDialog(self, __version__, latest)
+                        dlg = _UpdateAvailableDialog(self, __version__, latest, show_installer=True)
+                        self.wait_window(dlg)
+                    self.call_threadsafe(_show)
+            elif is_flatpak():
+                latest = _fetch_latest_version()
+                if latest is None:
+                    return
+                if _is_newer_version(__version__, latest):
+                    def _show():
+                        dlg = _UpdateAvailableDialog(self, __version__, latest, show_installer=False)
                         self.wait_window(dlg)
                     self.call_threadsafe(_show)
             else:
