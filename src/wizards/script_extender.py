@@ -2,9 +2,8 @@
 Generic Script Extender installation wizard.
 
 Multi-step dialog that walks the user through:
-  1. Opening a download page for the script extender
-  2. Locating the downloaded archive in ~/Downloads
-  3. Extracting it to the game root and deleting the archive
+  1. Fetching the latest release from GitHub and downloading it
+  2. Extracting it to the game root and deleting the archive
 """
 
 from __future__ import annotations
@@ -14,6 +13,9 @@ import shutil
 import subprocess
 import tarfile
 import threading
+import urllib.request
+import urllib.error
+import json as _json
 from Utils.xdg import open_url
 from Utils.portal_filechooser import pick_file
 import zipfile
@@ -47,6 +49,28 @@ FONT_BOLD   = ("Segoe UI", 14, "bold")
 FONT_SMALL  = ("Segoe UI", 12)
 
 _ARCHIVE_EXTS = {".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz"}
+
+
+# ---------------------------------------------------------------------------
+# GitHub release fetch
+# ---------------------------------------------------------------------------
+
+def _fetch_latest_github_asset(api_url: str, archive_keywords: list[str]) -> tuple[str, str]:
+    """Return (version_tag, download_url) for the latest release asset matching *archive_keywords*."""
+    req = urllib.request.Request(
+        api_url,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ModManager/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = _json.loads(resp.read().decode())
+    tag = data.get("tag_name", "unknown")
+    for asset in data.get("assets", []):
+        name: str = asset.get("name", "").lower()
+        if not any(name.endswith(ext) for ext in _ARCHIVE_EXTS):
+            continue
+        if all(kw in name for kw in archive_keywords):
+            return tag, asset["browser_download_url"]
+    raise RuntimeError(f"No matching asset found in the latest GitHub release ({tag}).")
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +196,7 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         log_fn=None,
         *,
         on_close=None,
+        github_api_url: str = "",
         download_url: str = "",
         archive_keywords: list[str] | None = None,
     ):
@@ -181,9 +206,11 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         self._game = game
         self._log = log_fn or (lambda msg: None)
         self._parent_widget = parent
-        self._download_url = download_url
+        self._github_api_url = github_api_url
+        self._fallback_download_url = download_url
         self._archive_keywords = [kw.lower() for kw in (archive_keywords or [])]
         self._archive_path: Path | None = None
+        self._resolved_download_url: str | None = None
         self._game_root: Path | None = game.get_game_path()
 
         title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
@@ -212,10 +239,116 @@ class ScriptExtenderWizard(ctk.CTkFrame):
             w.destroy()
 
     # ------------------------------------------------------------------
-    # Step 1 — Download prompt
+    # Step 1 — Download (GitHub auto-download or manual page fallback)
     # ------------------------------------------------------------------
 
     def _show_step_download(self):
+        if self._github_api_url:
+            self._show_step_download_github()
+        else:
+            self._show_step_download_manual()
+
+    # --- GitHub auto-download path ---
+
+    def _show_step_download_github(self):
+        self._clear_body()
+
+        ctk.CTkLabel(
+            self._body, text="Step 1: Download Script Extender",
+            font=FONT_BOLD, text_color=TEXT_MAIN,
+        ).pack(pady=(0, 12))
+
+        self._dl_status = ctk.CTkLabel(
+            self._body, text="Checking for the latest release\u2026",
+            font=FONT_NORMAL, text_color=TEXT_DIM, justify="center",
+            wraplength=480,
+        )
+        self._dl_status.pack(pady=(0, 16))
+
+        self._dl_progress = ctk.CTkProgressBar(self._body, width=400, mode="indeterminate")
+        self._dl_progress.pack(pady=(0, 16))
+        self._dl_progress.start()
+
+        btn_frame = ctk.CTkFrame(self._body, fg_color="transparent")
+        btn_frame.pack(side="bottom", pady=(8, 0))
+
+        self._dl_next_btn = ctk.CTkButton(
+            btn_frame, text="Next \u2192", width=120, height=36,
+            font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._show_step_extract, state="disabled",
+        )
+        self._dl_next_btn.pack(side="right", padx=(8, 0))
+
+        ctk.CTkButton(
+            btn_frame, text="Browse\u2026", width=100, height=36,
+            font=FONT_BOLD,
+            fg_color=BG_HEADER, hover_color="#3d3d3d", text_color=TEXT_MAIN,
+            command=self._browse_archive_step1,
+        ).pack(side="right")
+
+        threading.Thread(target=self._do_fetch_and_download, daemon=True).start()
+
+    def _do_fetch_and_download(self):
+        try:
+            if not self._github_api_url:
+                raise RuntimeError("GitHub API URL not configured.")
+            self._set_dl_status("Fetching latest release from GitHub\u2026")
+            tag, url = _fetch_latest_github_asset(self._github_api_url, self._archive_keywords)
+            self._resolved_download_url = url
+            filename = url.split("/")[-1]
+            dest = _get_downloads_dir() / filename
+            self._set_dl_status(f"Downloading {tag}\u2026")
+            self._log(f"Wizard: downloading {url} → {dest}")
+
+            def _reporthook(block_num, block_size, total_size):
+                if total_size > 0:
+                    pct = min(block_num * block_size / total_size, 1.0)
+                    try:
+                        self.after(0, lambda p=pct: self._dl_progress.configure(
+                            mode="determinate"
+                        ) or self._dl_progress.set(p))
+                    except Exception:
+                        pass
+
+            urllib.request.urlretrieve(url, dest, reporthook=_reporthook)
+            self._archive_path = dest
+            self._log(f"Wizard: downloaded {filename}")
+            self.after(0, lambda: self._dl_progress.stop())
+            self.after(0, lambda: self._dl_progress.configure(mode="determinate"))
+            self.after(0, lambda: self._dl_progress.set(1.0))
+            self._set_dl_status(f"Downloaded {tag}: {filename}", color="#6bc76b")
+            self.after(0, lambda: self._dl_next_btn.configure(state="normal"))
+        except Exception as exc:
+            self._log(f"Wizard: download error: {exc}")
+            self.after(0, lambda: self._dl_progress.stop())
+            self._set_dl_status(
+                f"Download failed: {exc}\n\nUse Browse to select a manually downloaded archive.",
+                color="#e06c6c",
+            )
+            self.after(0, lambda: self._dl_next_btn.configure(state="normal"))
+
+    def _set_dl_status(self, text: str, color: str = TEXT_DIM):
+        try:
+            self.after(0, lambda: self._dl_status.configure(text=text, text_color=color))
+        except Exception:
+            pass
+
+    def _browse_archive_step1(self):
+        def _on_picked(path: Path | None) -> None:
+            if path and path.is_file():
+                self._archive_path = path
+                self._set_dl_status(f"Selected: {path.name}", color="#6bc76b")
+                try:
+                    self.after(0, lambda: self._dl_next_btn.configure(state="normal"))
+                except Exception:
+                    pass
+
+        pick_file("Select the script extender archive", lambda p: self.after(0, lambda: _on_picked(p)))
+
+    # --- Manual download fallback path ---
+
+    def _show_step_download_manual(self):
         self._clear_body()
 
         ctk.CTkLabel(
@@ -233,16 +366,16 @@ class ScriptExtenderWizard(ctk.CTkFrame):
             font=FONT_NORMAL, text_color=TEXT_DIM, justify="center",
         ).pack(pady=(0, 16))
 
-        btn_state = "normal" if self._download_url else "disabled"
+        btn_state = "normal" if self._fallback_download_url else "disabled"
         ctk.CTkButton(
             self._body, text="Open Download Page", width=220, height=36,
             font=FONT_BOLD,
             fg_color="#da8e35", hover_color="#e5a04a", text_color="white",
-            command=lambda: open_url(self._download_url),
+            command=lambda: open_url(self._fallback_download_url),
             state=btn_state,
         ).pack(pady=(0, 20))
 
-        if not self._download_url:
+        if not self._fallback_download_url:
             ctk.CTkLabel(
                 self._body,
                 text="(Download URL not configured yet.)",
@@ -255,10 +388,6 @@ class ScriptExtenderWizard(ctk.CTkFrame):
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._show_step_locate,
         ).pack(side="bottom")
-
-    # ------------------------------------------------------------------
-    # Step 2 — Locate archive
-    # ------------------------------------------------------------------
 
     def _show_step_locate(self):
         self._clear_body()
@@ -296,7 +425,7 @@ class ScriptExtenderWizard(ctk.CTkFrame):
             btn_frame, text="Browse\u2026", width=100, height=36,
             font=FONT_BOLD,
             fg_color=BG_HEADER, hover_color="#3d3d3d", text_color=TEXT_MAIN,
-            command=self._browse_archive,
+            command=self._browse_archive_locate,
         ).pack(side="right")
 
         self._scan_downloads()
@@ -306,46 +435,38 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         found = _find_archive(dl_dir, self._archive_keywords)
         if found:
             self._archive_path = found
-            self._locate_status.configure(
-                text=f"Found: {found.name}", text_color="#6bc76b",
-            )
+            self._locate_status.configure(text=f"Found: {found.name}", text_color="#6bc76b")
             self._next_btn.configure(state="normal")
         else:
             self._archive_path = None
-            if not self._archive_keywords:
-                msg = (
-                    "Archive keywords not configured yet.\n"
-                    "Use Browse to select the archive manually."
-                )
-            else:
-                msg = (
-                    "Archive not found in Downloads.\n"
-                    "Make sure you downloaded it, then press Try Again,\n"
-                    "or use Browse to select it manually."
-                )
+            msg = (
+                "Archive keywords not configured yet.\nUse Browse to select the archive manually."
+                if not self._archive_keywords else
+                "Archive not found in Downloads.\n"
+                "Make sure you downloaded it, then press Try Again,\n"
+                "or use Browse to select it manually."
+            )
             self._locate_status.configure(text=msg, text_color="#e06c6c")
             self._next_btn.configure(state="disabled")
 
-    def _browse_archive(self):
+    def _browse_archive_locate(self):
         def _on_picked(path: Path | None) -> None:
             if path and path.is_file():
                 self._archive_path = path
-                self._locate_status.configure(
-                    text=f"Selected: {path.name}", text_color="#6bc76b",
-                )
+                self._locate_status.configure(text=f"Selected: {path.name}", text_color="#6bc76b")
                 self._next_btn.configure(state="normal")
 
         pick_file("Select the script extender archive", lambda p: self.after(0, lambda: _on_picked(p)))
 
     # ------------------------------------------------------------------
-    # Step 3 — Extract & clean up
+    # Step 2 — Extract & clean up
     # ------------------------------------------------------------------
 
     def _show_step_extract(self):
         self._clear_body()
 
         ctk.CTkLabel(
-            self._body, text="Step 3: Install Script Extender",
+            self._body, text="Step 2: Install Script Extender",
             font=FONT_BOLD, text_color=TEXT_MAIN,
         ).pack(pady=(0, 12))
 

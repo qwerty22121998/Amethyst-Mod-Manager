@@ -11,6 +11,8 @@ import io
 import threading
 from typing import Callable, Any
 
+import tkinter as tk
+
 import customtkinter as ctk
 import requests
 from PIL import Image as PilImage
@@ -19,7 +21,9 @@ from gui.ctk_components import CTkCard
 from gui.theme import (
     ACCENT,
     ACCENT_HOV,
+    BG_DEEP,
     TEXT_DIM,
+    TEXT_MAIN,
     font_sized,
     scaled,
 )
@@ -29,10 +33,11 @@ from gui.theme import (
 # so keep them as design-pixel values — do NOT wrap in scaled().
 # For tk-level layout math (slot widths, canvas offsets) use scaled(CARD_W).
 CARD_W = 280
-CARD_H = 450
-# Image and padding values are used in plain-tk / PIL contexts, so scale them.
-CARD_IMG_W = scaled(CARD_W - 10)
-CARD_IMG_H = scaled(160)
+CARD_H = 310
+# Image dimensions — unscaled design values. CTkImage/CTkLabel receive these
+# directly; CTk applies set_widget_scaling internally (scaled() would double-scale).
+CARD_IMG_W = CARD_W - 10
+CARD_IMG_H = 160
 CARD_PAD = scaled(10)
 CARD_COLS = 2
 
@@ -116,25 +121,16 @@ class ModCard:
             )
             author_label.grid(row=3, column=0, padx=10, pady=(0, 2), sticky="nw", columnspan=2)
 
-        # Summary
+        # Summary shown as hover tooltip instead of inline text.
         summary = (str(_get(entry, "summary", "") or "")).strip()
-        if len(summary) > 120:
-            summary = summary[:117] + "…"
         if summary:
-            summary_label = ctk.CTkLabel(
-                self.card, text=summary,
-                font=font_sized("Segoe UI", 11),
-                text_color=TEXT_DIM,
-                wraplength=CARD_W - 20,
-                justify="left", anchor="nw",
-            )
-            summary_label.grid(row=4, column=0, padx=10, pady=(2, 4), sticky="nw", columnspan=2)
+            self._attach_tooltip(summary)
 
-        self.card.grid_rowconfigure(5, weight=1)
+        self.card.grid_rowconfigure(4, weight=1)
 
         # Buttons — each 50% of card width with padding between
         btn_frame = ctk.CTkFrame(self.card, fg_color="transparent")
-        btn_frame.grid(row=6, column=0, padx=8, pady=(4, 8), sticky="swe", columnspan=2)
+        btn_frame.grid(row=5, column=0, padx=8, pady=(4, 8), sticky="swe", columnspan=2)
         btn_frame.grid_columnconfigure(0, weight=1)
         btn_frame.grid_columnconfigure(1, weight=1)
 
@@ -175,14 +171,17 @@ class ModCard:
                 resp.raise_for_status()
                 img = PilImage.open(io.BytesIO(resp.content)).convert("RGB")
                 resample = PilImage.Resampling.LANCZOS if hasattr(PilImage, "Resampling") else PilImage.LANCZOS  # type: ignore
-                # Scale to cover the slot, then center-crop (no distortion, no letterbox)
+                # Scale to cover the slot, then center-crop (no distortion, no letterbox).
+                # PIL works in actual pixels so use scaled dims; CTkImage receives
+                # unscaled design dims — CTk applies set_widget_scaling internally.
+                iw, ih = scaled(CARD_IMG_W), scaled(CARD_IMG_H)
                 src_w, src_h = img.size
-                scale = max(CARD_IMG_W / src_w, CARD_IMG_H / src_h)
+                scale = max(iw / src_w, ih / src_h)
                 new_w, new_h = int(src_w * scale), int(src_h * scale)
                 img = img.resize((new_w, new_h), resample)
-                x_off = (new_w - CARD_IMG_W) // 2
-                y_off = (new_h - CARD_IMG_H) // 2
-                img = img.crop((x_off, y_off, x_off + CARD_IMG_W, y_off + CARD_IMG_H))
+                x_off = (new_w - iw) // 2
+                y_off = (new_h - ih) // 2
+                img = img.crop((x_off, y_off, x_off + iw, y_off + ih))
                 photo = ctk.CTkImage(img, img, (CARD_IMG_W, CARD_IMG_H))
             except Exception:
                 photo = None
@@ -196,6 +195,49 @@ class ModCard:
             parent.after(0, _done)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    def _attach_tooltip(self, text: str) -> None:
+        """Attach a hover tooltip showing the mod summary to the card."""
+        self._tooltip_win: tk.Toplevel | None = None
+
+        def _enter(event):
+            if self._tooltip_win is not None:
+                return
+            tw = tk.Toplevel(self.card)
+            tw.overrideredirect(True)
+            tw.attributes("-alpha", 0.95)
+            tw.configure(bg=BG_DEEP)
+            tk.Label(
+                tw, text=text,
+                bg=BG_DEEP, fg=TEXT_MAIN,
+                font=font_sized("Segoe UI", 11),
+                wraplength=scaled(320), justify="left",
+                padx=scaled(8), pady=scaled(6),
+            ).pack()
+            x = event.x_root + scaled(12)
+            y = event.y_root + scaled(12)
+            tw.update_idletasks()
+            sw = tw.winfo_screenwidth()
+            sh = tw.winfo_screenheight()
+            if x + tw.winfo_reqwidth() > sw:
+                x = event.x_root - tw.winfo_reqwidth() - scaled(4)
+            if y + tw.winfo_reqheight() > sh:
+                y = event.y_root - tw.winfo_reqheight() - scaled(4)
+            tw.geometry(f"+{x}+{y}")
+            self._tooltip_win = tw
+
+        def _leave(event):
+            if self._tooltip_win:
+                self._tooltip_win.destroy()
+                self._tooltip_win = None
+
+        def _bind_recursive(w) -> None:
+            w.bind("<Enter>", _enter, add="+")
+            w.bind("<Leave>", _leave, add="+")
+            for child in w.winfo_children():
+                _bind_recursive(child)
+
+        _bind_recursive(self.card)
 
     def _apply_image(self, photo: ctk.CTkImage):
         if self._img_label.winfo_exists():
