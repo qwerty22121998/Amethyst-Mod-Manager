@@ -481,8 +481,8 @@ class Fallout_NV(Fallout_3):
                 description="Download and install xNVSE into the game folder.",
                 dialog_class_path="wizards.script_extender.ScriptExtenderWizard",
                 extra={
-                    "download_url": "https://www.nexusmods.com/newvegas/mods/67883",
-                    "archive_keywords": ["xnvse"],
+                    "github_api_url": "https://api.github.com/repos/xNVSE/NVSE/releases/latest",
+                    "archive_keywords": ["nvse"],
                 },
             ),
         ]

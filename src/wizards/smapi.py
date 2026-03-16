@@ -2,8 +2,8 @@
 SMAPI installation wizard for Stardew Valley.
 
 Multi-step dialog that walks the user through:
-  1. Downloading SMAPI from Nexus Mods
-  2. Locating the downloaded zip in ~/Downloads
+  1. Fetching the latest SMAPI release from GitHub and downloading it
+  2. Optionally browsing for a manually downloaded archive
   3. Extracting the zip and running "install on Linux.sh" in a terminal
 """
 
@@ -15,7 +15,9 @@ import stat
 import subprocess
 import tempfile
 import threading
-from Utils.xdg import open_url
+import urllib.request
+import urllib.error
+import json as _json
 from Utils.portal_filechooser import pick_file
 import zipfile
 from pathlib import Path
@@ -47,9 +49,23 @@ FONT_NORMAL = ("Segoe UI", 14)
 FONT_BOLD   = ("Segoe UI", 14, "bold")
 FONT_SMALL  = ("Segoe UI", 12)
 
-_DOWNLOAD_URL = "https://www.nexusmods.com/stardewvalley/mods/2400"
-_ARCHIVE_KEYWORDS = ["smapi"]
-_ARCHIVE_EXTS = {".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz"}
+_GITHUB_API_URL = "https://api.github.com/repos/Pathoschild/SMAPI/releases/latest"
+
+
+def _fetch_latest_smapi_asset() -> tuple[str, str]:
+    """Return (version_tag, download_url) for the latest SMAPI zip release asset."""
+    req = urllib.request.Request(
+        _GITHUB_API_URL,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "ModManager/1.0"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        data = _json.loads(resp.read().decode())
+    tag = data.get("tag_name", "unknown")
+    for asset in data.get("assets", []):
+        name: str = asset.get("name", "")
+        if name.lower().endswith(".zip") and "smapi" in name.lower():
+            return tag, asset["browser_download_url"]
+    raise RuntimeError("No SMAPI zip asset found in the latest GitHub release.")
 
 
 # ---------------------------------------------------------------------------
@@ -61,23 +77,6 @@ def _get_downloads_dir() -> Path:
     if xdg:
         return Path(xdg)
     return Path.home() / "Downloads"
-
-
-def _is_archive(name: str) -> bool:
-    low = name.lower()
-    return any(low.endswith(ext) for ext in _ARCHIVE_EXTS)
-
-
-def _find_archive(directory: Path, keywords: list[str]) -> Path | None:
-    if not directory.is_dir() or not keywords:
-        return None
-    for entry in sorted(directory.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-        if not entry.is_file() or not _is_archive(entry.name):
-            continue
-        low = entry.name.lower()
-        if all(kw in low for kw in keywords):
-            return entry
-    return None
 
 
 def _extract_zip(archive: Path, dest: Path) -> None:
@@ -132,6 +131,7 @@ class SmapiWizard(ctk.CTkFrame):
         self._game = game
         self._log = log_fn or (lambda msg: None)
         self._archive_path: Path | None = None
+        self._download_url: str | None = None
 
         title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
         title_bar.pack(fill="x")
@@ -159,7 +159,7 @@ class SmapiWizard(ctk.CTkFrame):
             w.destroy()
 
     # ------------------------------------------------------------------
-    # Step 1 — Download prompt
+    # Step 1 — Fetch & download latest release from GitHub
     # ------------------------------------------------------------------
 
     def _show_step_download(self):
@@ -170,117 +170,101 @@ class SmapiWizard(ctk.CTkFrame):
             font=FONT_BOLD, text_color=TEXT_MAIN,
         ).pack(pady=(0, 12))
 
-        ctk.CTkLabel(
-            self._body,
-            text=(
-                "Click the button below to open the SMAPI mod page on Nexus Mods.\n\n"
-                "Download the main file (the .zip archive).\n\n"
-                "Once the download finishes, click Next \u2192"
-            ),
-            font=FONT_NORMAL, text_color=TEXT_DIM, justify="center",
-        ).pack(pady=(0, 16))
-
-        ctk.CTkButton(
-            self._body, text="Open SMAPI on Nexus Mods", width=240, height=36,
-            font=FONT_BOLD,
-            fg_color="#da8e35", hover_color="#e5a04a", text_color="white",
-            command=lambda: open_url(_DOWNLOAD_URL),
-        ).pack(pady=(0, 20))
-
-        ctk.CTkButton(
-            self._body, text="Next \u2192", width=120, height=36,
-            font=FONT_BOLD,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-            command=self._show_step_locate,
-        ).pack(side="bottom")
-
-    # ------------------------------------------------------------------
-    # Step 2 — Locate archive
-    # ------------------------------------------------------------------
-
-    def _show_step_locate(self):
-        self._clear_body()
-
-        ctk.CTkLabel(
-            self._body, text="Step 2: Locate the SMAPI Archive",
-            font=FONT_BOLD, text_color=TEXT_MAIN,
-        ).pack(pady=(0, 12))
-
-        self._locate_status = ctk.CTkLabel(
-            self._body, text="Searching Downloads folder\u2026",
+        self._dl_status = ctk.CTkLabel(
+            self._body, text="Checking for the latest SMAPI release\u2026",
             font=FONT_NORMAL, text_color=TEXT_DIM, justify="center",
             wraplength=480,
         )
-        self._locate_status.pack(pady=(0, 12))
+        self._dl_status.pack(pady=(0, 16))
+
+        self._dl_progress = ctk.CTkProgressBar(self._body, width=400, mode="indeterminate")
+        self._dl_progress.pack(pady=(0, 16))
+        self._dl_progress.start()
 
         btn_frame = ctk.CTkFrame(self._body, fg_color="transparent")
         btn_frame.pack(side="bottom", pady=(8, 0))
 
-        self._next_btn = ctk.CTkButton(
+        self._dl_next_btn = ctk.CTkButton(
             btn_frame, text="Next \u2192", width=120, height=36,
             font=FONT_BOLD,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._show_step_install, state="disabled",
         )
-        self._next_btn.pack(side="right", padx=(8, 0))
-
-        ctk.CTkButton(
-            btn_frame, text="Try Again", width=100, height=36,
-            font=FONT_BOLD,
-            fg_color=BG_HEADER, hover_color="#3d3d3d", text_color=TEXT_MAIN,
-            command=self._scan_downloads,
-        ).pack(side="right", padx=(8, 0))
+        self._dl_next_btn.pack(side="right", padx=(8, 0))
 
         ctk.CTkButton(
             btn_frame, text="Browse\u2026", width=100, height=36,
             font=FONT_BOLD,
             fg_color=BG_HEADER, hover_color="#3d3d3d", text_color=TEXT_MAIN,
-            command=self._browse_archive,
+            command=self._browse_archive_step1,
         ).pack(side="right")
 
-        self._scan_downloads()
+        threading.Thread(target=self._do_fetch_and_download, daemon=True).start()
 
-    def _scan_downloads(self):
-        dl_dir = _get_downloads_dir()
-        found = _find_archive(dl_dir, _ARCHIVE_KEYWORDS)
-        if found:
-            self._archive_path = found
-            self._locate_status.configure(
-                text=f"Found: {found.name}", text_color="#6bc76b",
-            )
-            self._next_btn.configure(state="normal")
-        else:
-            self._archive_path = None
-            self._locate_status.configure(
-                text=(
-                    "SMAPI archive not found in Downloads.\n"
-                    "Make sure you downloaded it, then press Try Again,\n"
-                    "or use Browse to select it manually."
-                ),
-                text_color="#e06c6c",
-            )
-            self._next_btn.configure(state="disabled")
+    def _do_fetch_and_download(self):
+        try:
+            self._set_dl_status("Fetching latest SMAPI release from GitHub\u2026")
+            tag, url = _fetch_latest_smapi_asset()
+            self._download_url = url
+            filename = url.split("/")[-1]
+            dest = _get_downloads_dir() / filename
+            self._set_dl_status(f"Downloading SMAPI {tag}\u2026")
+            self._log(f"Wizard: downloading {url} → {dest}")
 
-    def _browse_archive(self):
+            def _reporthook(block_num, block_size, total_size):
+                if total_size > 0:
+                    pct = min(block_num * block_size / total_size, 1.0)
+                    try:
+                        self.after(0, lambda p=pct: self._dl_progress.configure(
+                            mode="determinate"
+                        ) or self._dl_progress.set(p))
+                    except Exception:
+                        pass
+
+            urllib.request.urlretrieve(url, dest, reporthook=_reporthook)
+            self._archive_path = dest
+            self._log(f"Wizard: downloaded {filename}")
+            self.after(0, lambda: self._dl_progress.stop())
+            self.after(0, lambda: self._dl_progress.configure(mode="determinate"))
+            self.after(0, lambda: self._dl_progress.set(1.0))
+            self._set_dl_status(f"Downloaded SMAPI {tag}: {filename}", color="#6bc76b")
+            self.after(0, lambda: self._dl_next_btn.configure(state="normal"))
+        except Exception as exc:
+            self._log(f"Wizard: download error: {exc}")
+            self.after(0, lambda: self._dl_progress.stop())
+            self._set_dl_status(
+                f"Download failed: {exc}\n\nUse Browse to select a manually downloaded archive.",
+                color="#e06c6c",
+            )
+            self.after(0, lambda: self._dl_next_btn.configure(state="normal"))
+
+    def _set_dl_status(self, text: str, color: str = TEXT_DIM):
+        try:
+            self.after(0, lambda: self._dl_status.configure(text=text, text_color=color))
+        except Exception:
+            pass
+
+    def _browse_archive_step1(self):
         def _on_picked(path: Path | None) -> None:
             if path and path.is_file():
                 self._archive_path = path
-                self._locate_status.configure(
-                    text=f"Selected: {path.name}", text_color="#6bc76b",
-                )
-                self._next_btn.configure(state="normal")
+                self._set_dl_status(f"Selected: {path.name}", color="#6bc76b")
+                try:
+                    self.after(0, lambda: self._dl_next_btn.configure(state="normal"))
+                except Exception:
+                    pass
 
         pick_file("Select the SMAPI archive", lambda p: self.after(0, lambda: _on_picked(p)))
 
     # ------------------------------------------------------------------
-    # Step 3 — Extract & run installer
+    # Step 2 — Extract & run installer
     # ------------------------------------------------------------------
 
     def _show_step_install(self):
         self._clear_body()
 
         ctk.CTkLabel(
-            self._body, text="Step 3: Install SMAPI",
+            self._body, text="Step 2: Install SMAPI",
             font=FONT_BOLD, text_color=TEXT_MAIN,
         ).pack(pady=(0, 12))
 

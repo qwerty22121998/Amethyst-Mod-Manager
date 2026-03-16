@@ -126,7 +126,7 @@ class SkyrimSE(BaseGame):
                 description="Download and install SKSE64 into the game folder.",
                 dialog_class_path="wizards.script_extender.ScriptExtenderWizard",
                 extra={
-                    "download_url": "https://skse.silverlock.org/beta/skse64_2_02_06.7z",
+                    "github_api_url": "https://api.github.com/repos/ianpatt/skse64/releases/latest",
                     "archive_keywords": ["skse64"],
                 },
             ),
