@@ -1235,6 +1235,7 @@ def deploy_filemap_to_root(
     log_fn=None,
     progress_fn=None,
     exclude: set[str] | None = None,
+    path_remap: dict[str, str] | None = None,
 ) -> tuple[int, set[str]]:
     """Deploy mod files directly into game_root, backing up any files they
     overwrite so restore_filemap_from_root() can undo the operation cleanly.
@@ -1252,15 +1253,22 @@ def deploy_filemap_to_root(
     per_mod_strip_prefixes — optional dict mod name -> list of strip folders
     log_fn        — optional logging callable
     progress_fn   — optional callable(done: int, total: int)
+    path_remap    — optional dict of prefix replacements applied to dest paths
+                    e.g. {"natives/x64/": "natives/STM/"} for RE2/RE3
 
     Writes a log file next to filemap.txt so restore_filemap_from_root() knows
     exactly which files to remove.
 
     Returns (count, placed_lower) — same shape as deploy_filemap().
+    placed_lower contains the *remapped* paths (as deployed on disk).
     """
     _log = log_fn or (lambda _: None)
     _strip = {p.lower() for p in strip_prefixes} if strip_prefixes else set()
     _per_mod = per_mod_strip_prefixes or {}
+    _remap: list[tuple[str, str]] = []
+    if path_remap:
+        for old, new in path_remap.items():
+            _remap.append((old.lower(), new))
     overwrite_dir = staging_root.parent / "overwrite"
     backup_dir    = filemap_path.parent / _FILEMAP_BACKUP_DIR
     log_path      = filemap_path.parent / _FILEMAP_LOG_NAME
@@ -1297,6 +1305,15 @@ def deploy_filemap_to_root(
         if exclude and rel_lower in exclude:
             continue
         line_idx += 1
+        # Apply path prefix remapping to destination only (e.g. natives/x64/ → natives/STM/).
+        # Source lookup always uses the original rel_str (files on disk use the original path).
+        dst_rel = rel_str
+        if _remap:
+            rel_lower_check = rel_lower
+            for old_prefix, new_prefix in _remap:
+                if rel_lower_check.startswith(old_prefix):
+                    dst_rel = new_prefix + rel_str[len(old_prefix):]
+                    break
 
         # Fast path: direct string join + stat via os.path.isfile
         if mod_name == _OVERWRITE_NAME:
@@ -1340,8 +1357,8 @@ def deploy_filemap_to_root(
                 continue
             src_str = str(src)
 
-        dst_str = _game_root_str + "/" + rel_str
-        tasks.append((src_str, dst_str, rel_lower, rel_str))
+        dst_str = _game_root_str + "/" + dst_rel
+        tasks.append((src_str, dst_str, dst_rel.lower(), dst_rel))
 
         if progress_fn is not None and line_idx % 500 == 0:
             progress_fn(line_idx, total_lines)

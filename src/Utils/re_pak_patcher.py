@@ -2,19 +2,27 @@
 re_pak_patcher.py
 Utilities for patching and restoring RE Engine PAK files.
 
-zero out the 8-byte hash field of every PAK
-entry that matches a deployed mod file.  The engine uses (hash_lower, hash_upper)
-as a lookup key — a zero pair never matches any real filename, so the engine
-falls back to loading the loose file from the natives/ folder instead.
+Zeroes out the 8-byte hash field of every PAK entry that matches a deployed
+mod file.  The engine uses (hash_lower, hash_upper) as a lookup key — a zero
+pair never matches any real filename, so the engine falls back to loading the
+loose file from disk (via REFramework's LooseFileLoader hook).
 
-PAK v4.x entry layout (48 bytes each, starting at file offset 16):
-  0  4   hash_lower  uint32  Murmur3-32 of lowercase UTF-16LE path
-  4  4   hash_upper  uint32  Murmur3-32 of uppercase UTF-16LE path
-  8  8   file_offset int64
- 16  8   compressed_size int64
+Two PAK versions are supported:
+
+PAK v2.0 entry layout (24 bytes each — RE2 Remake, RE3 Remake):
+  0  8   file_offset       int64
+  8  8   decompressed_size int64
+ 16  4   hash_lower        uint32  Murmur3-32 of lowercase UTF-16LE path
+ 20  4   hash_upper        uint32  Murmur3-32 of uppercase UTF-16LE path
+
+PAK v4.x entry layout (48 bytes each — RE Village, RE4 Remake, RE7, …):
+  0  4   hash_lower        uint32  Murmur3-32 of lowercase UTF-16LE path
+  4  4   hash_upper        uint32  Murmur3-32 of uppercase UTF-16LE path
+  8  8   file_offset       int64
+ 16  8   compressed_size   int64
  24  8   decompressed_size int64
- 32  8   attributes int64
- 40  8   checksum uint64
+ 32  8   attributes        int64
+ 40  8   checksum          uint64
 
 Backup format (JSON):
   { "pak": "<abs path>",
@@ -101,17 +109,22 @@ def hash_filepath(rel_path: str) -> tuple[int, int]:
 
 _PAK_MAGIC    = 0x414B504B   # "KPKA"
 _HEADER_SIZE  = 16
-_ENTRY_SIZE   = 48           # v4.x only
+_ENTRY_SIZE_V2 = 24          # v2.0: RE2 Remake, RE3 Remake
+_ENTRY_SIZE_V4 = 48          # v4.x: RE Village, RE4 Remake, RE7, …
+
+# Hash field byte-offset within an entry (version-dependent)
+_HASH_OFFSET_V2 = 16         # hash_lower at byte 16 of the entry
+_HASH_OFFSET_V4 = 0          # hash_lower at byte 0 of the entry
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _read_header(data: bytes) -> tuple[int, int, int, int]:
+def _read_header(data: bytes) -> tuple[int, int, int, int, int]:
     """Parse the 16-byte PAK header.
 
-    Returns *(major_version, minor_version, feature, total_files)*.
+    Returns *(major_version, minor_version, feature, total_files, entry_size)*.
     Raises ValueError on bad magic or unsupported version.
     """
     if len(data) < _HEADER_SIZE:
@@ -119,13 +132,13 @@ def _read_header(data: bytes) -> tuple[int, int, int, int]:
     magic, major, minor, feature, total_files, _fp = struct.unpack_from("<IBBHII", data, 0)
     if magic != _PAK_MAGIC:
         raise ValueError(f"Not a valid RE Engine PAK file (bad magic 0x{magic:08X}).")
-    if major != 4:
-        raise ValueError(f"Unsupported PAK major version {major} (only v4 supported).")
-    return major, minor, feature, total_files
-
-
-def _entry_offset(index: int) -> int:
-    return _HEADER_SIZE + index * _ENTRY_SIZE
+    if major == 2:
+        entry_size = _ENTRY_SIZE_V2
+    elif major == 4:
+        entry_size = _ENTRY_SIZE_V4
+    else:
+        raise ValueError(f"Unsupported PAK major version {major} (only v2 and v4 supported).")
+    return major, minor, feature, total_files, entry_size
 
 
 # ---------------------------------------------------------------------------
@@ -167,29 +180,32 @@ def patch_pak_file(
         # Read only the header (16 bytes)
         header_bytes = fh.read(_HEADER_SIZE)
         try:
-            _, _, _, total_files = _read_header(header_bytes)
+            _, _, _, total_files, entry_size = _read_header(header_bytes)
         except ValueError as exc:
             _log(f"  [WARN] Skipping {pak_path.name}: {exc}")
             return 0
 
+        hash_off = _HASH_OFFSET_V2 if entry_size == _ENTRY_SIZE_V2 else _HASH_OFFSET_V4
+
         # Read only the entry table
-        table_size = total_files * _ENTRY_SIZE
+        table_size = total_files * entry_size
         table = fh.read(table_size)
 
         for i in range(total_files):
-            off = i * _ENTRY_SIZE
-            if off + 8 > len(table):
+            entry_start = i * entry_size
+            hash_start = entry_start + hash_off
+            if hash_start + 8 > len(table):
                 break
-            hl, hu = struct.unpack_from("<II", table, off)
+            hl, hu = struct.unpack_from("<II", table, hash_start)
             if (hl, hu) not in hashes:
                 continue
             if hl == 0 and hu == 0:
                 continue  # already zeroed — skip
             # Save original bytes
             if i not in existing:
-                existing[i] = table[off:off + 8].hex()
+                existing[i] = table[hash_start:hash_start + 8].hex()
             # Zero out the hash pair in-place
-            file_off = _HEADER_SIZE + off
+            file_off = _HEADER_SIZE + hash_start
             fh.seek(file_off)
             fh.write(b"\x00" * 8)
             newly_patched += 1
@@ -232,10 +248,18 @@ def restore_pak_file(pak_path: Path, backup_path: Path, log_fn=None) -> int:
 
     restored = 0
     with pak_path.open("r+b") as fh:
+        header_bytes = fh.read(_HEADER_SIZE)
+        try:
+            _, _, _, _, entry_size = _read_header(header_bytes)
+        except ValueError as exc:
+            _log(f"  [WARN] Could not read PAK header during restore {pak_path.name}: {exc}")
+            return 0
+        hash_off = _HASH_OFFSET_V2 if entry_size == _ENTRY_SIZE_V2 else _HASH_OFFSET_V4
+
         for e in entries:
             idx = e["index"]
             original_bytes = bytes.fromhex(e["original"])
-            file_off = _HEADER_SIZE + idx * _ENTRY_SIZE
+            file_off = _HEADER_SIZE + idx * entry_size + hash_off
             fh.seek(file_off)
             fh.write(original_bytes)
             restored += 1

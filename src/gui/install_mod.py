@@ -315,6 +315,35 @@ def detect_bundle(
     return None
 
 
+def detect_multi_mod(
+    extract_dir: str,
+) -> "list[tuple[str, str]] | None":
+    """Detect a multi-mod archive: immediate subdirs each have a ``modinfo.ini``
+    but without a shared ``nameasbundle`` (so not a bundle).
+
+    Returns ``[(mod_name, subdir_path), ...]`` or ``None`` if not applicable.
+    Requires at least 2 subdirs all with modinfo.ini.
+    """
+    import configparser
+    root = Path(extract_dir)
+    subdirs = sorted(p for p in root.iterdir() if p.is_dir())
+    if len(subdirs) < 2:
+        return None
+    mods: list[tuple[str, str]] = []
+    for subdir in subdirs:
+        ini_path = subdir / "modinfo.ini"
+        if not ini_path.is_file():
+            return None
+        cfg = configparser.RawConfigParser()
+        try:
+            cfg.read_string("[mod]\n" + ini_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            return None
+        name = cfg.get("mod", "name", fallback="").strip() or subdir.name
+        mods.append((name, str(subdir)))
+    return mods if len(mods) >= 2 else None
+
+
 def _resolve_direct_files(extract_dir: str) -> list[tuple[str, str, bool]]:
     """
     For a non-FOMOD archive, return every file as a (src, dst, is_folder)
@@ -873,6 +902,96 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             if mod_panel is not None and not headless:
                 mod_panel.reload_after_install()
             return installed_variant_names[0] if installed_variant_names else mod_name
+        elif getattr(game, "mod_supports_bundles", False) and detect_multi_mod(extract_dir):
+            # --- Multi-mod archive: each subdir is a separate independent mod ---
+            multi_mods = detect_multi_mod(extract_dir)
+            log_fn(f"Multi-mod archive detected: {len(multi_mods)} mod(s).")
+
+            if mod_panel is not None and mod_panel._modlist_path is not None:
+                _profile_dir = mod_panel._modlist_path.parent
+            elif profile_dir is not None:
+                _profile_dir = profile_dir
+            else:
+                _profile_dir = game.get_profile_root() / "profiles" / "default"
+            modlist_path = _profile_dir / "modlist.txt"
+
+            strip_prefixes     = getattr(game, "mod_folder_strip_prefixes", set())
+            post_strip         = getattr(game, "mod_folder_strip_prefixes_post", set())
+            required           = getattr(game, "mod_required_top_level_folders", set())
+            auto_strip         = getattr(game, "mod_auto_strip_until_required", False)
+            install_as_is      = getattr(game, "mod_install_as_is_if_no_match", False)
+            install_prefix     = getattr(game, "mod_install_prefix", "")
+            required_lower     = {r.lower() for r in required}
+
+            installed_names: list[str] = []
+            for m_name, m_path in multi_mods:
+                m_file_list = _resolve_direct_files(m_path)
+                if strip_prefixes:
+                    m_file_list = _apply_strip_prefixes_to_file_list(m_file_list, strip_prefixes)
+                if install_prefix:
+                    _pfx = install_prefix.strip().strip("/").replace("\\", "/")
+                    _pfx_parts = _pfx.lower().split("/")
+                    new_mfl = []
+                    for s, d, f in m_file_list:
+                        d_parts = d.replace("\\", "/").split("/")
+                        d_parts_lower = [p.lower() for p in d_parts]
+                        if d_parts_lower[0] in required_lower:
+                            new_mfl.append((s, d, f))
+                            continue
+                        match_len = 0
+                        for i in range(len(_pfx_parts), 0, -1):
+                            if d_parts_lower[:i] == _pfx_parts[-i:]:
+                                match_len = i
+                                break
+                        missing = "/".join(_pfx.split("/")[:len(_pfx_parts) - match_len])
+                        new_mfl.append((s, f"{missing}/{d}" if missing else d, f))
+                    m_file_list = new_mfl
+                if required and not _check_mod_top_level(m_file_list, required):
+                    if auto_strip:
+                        m_file_list, _ = _try_auto_strip_top_level(m_file_list, required)
+                    if not m_file_list and install_as_is:
+                        m_file_list = _resolve_direct_files(m_path)
+                if post_strip:
+                    m_file_list = _apply_strip_prefixes_to_file_list(m_file_list, post_strip)
+
+                m_dest = game.get_effective_mod_staging_path() / m_name
+                if m_dest.exists():
+                    import shutil as _shutil
+                    def _frc(func, path, _exc):
+                        os.chmod(path, 0o700)
+                        func(path)
+                    _shutil.rmtree(m_dest, onexc=_frc)
+                _copy_file_list(m_file_list, m_path, m_dest, log_fn)
+                _stamp_meta_install_date(m_dest / "meta.ini",
+                                         installation_file=os.path.basename(archive_path))
+
+                if not skip_index_update:
+                    try:
+                        _strip_fs = frozenset(s.lower() for s in (strip_prefixes or []))
+                        _exts_fs  = frozenset(e.lower() for e in (getattr(game, "install_extensions", None) or []))
+                        _root_fs  = frozenset(s.lower() for s in (getattr(game, "root_deploy_folders", None) or []))
+                        _, _nf, _rf = _scan_dir(m_name, str(m_dest), _strip_fs, _exts_fs, _root_fs)
+                        _index_path = _profile_dir / "modindex.bin"
+                        _norm_case = getattr(game, "normalize_folder_case", True)
+                        update_mod_index(_index_path, m_name, _nf, _rf, normalize_folder_case=_norm_case)
+                    except Exception:
+                        pass
+
+                prepend_mod(modlist_path, m_name, enabled=True)
+                log_fn(f"  Installed '{m_name}' → {m_dest}")
+                installed_names.append(m_name)
+
+            log_fn(f"Installed {len(multi_mods)} mod(s) from archive.")
+            if not headless:
+                _show_mod_notification(parent_window, f"Installed {len(multi_mods)} mods")
+            if on_installed is not None:
+                try:
+                    on_installed()
+                except Exception:
+                    pass
+            if mod_panel is not None and not headless:
+                mod_panel.reload_after_install()
+            return installed_names[0] if installed_names else mod_name
         else:
             mod_root = extract_dir
             file_list = _resolve_direct_files(extract_dir)

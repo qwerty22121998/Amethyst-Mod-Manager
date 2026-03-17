@@ -292,6 +292,39 @@ class BaseGame(ABC):
         return False
 
     @property
+    def mod_deploy_path_remap(self) -> dict[str, str]:
+        """
+        Prefix substitutions applied to deployed file paths (destination only).
+
+        Keys are lowercase source prefixes; values are the replacement prefix.
+        Applied before the file is written to the game root.
+
+        Example: RE2/RE3 ship mods with ``natives/x64/`` paths but the game
+        installs files under ``natives/STM/``.  Declaring
+        ``{"natives/x64/": "natives/STM/"}`` here causes the deploy to write
+        files to the correct location while the filemap still records the
+        original ``natives/x64/`` relative path.
+
+        Defaults to an empty dict (no remapping).
+        """
+        return {}
+
+    @property
+    def pak_hash_extension_remap(self) -> dict[str, str]:
+        """
+        File extension substitutions applied when computing PAK hashes.
+
+        Some RE Engine games store assets with a different format-version suffix
+        in the PAK than what mod authors ship.  For example, RE2/RE3 store
+        textures as ``.tex.34`` inside the PAK, but mods are distributed with
+        ``.tex.10``.  Declaring ``{".tex.10": ".tex.34"}`` here causes the
+        patcher to hash the remapped filename when searching the PAK.
+
+        Defaults to an empty dict (no remapping).
+        """
+        return {}
+
+    @property
     def normalize_folder_case(self) -> bool:
         """
         When True (the default), folder segments that differ only in case across

@@ -50,7 +50,7 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 - Marvel Rivals
 - Subnautica
 - Subnautica Below Zero
-- Resident Evil Requiem
+- Resident Evil (2,3,4,7,Village,Requiem)
 - The Sims 4
 - Tcg Card Shop Simulator
 - Valheim

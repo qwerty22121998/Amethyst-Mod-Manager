@@ -255,12 +255,20 @@ class ResidentEvilVillage(BaseGame):
             per_mod_strip_prefixes=per_mod_strip,
             log_fn=_log,
             progress_fn=progress_fn,
+            path_remap=self.mod_deploy_path_remap or None,
         )
         _log(f"  Deployed {linked_mod} mod file(s).")
 
         if placed_lower:
             _log("Step 2: Patching PAK files to allow loose-file loading ...")
-            hashes: set[tuple[int, int]] = {hash_filepath(p) for p in placed_lower}
+            _ext_remap = self.pak_hash_extension_remap
+            def _remap_path(p: str) -> str:
+                if _ext_remap:
+                    for old_ext, new_ext in _ext_remap.items():
+                        if p.endswith(old_ext):
+                            return p[:-len(old_ext)] + new_ext
+                return p
+            hashes: set[tuple[int, int]] = {hash_filepath(_remap_path(p)) for p in placed_lower}
             pak_files = find_pak_files(self._game_path)
             if not pak_files:
                 _log("  [WARN] No re_chunk_000.pak found — PAK patching skipped.")
@@ -351,7 +359,11 @@ class ResidentEvil4(ResidentEvilVillage):
 
 
 class ResidentEvil3(ResidentEvilVillage):
-    """Resident Evil 3 Remake (2020) — identical workflow to RE Village."""
+    """Resident Evil 3 Remake (2020).
+
+    Uses natives/STM/ instead of natives/x64/ — mods ship with x64 paths
+    but must be deployed to STM.
+    """
 
     @property
     def name(self) -> str:
@@ -373,9 +385,21 @@ class ResidentEvil3(ResidentEvilVillage):
     def nexus_game_domain(self) -> str:
         return "residentevil32020"
 
+    @property
+    def mod_deploy_path_remap(self) -> dict[str, str]:
+        return {"natives/x64/": "natives/STM/"}
+
+    @property
+    def pak_hash_extension_remap(self) -> dict[str, str]:
+        return {".tex.10": ".tex.34"}
+
 
 class ResidentEvil2(ResidentEvilVillage):
-    """Resident Evil 2 Remake (2019) — identical workflow to RE Village."""
+    """Resident Evil 2 Remake (2019).
+
+    Uses natives/STM/ instead of natives/x64/ — mods ship with x64 paths
+    but must be deployed to STM.
+    """
 
     @property
     def name(self) -> str:
@@ -396,6 +420,14 @@ class ResidentEvil2(ResidentEvilVillage):
     @property
     def nexus_game_domain(self) -> str:
         return "residentevil22019"
+
+    @property
+    def mod_deploy_path_remap(self) -> dict[str, str]:
+        return {"natives/x64/": "natives/STM/"}
+
+    @property
+    def pak_hash_extension_remap(self) -> dict[str, str]:
+        return {".tex.10": ".tex.34"}
 
 
 class ResidentEvil7(ResidentEvilVillage):
@@ -420,3 +452,11 @@ class ResidentEvil7(ResidentEvilVillage):
     @property
     def nexus_game_domain(self) -> str:
         return "residentevil7"
+    
+    @property
+    def mod_deploy_path_remap(self) -> dict[str, str]:
+        return {"natives/x64/": "natives/STM/"}
+
+    @property
+    def pak_hash_extension_remap(self) -> dict[str, str]:
+        return {".tex.10": ".tex.34"}
