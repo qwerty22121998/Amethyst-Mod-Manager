@@ -763,6 +763,7 @@ class App(ctk.CTk):
             show_nexus_panel_fn=self.show_nexus_panel,
             show_custom_game_panel_fn=self.show_custom_game_panel,
             show_download_custom_handler_fn=self.show_download_custom_handler_panel,
+            show_mewgenics_deploy_choice_fn=self.show_mewgenics_deploy_choice,
         )
         self._topbar.grid(row=0, column=0, sticky="ew", pady=(4, 0))
 
@@ -1061,6 +1062,57 @@ class App(ctk.CTk):
         panel = getattr(self, "_custom_game_panel", None)
         if panel is not None:
             self._custom_game_panel = None
+            try:
+                panel.place_forget()
+                panel.destroy()
+            except Exception:
+                pass
+
+    # -- Mewgenics deploy overlays (mod-list side) ---------------------------
+
+    def show_mewgenics_deploy_choice(self, on_choice):
+        """Show the Mewgenics deploy-method choice panel over the mod list."""
+        self.hide_mewgenics_deploy_choice()
+        from gui.dialogs import MewgenicsDeployChoicePanel
+
+        def _choice(result):
+            self.hide_mewgenics_deploy_choice()
+            on_choice(result)
+
+        self._mewgenics_deploy_choice_panel = MewgenicsDeployChoicePanel(
+            self._mod_panel_container, on_choice=_choice
+        )
+        self._mewgenics_deploy_choice_panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._mewgenics_deploy_choice_panel.lift()
+
+    def hide_mewgenics_deploy_choice(self):
+        panel = getattr(self, "_mewgenics_deploy_choice_panel", None)
+        if panel is not None:
+            self._mewgenics_deploy_choice_panel = None
+            try:
+                panel.place_forget()
+                panel.destroy()
+            except Exception:
+                pass
+
+    def show_mewgenics_launch_command(self, launch_string, modpaths_file=None):
+        """Show the Mewgenics Steam launch command panel over the mod list."""
+        self.hide_mewgenics_launch_command()
+        from gui.dialogs import MewgenicsLaunchCommandPanel
+
+        self._mewgenics_launch_command_panel = MewgenicsLaunchCommandPanel(
+            self._mod_panel_container,
+            launch_string=launch_string,
+            modpaths_file=modpaths_file,
+            on_close=self.hide_mewgenics_launch_command,
+        )
+        self._mewgenics_launch_command_panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._mewgenics_launch_command_panel.lift()
+
+    def hide_mewgenics_launch_command(self):
+        panel = getattr(self, "_mewgenics_launch_command_panel", None)
+        if panel is not None:
+            self._mewgenics_launch_command_panel = None
             try:
                 panel.place_forget()
                 panel.destroy()

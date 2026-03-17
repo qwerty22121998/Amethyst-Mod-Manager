@@ -169,6 +169,10 @@ class Mewgenics(BaseGame):
     @property
     def mod_required_top_level_folders(self) -> set[str]:
         return {"textures", "swfs", "shaders", "levels", "data", "audio"}
+    
+    @property
+    def conflict_ignore_filenames(self) -> set[str]:
+        return {"description.json", "info.json" , "preview.png" , "changelog.txt" , "README.md" }
 
     @property
     def mod_auto_strip_until_required(self) -> bool:
@@ -207,13 +211,20 @@ class Mewgenics(BaseGame):
             return self._staging_path / "mods"
         return _PROFILES_DIR / self.name / "mods"
 
-    def get_modpaths_launch_string(self, profile: str) -> str:
-        """Build -modpaths launch string for Steam/Lutris from current profile modlist.
-        Returns e.g. -modpaths \"Z:/path/mods/ModA\" \"Z:/path/mods/ModB\"
+    def get_modpaths_launch_string(self, profile: str) -> tuple[str, Path | None]:
+        """Build a launcher shell script for Steam from the current profile modlist.
+
+        Writes a shell script (modpaths.sh) to the profile folder that forwards
+        %command% with the full -modpaths argument appended.  Returns a tuple of:
+          - the Steam launch option string: /path/to/modpaths.sh %command%
+          - the Path to modpaths.sh (so callers can display it)
+
+        If there are no enabled mods, returns ("-modpaths", None) and does not
+        write a file.
         """
         modlist_path = self.get_profile_root() / "profiles" / profile / "modlist.txt"
         if not modlist_path.is_file():
-            return "-modpaths"
+            return "-modpaths", None
         staging = self.get_effective_mod_staging_path().resolve()
         entries = read_modlist(modlist_path)
         enabled = [e for e in entries if e.enabled and not e.is_separator]
@@ -221,12 +232,25 @@ class Mewgenics(BaseGame):
         for e in enabled:
             mod_dir = staging / e.name
             if mod_dir.is_dir():
-                # Wine path: Z:/ with forward slashes
                 wine_path = "Z:" + str(mod_dir).replace("\\", "/")
                 paths.append(wine_path)
         if not paths:
-            return "-modpaths"
-        return "-modpaths " + " ".join(f'"{p}"' for p in paths)
+            return "-modpaths", None
+
+        profile_dir = self.get_profile_root() / "profiles" / profile
+        profile_dir.mkdir(parents=True, exist_ok=True)
+        script_path = profile_dir / "modpaths.sh"
+
+        quoted = " ".join(f'"{p}"' for p in paths)
+        script = (
+            "#!/bin/bash\n"
+            f'exec "$@" -modpaths {quoted}\n'
+        )
+        script_path.write_text(script, encoding="utf-8")
+        script_path.chmod(0o755)
+
+        launch_option = f'"{script_path}" %command%'
+        return launch_option, script_path
 
     # -----------------------------------------------------------------------
     # Configuration persistence

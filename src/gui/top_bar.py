@@ -63,7 +63,8 @@ class TopBar(ctk.CTkFrame):
                  show_reconfigure_panel_fn=None, show_proton_panel_fn=None,
                  show_wizard_panel_fn=None, show_nexus_panel_fn=None,
                  show_custom_game_panel_fn=None,
-                 show_download_custom_handler_fn=None):
+                 show_download_custom_handler_fn=None,
+                 show_mewgenics_deploy_choice_fn=None):
         super().__init__(parent, fg_color=BG_PANEL, corner_radius=0)
         self._log = log_fn or (lambda msg: None)
         self._show_add_game_panel_fn = show_add_game_panel_fn
@@ -73,6 +74,7 @@ class TopBar(ctk.CTkFrame):
         self._show_nexus_panel_fn = show_nexus_panel_fn
         self._show_custom_game_panel_fn = show_custom_game_panel_fn
         self._show_download_custom_handler_fn = show_download_custom_handler_fn
+        self._show_mewgenics_deploy_choice_fn = show_mewgenics_deploy_choice_fn
         self._two_rows: bool | None = None  # unknown until first configure
 
         # ── Content area (above separator) ───────────────────────────────────
@@ -737,18 +739,41 @@ class TopBar(ctk.CTkFrame):
 
         # Mewgenics: ask whether to use Steam launch command or repack
         if game.name == "Mewgenics":
-            choice_dlg = _MewgenicsDeployChoiceDialog(self.winfo_toplevel())
-            self.winfo_toplevel().wait_window(choice_dlg)
-            if choice_dlg.result is None:
+            if self._show_mewgenics_deploy_choice_fn:
+                def _on_mewgenics_choice(result, _game=game, _profile=profile):
+                    if result is None:
+                        return
+                    if result == "steam":
+                        launch_string, modpaths_file = _game.get_modpaths_launch_string(_profile)
+                        app = self.winfo_toplevel()
+                        if hasattr(app, "show_mewgenics_launch_command"):
+                            app.show_mewgenics_launch_command(launch_string, modpaths_file)
+                        else:
+                            _MewgenicsLaunchCommandDialog(
+                                self.winfo_toplevel(), launch_string, modpaths_file
+                            )
+                        return
+                    # result == "repack" -> run normal deploy
+                    self._run_deploy(_game, _profile)
+                self._show_mewgenics_deploy_choice_fn(_on_mewgenics_choice)
                 return
-            if choice_dlg.result == "steam":
-                launch_string = game.get_modpaths_launch_string(profile)
-                launch_dlg = _MewgenicsLaunchCommandDialog(
-                    self.winfo_toplevel(), launch_string
-                )
-                return
-            # choice_dlg.result == "repack" -> fall through to normal deploy
+            else:
+                choice_dlg = _MewgenicsDeployChoiceDialog(self.winfo_toplevel())
+                self.winfo_toplevel().wait_window(choice_dlg)
+                if choice_dlg.result is None:
+                    return
+                if choice_dlg.result == "steam":
+                    launch_string, modpaths_file = game.get_modpaths_launch_string(profile)
+                    _MewgenicsLaunchCommandDialog(
+                        self.winfo_toplevel(), launch_string, modpaths_file
+                    )
+                    return
+                # choice_dlg.result == "repack" -> fall through to normal deploy
 
+        self._run_deploy(game, profile)
+
+    def _run_deploy(self, game, profile):
+        """Execute the deploy worker thread for *game* / *profile*."""
         app = self.winfo_toplevel()
         root_folder_enabled = (
             app._mod_panel._root_folder_enabled
