@@ -278,6 +278,20 @@ class BaseGame(ABC):
         return False
 
     @property
+    def mod_supports_bundles(self) -> bool:
+        """
+        When True, the installer detects bundle mods — archives whose top-level
+        subfolders each contain a ``modinfo.ini`` with the same ``nameasbundle``
+        value — and installs every variant as a separate staged mod named
+        ``<bundle_name>__<variant_name>``.  The mod list then shows them as a
+        radio-button group where enabling one variant auto-disables the others.
+
+        Defaults to False.  Enable in game handlers that use the Fluffy-style
+        bundle format (e.g. Resident Evil Village).
+        """
+        return False
+
+    @property
     def normalize_folder_case(self) -> bool:
         """
         When True (the default), folder segments that differ only in case across

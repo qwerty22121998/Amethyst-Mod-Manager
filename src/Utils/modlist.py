@@ -35,6 +35,28 @@ class ModEntry:
             return self.name[: -len(_SEPARATOR_SUFFIX)]
         return self.name
 
+    @property
+    def bundle_name(self) -> str | None:
+        """Bundle group name if this entry is a bundle variant, else None.
+
+        Bundle variants are stored as ``<bundle_name>__<variant_name>`` in
+        modlist.txt.  The double-underscore is the delimiter.
+        """
+        if self.is_separator:
+            return None
+        if "__" in self.name:
+            return self.name.split("__", 1)[0]
+        return None
+
+    @property
+    def variant_name(self) -> str | None:
+        """Variant name within bundle, or None if not a bundle variant."""
+        if self.is_separator:
+            return None
+        if "__" in self.name:
+            return self.name.split("__", 1)[1]
+        return None
+
 
 def _is_separator(name: str) -> bool:
     return name.endswith(_SEPARATOR_SUFFIX)

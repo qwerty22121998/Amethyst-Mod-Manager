@@ -365,6 +365,9 @@ class ModListPanel(ctk.CTkFrame):
         # Collapsed separators: set of sep names whose mods are hidden
         self._collapsed_seps: set[str] = set()
 
+        # Bundle groups: bundle_name → list of entry indices (computed on reload)
+        self._bundle_groups: dict[str, list[int]] = {}
+
         # Search/filter
         self._filter_text: str = ""
         self._filter_show_disabled: bool = False
@@ -1215,6 +1218,19 @@ class ModListPanel(ctk.CTkFrame):
         path.write_text(json.dumps(sorted(self._collapsed_seps), indent=2),
                         encoding="utf-8")
 
+    def _compute_bundle_groups(self) -> None:
+        """Rebuild _bundle_groups from current _entries.
+
+        Maps bundle_name → [entry_idx, ...] in order.  Called after every
+        _reload() so the radio-toggle logic and renderer always have fresh data.
+        """
+        groups: dict[str, list[int]] = {}
+        for i, entry in enumerate(self._entries):
+            bname = entry.bundle_name
+            if bname is not None:
+                groups.setdefault(bname, []).append(i)
+        self._bundle_groups = groups
+
     def _reload(self):
         self._sel_idx = -1
         self._sel_set = set()
@@ -1265,7 +1281,7 @@ class ModListPanel(ctk.CTkFrame):
         self._update_expand_collapse_all_btn()
         # Defer meta scan to background so the window appears sooner
         self._scan_meta_flags_async()
-        self._rebuild_check_widgets()
+        self._rebuild_check_widgets()  # also calls _compute_bundle_groups()
         # Refresh always rescans all mod folders to rebuild the index from scratch.
         self._filemap_rescan_index = True
         self._rebuild_filemap()
@@ -1377,6 +1393,7 @@ class ModListPanel(ctk.CTkFrame):
         """
         self._vis_dirty = True
         self._priorities = {}
+        self._compute_bundle_groups()
 
     # ------------------------------------------------------------------
     # Virtual-list pool
@@ -1843,9 +1860,12 @@ class ModListPanel(ctk.CTkFrame):
                     # Name text (truncate if it would overlap the category column)
                     name_color = TEXT_DIM if not entry.enabled else TEXT_MAIN
                     name_font = ("Segoe UI", _theme.FS11)
-                    name_width = self._COL_W[1] - scaled(4)  # leave padding
-                    display_name = _truncate_text_for_width(c, entry.name, name_font, name_width)
-                    c.coords(self._pool_name[s], self._COL_X[1], y_mid)
+                    is_bundle_variant = entry.bundle_name is not None
+                    _name_indent = 0
+                    name_width = self._COL_W[1] - scaled(4) - _name_indent
+                    _display_label = f"{entry.bundle_name} - {entry.variant_name}" if is_bundle_variant else entry.name
+                    display_name = _truncate_text_for_width(c, _display_label, name_font, name_width)
+                    c.coords(self._pool_name[s], self._COL_X[1] + _name_indent, y_mid)
                     c.itemconfigure(self._pool_name[s], text=display_name, anchor="w",
                                     fill=name_color, font=name_font, state="normal")
 
@@ -1974,21 +1994,35 @@ class ModListPanel(ctk.CTkFrame):
                                         text=str(priorities.get(i, "")), anchor="center",
                                         fill=TEXT_DIM, font=("Segoe UI", _theme.FS10), state="normal")
 
-                    # Enable/disable checkbox (canvas-drawn, no opaque widget)
+                    # Enable/disable control (canvas-drawn)
+                    # Bundle variants → radio circle (● / ○); normal mods → checkbox
                     if not dragging and i < len(self._check_vars) and self._check_vars[i] is not None:
                         self._pool_check_vars[s].set(self._check_vars[i].get())
                         checked = self._pool_check_vars[s].get()
                         cb_cx = self._COL_X[0] + scaled(12)
-                        cb_size = scaled(14)
-                        x1, y1 = cb_cx - cb_size // 2, y_mid - cb_size // 2
-                        x2, y2 = cb_cx + cb_size // 2, y_mid + cb_size // 2
-                        c.coords(self._pool_cb_rect[s], x1, y1, x2, y2)
-                        fill = BG_DEEP if checked else bg
-                        c.itemconfigure(self._pool_cb_rect[s],
-                                        fill=fill, outline=BORDER, state="normal")
-                        c.coords(self._pool_cb_mark[s], cb_cx, y_mid)
-                        c.itemconfigure(self._pool_cb_mark[s],
-                                        state="normal" if checked else "hidden")
+                        if is_bundle_variant:
+                            # Hide the rect outline; repurpose the mark text as a radio dot
+                            c.itemconfigure(self._pool_cb_rect[s], state="hidden")
+                            c.coords(self._pool_cb_mark[s], cb_cx, y_mid)
+                            c.itemconfigure(self._pool_cb_mark[s],
+                                            text="●" if checked else "○",
+                                            fill=ACCENT if checked else TEXT_DIM,
+                                            font=("Segoe UI", _theme.FS13, "bold"),
+                                            state="normal")
+                        else:
+                            cb_size = scaled(14)
+                            x1, y1 = cb_cx - cb_size // 2, y_mid - cb_size // 2
+                            x2, y2 = cb_cx + cb_size // 2, y_mid + cb_size // 2
+                            c.coords(self._pool_cb_rect[s], x1, y1, x2, y2)
+                            fill = BG_DEEP if checked else bg
+                            c.itemconfigure(self._pool_cb_rect[s],
+                                            fill=fill, outline=BORDER, state="normal")
+                            c.coords(self._pool_cb_mark[s], cb_cx, y_mid)
+                            c.itemconfigure(self._pool_cb_mark[s],
+                                            text="✓",
+                                            fill=ACCENT,
+                                            font=("Segoe UI", _theme.FS12, "bold"),
+                                            state="normal" if checked else "hidden")
                     else:
                         c.itemconfigure(self._pool_cb_rect[s], state="hidden")
                         c.itemconfigure(self._pool_cb_mark[s], state="hidden")
@@ -3229,50 +3263,81 @@ class ModListPanel(ctk.CTkFrame):
         entry = self._entries[idx]
         if entry.is_separator:
             return
-        alert = CTkAlert(
-            state="warning",
-            title="Remove Mod",
-            body_text=f"Are you sure you want to remove '{entry.name}'?\n\nThis will delete the mod folder and cannot be undone.",
-            btn1="Remove",
-            btn2="Cancel",
-            parent=self.winfo_toplevel(),
-        )
+
+        # For bundle variants, remove all siblings together.
+        bundle_indices: list[int] = []
+        if entry.bundle_name:
+            bundle_indices = sorted(
+                self._bundle_groups.get(entry.bundle_name, [idx]), reverse=True
+            )
+            bundle_name = entry.bundle_name
+            variant_labels = ", ".join(
+                self._entries[i].variant_name or self._entries[i].name
+                for i in sorted(bundle_indices)
+            )
+            alert = CTkAlert(
+                state="warning",
+                title="Remove Bundle",
+                body_text=(
+                    f"Remove all variants of bundle '{bundle_name}'?\n\n"
+                    f"Variants: {variant_labels}\n\n"
+                    "This will delete all variant folders and cannot be undone."
+                ),
+                btn1="Remove",
+                btn2="Cancel",
+                parent=self.winfo_toplevel(),
+            )
+        else:
+            bundle_indices = [idx]
+            alert = CTkAlert(
+                state="warning",
+                title="Remove Mod",
+                body_text=f"Are you sure you want to remove '{entry.name}'?\n\nThis will delete the mod folder and cannot be undone.",
+                btn1="Remove",
+                btn2="Cancel",
+                parent=self.winfo_toplevel(),
+            )
         if alert.get() != "Remove":
             return
-        # Delete the mod folder from staging and drop it from the index
+        # Delete staging folders and drop from index — process highest index first
+        # so earlier indices remain valid while popping.
+        removed_names: list[str] = []
+        index_path = self._staging_root.parent / "modindex.bin"
+        all_names = [self._entries[i].name for i in bundle_indices]
         if self._modlist_path is not None:
-            # Staging path is <profiles_root>/<game>/mods/<mod_name>
-            staging = self._staging_root / entry.name
-            index_path = self._staging_root.parent / "modindex.bin"
-            # Remove deployed files from the game directory before deleting the
-            # staging folder so restore_data_core() doesn't misidentify the
-            # leftover hardlinks/copies as runtime-generated files.
             if self._game is not None:
                 undeploy_mod_files(
-                    [entry.name],
+                    all_names,
                     self._game.get_mod_data_path(),
                     self._game.get_game_path(),
                     index_path,
                 )
-            self._remove_plugins_for_mods([entry.name])
-            if staging.is_dir():
-                shutil.rmtree(staging)
-            remove_from_mod_index(index_path, [entry.name])
-        # Remove from lists
-        self._entries.pop(idx)
-        self._check_buttons.pop(idx)
-        self._check_vars.pop(idx)
-        if self._sel_idx == idx:
-            self._sel_idx = -1
-        elif self._sel_idx > idx:
-            self._sel_idx -= 1
+            self._remove_plugins_for_mods(all_names)
+            for rem_idx in bundle_indices:  # already sorted high→low
+                rem_entry = self._entries[rem_idx]
+                staging = self._staging_root / rem_entry.name
+                if staging.is_dir():
+                    shutil.rmtree(staging)
+                removed_names.append(rem_entry.name)
+            remove_from_mod_index(index_path, all_names)
+        # Remove from lists (highest index first to keep lower indices stable)
+        for rem_idx in bundle_indices:
+            self._entries.pop(rem_idx)
+            self._check_buttons.pop(rem_idx)
+            self._check_vars.pop(rem_idx)
+            if self._sel_idx == rem_idx:
+                self._sel_idx = -1
+            elif self._sel_idx > rem_idx:
+                self._sel_idx -= 1
+        self._compute_bundle_groups()
         self._invalidate_derived_caches()
         self._save_modlist()
         self._rebuild_filemap()
         self._scan_missing_reqs_flags()
         self._redraw()
         self._update_info()
-        _show_mod_notification(self.winfo_toplevel(), f"Removed: {entry.name}", state="warning")
+        label = entry.bundle_name or entry.name
+        _show_mod_notification(self.winfo_toplevel(), f"Removed: {label}", state="warning")
 
     def _enable_selected_mods(self, indices: list[int]):
         """Enable all mods at the given indices."""
@@ -4993,6 +5058,18 @@ class ModListPanel(ctk.CTkFrame):
             now_enabled = var.get()
             entry.enabled = now_enabled
             self._sync_plugins_for_toggle(entry.name, now_enabled)
+
+            # Bundle radio behaviour: enabling one variant disables all siblings.
+            if now_enabled and entry.bundle_name:
+                for sibling_idx in self._bundle_groups.get(entry.bundle_name, []):
+                    if sibling_idx == idx:
+                        continue
+                    sib_entry = self._entries[sibling_idx]
+                    sib_entry.enabled = False
+                    if sibling_idx < len(self._check_vars) and self._check_vars[sibling_idx] is not None:
+                        self._check_vars[sibling_idx].set(False)
+                    self._sync_plugins_for_toggle(sib_entry.name, False)
+
             self._vis_dirty = True  # enabled state affects show-disabled/enabled filters
             self._save_modlist()
             self._rebuild_filemap()

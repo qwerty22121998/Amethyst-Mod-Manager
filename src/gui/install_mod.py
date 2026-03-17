@@ -268,6 +268,53 @@ def _expand_folders_for_dialog(
     return result
 
 
+def detect_bundle(
+    extract_dir: str,
+) -> "tuple[str, list[tuple[str, str]]] | None":
+    """Detect a Fluffy-style bundle: a directory whose immediate subdirs each
+    contain a ``modinfo.ini`` with the same ``nameasbundle`` value.
+
+    Returns ``(bundle_name, [(variant_name, variant_path), ...])`` sorted by
+    the order subdirs appear on disk, or ``None`` if not a bundle.
+
+    A bundle requires:
+    - At least 2 immediate subdirectories.
+    - Every subdir has a ``modinfo.ini`` with a non-empty ``nameasbundle`` key.
+    - All ``nameasbundle`` values are identical.
+    """
+    import configparser
+    root = Path(extract_dir)
+    subdirs = sorted(p for p in root.iterdir() if p.is_dir())
+    if len(subdirs) < 2:
+        return None
+
+    bundle_name: str | None = None
+    variants: list[tuple[str, str]] = []
+
+    for subdir in subdirs:
+        ini_path = subdir / "modinfo.ini"
+        if not ini_path.is_file():
+            return None
+        cfg = configparser.RawConfigParser()
+        try:
+            cfg.read_string("[mod]\n" + ini_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            return None
+        bname = cfg.get("mod", "nameasbundle", fallback="").strip()
+        if not bname:
+            return None
+        if bundle_name is None:
+            bundle_name = bname
+        elif bname.lower() != bundle_name.lower():
+            return None  # inconsistent bundle names
+        vname = cfg.get("mod", "name", fallback=subdir.name).strip() or subdir.name
+        variants.append((vname, str(subdir)))
+
+    if bundle_name and len(variants) >= 2:
+        return bundle_name, variants
+    return None
+
+
 def _resolve_direct_files(extract_dir: str) -> list[tuple[str, str, bool]]:
     """
     For a non-FOMOD archive, return every file as a (src, dst, is_folder)
@@ -729,6 +776,103 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
 
             file_list = resolve_files(config, final_selections, installed_files)
             log_fn(f"FOMOD complete — {len(file_list)} file(s) to install.")
+        elif getattr(game, "mod_supports_bundles", False) and detect_bundle(extract_dir):
+            # --- Bundle install ---
+            bundle_name, variants = detect_bundle(extract_dir)
+            log_fn(f"Bundle detected: '{bundle_name}' with {len(variants)} variant(s).")
+
+            # Resolve profile dir once
+            if mod_panel is not None and mod_panel._modlist_path is not None:
+                _profile_dir = mod_panel._modlist_path.parent
+            elif profile_dir is not None:
+                _profile_dir = profile_dir
+            else:
+                _profile_dir = game.get_profile_root() / "profiles" / "default"
+            modlist_path = _profile_dir / "modlist.txt"
+
+            strip_prefixes     = getattr(game, "mod_folder_strip_prefixes", set())
+            post_strip         = getattr(game, "mod_folder_strip_prefixes_post", set())
+            required           = getattr(game, "mod_required_top_level_folders", set())
+            auto_strip         = getattr(game, "mod_auto_strip_until_required", False)
+            install_as_is      = getattr(game, "mod_install_as_is_if_no_match", False)
+            install_prefix     = getattr(game, "mod_install_prefix", "")
+            required_lower     = {r.lower() for r in required}
+            required_file_types = getattr(game, "mod_required_file_types", set())
+
+            installed_variant_names: list[str] = []
+            for v_idx, (v_name, v_path) in enumerate(variants):
+                v_mod_name = f"{bundle_name}__{v_name}"
+                v_file_list = _resolve_direct_files(v_path)
+
+                # Apply the same strip / prefix / required-folder logic as normal install
+                if strip_prefixes:
+                    v_file_list = _apply_strip_prefixes_to_file_list(v_file_list, strip_prefixes)
+                if install_prefix:
+                    _pfx = install_prefix.strip().strip("/").replace("\\", "/")
+                    _pfx_parts = _pfx.lower().split("/")
+                    new_vfl = []
+                    for s, d, f in v_file_list:
+                        d_parts = d.replace("\\", "/").split("/")
+                        d_parts_lower = [p.lower() for p in d_parts]
+                        if d_parts_lower[0] in required_lower:
+                            new_vfl.append((s, d, f))
+                            continue
+                        match_len = 0
+                        for i in range(len(_pfx_parts), 0, -1):
+                            if d_parts_lower[:i] == _pfx_parts[-i:]:
+                                match_len = i
+                                break
+                        missing = "/".join(_pfx.split("/")[:len(_pfx_parts) - match_len])
+                        new_vfl.append((s, f"{missing}/{d}" if missing else d, f))
+                    v_file_list = new_vfl
+                if required and not _check_mod_top_level(v_file_list, required):
+                    if auto_strip:
+                        v_file_list, _ = _try_auto_strip_top_level(v_file_list, required)
+                    if not v_file_list and install_as_is:
+                        v_file_list = _resolve_direct_files(v_path)
+                if post_strip:
+                    v_file_list = _apply_strip_prefixes_to_file_list(v_file_list, post_strip)
+
+                v_dest = game.get_effective_mod_staging_path() / v_mod_name
+                if v_dest.exists():
+                    import shutil as _shutil
+                    def _frc(func, path, _exc):
+                        os.chmod(path, 0o700)
+                        func(path)
+                    _shutil.rmtree(v_dest, onexc=_frc)
+                _copy_file_list(v_file_list, v_path, v_dest, log_fn)
+                _stamp_meta_install_date(v_dest / "meta.ini",
+                                         installation_file=os.path.basename(archive_path))
+
+                # Update mod index for this variant
+                if not skip_index_update:
+                    try:
+                        _strip_fs = frozenset(s.lower() for s in (strip_prefixes or []))
+                        _exts_fs  = frozenset(e.lower() for e in (getattr(game, "install_extensions", None) or []))
+                        _root_fs  = frozenset(s.lower() for s in (getattr(game, "root_deploy_folders", None) or []))
+                        _, _nf, _rf = _scan_dir(v_mod_name, str(v_dest), _strip_fs, _exts_fs, _root_fs)
+                        _index_path = _profile_dir / "modindex.bin"
+                        _norm_case = getattr(game, "normalize_folder_case", True)
+                        update_mod_index(_index_path, v_mod_name, _nf, _rf, normalize_folder_case=_norm_case)
+                    except Exception:
+                        pass
+
+                # First variant enabled, rest disabled
+                prepend_mod(modlist_path, v_mod_name, enabled=(v_idx == 0))
+                log_fn(f"  Variant '{v_name}' → {v_dest}")
+                installed_variant_names.append(v_mod_name)
+
+            log_fn(f"Installed bundle '{bundle_name}' ({len(variants)} variant(s)).")
+            if not headless:
+                _show_mod_notification(parent_window, f"Installed bundle: {bundle_name}")
+            if on_installed is not None:
+                try:
+                    on_installed()
+                except Exception:
+                    pass
+            if mod_panel is not None and not headless:
+                mod_panel.reload_after_install()
+            return installed_variant_names[0] if installed_variant_names else mod_name
         else:
             mod_root = extract_dir
             file_list = _resolve_direct_files(extract_dir)

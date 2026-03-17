@@ -863,7 +863,8 @@ class TopBar(ctk.CTkFrame):
                     if count:
                         _tlog("Root Folder: transferred files to game root.")
             except Exception as e:
-                self.after(0, lambda err=e: self._log(f"Deploy error: {err}"))
+                import traceback as _tb
+                self.after(0, lambda err=e, tb=_tb.format_exc(): self._log(f"Deploy error: {err}\n{tb}"))
             finally:
                 # Ensure active profile dir always reflects the UI selection on exit.
                 game.set_active_profile_dir(
