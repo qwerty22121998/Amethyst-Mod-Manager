@@ -4852,13 +4852,14 @@ class ModListPanel(ctk.CTkFrame):
             elif under_real_sep:
                 in_separator.add(entry.name)
 
-        # --- Step 2: Collect loose mods (not in a separator, not synthetic) ---
+        # --- Step 2: Collect loose mods (not in a separator, not synthetic, not disabled) ---
         # Preserve original relative order.
         loose: list[ModEntry] = [
             e for e in self._entries
             if not e.is_separator
             and e.name not in in_separator
             and e.name not in (OVERWRITE, ROOT)
+            and e.enabled
         ]
 
         if not loose:
