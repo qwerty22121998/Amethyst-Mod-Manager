@@ -11,6 +11,8 @@ from typing import Callable, Optional
 import customtkinter as ctk
 import tkinter as tk
 
+import gui.theme as _theme
+from gui.theme import scaled
 from Utils.profile_backup import list_backups, restore_backup
 
 # ---------------------------------------------------------------------------
@@ -26,9 +28,10 @@ TEXT_MAIN = "#d4d4d4"
 TEXT_DIM = "#858585"
 BORDER = "#444444"
 
-FONT_NORMAL = ("Segoe UI", 12)
-FONT_BOLD = ("Segoe UI", 12, "bold")
-FONT_SMALL = ("Segoe UI", 10)
+def _font_normal(): return ("Segoe UI", _theme.FS12)
+def _font_bold():   return ("Segoe UI", _theme.FS12, "bold")
+def _font_small():  return ("Segoe UI", _theme.FS10)
+def _font_list():   return ("Segoe UI", _theme.FS11)
 
 
 class BackupRestoreDialog(ctk.CTkToplevel):
@@ -83,14 +86,14 @@ class BackupRestoreDialog(ctk.CTkToplevel):
         ctk.CTkLabel(
             self,
             text="Restore backup",
-            font=FONT_BOLD,
+            font=_font_bold(),
             text_color=TEXT_MAIN,
         ).pack(**pad, anchor="w")
 
         ctk.CTkLabel(
             self,
             text="Select a backup to restore modlist and plugins for this profile.",
-            font=FONT_SMALL,
+            font=_font_small(),
             text_color=TEXT_DIM,
         ).pack(padx=16, pady=(2, 12), anchor="w")
 
@@ -104,7 +107,7 @@ class BackupRestoreDialog(ctk.CTkToplevel):
             ctk.CTkLabel(
                 list_frame,
                 text="No backups yet. Backups are created when you deploy.",
-                font=FONT_SMALL,
+                font=_font_small(),
                 text_color=TEXT_DIM,
                 wraplength=320,
             ).pack(pady=20)
@@ -119,7 +122,7 @@ class BackupRestoreDialog(ctk.CTkToplevel):
 
             self._listbox = tk.Listbox(
                 lb_frame,
-                font=("Segoe UI", 11),
+                font=_font_list(),
                 bg=BG_PANEL,
                 fg=TEXT_MAIN,
                 selectbackground=ACCENT,
@@ -149,7 +152,7 @@ class BackupRestoreDialog(ctk.CTkToplevel):
             text="Restore",
             width=100,
             height=32,
-            font=FONT_BOLD,
+            font=_font_bold(),
             fg_color=ACCENT,
             hover_color=ACCENT_HOV,
             text_color="white",
@@ -163,7 +166,7 @@ class BackupRestoreDialog(ctk.CTkToplevel):
             text="Cancel",
             width=100,
             height=32,
-            font=FONT_NORMAL,
+            font=_font_normal(),
             fg_color=BG_HEADER,
             hover_color=BORDER,
             text_color=TEXT_MAIN,
@@ -215,18 +218,18 @@ class BackupRestorePanel(ctk.CTkFrame):
         self._backups = list_backups(profile_dir)
 
         # Title bar
-        title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=36)
+        title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=scaled(36))
         title_bar.pack(fill="x")
         title_bar.pack_propagate(False)
         ctk.CTkLabel(
             title_bar, text=f"Restore backup \u2014 {profile_name}",
-            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
-        ).pack(side="left", padx=12)
+            font=_font_bold(), text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=scaled(12))
         ctk.CTkButton(
-            title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
+            title_bar, text="\u2715", width=32, height=32, font=_font_bold(),
             fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_cancel,
-        ).pack(side="right", padx=4)
+        ).pack(side="right", padx=scaled(4))
         ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
         self._build()
@@ -237,14 +240,14 @@ class BackupRestorePanel(ctk.CTkFrame):
         ctk.CTkLabel(
             self,
             text="Restore backup",
-            font=FONT_BOLD,
+            font=_font_bold(),
             text_color=TEXT_MAIN,
         ).pack(**pad, anchor="w")
 
         ctk.CTkLabel(
             self,
             text="Select a backup to restore modlist and plugins for this profile.",
-            font=FONT_SMALL,
+            font=_font_small(),
             text_color=TEXT_DIM,
         ).pack(padx=16, pady=(2, 12), anchor="w")
 
@@ -257,7 +260,7 @@ class BackupRestorePanel(ctk.CTkFrame):
             ctk.CTkLabel(
                 list_frame,
                 text="No backups yet. Backups are created when you deploy.",
-                font=FONT_SMALL,
+                font=_font_small(),
                 text_color=TEXT_DIM,
                 wraplength=320,
             ).pack(pady=20)
@@ -273,7 +276,7 @@ class BackupRestorePanel(ctk.CTkFrame):
 
             self._listbox = tk.Listbox(
                 lb_frame,
-                font=("Segoe UI", 11),
+                font=_font_list(),
                 bg=BG_PANEL,
                 fg=TEXT_MAIN,
                 selectbackground=ACCENT,
@@ -303,7 +306,7 @@ class BackupRestorePanel(ctk.CTkFrame):
             text="Restore",
             width=100,
             height=32,
-            font=FONT_BOLD,
+            font=_font_bold(),
             fg_color=ACCENT,
             hover_color=ACCENT_HOV,
             text_color="white",
@@ -317,7 +320,7 @@ class BackupRestorePanel(ctk.CTkFrame):
             text="Cancel",
             width=100,
             height=32,
-            font=FONT_NORMAL,
+            font=_font_normal(),
             fg_color=BG_HEADER,
             hover_color=BORDER,
             text_color=TEXT_MAIN,

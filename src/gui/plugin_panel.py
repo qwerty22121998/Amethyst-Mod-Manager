@@ -286,6 +286,7 @@ class PluginPanel(ctk.CTkFrame):
         "OutfitStudio.exe",
         "BodySlide x64.exe",
         "BodySlide.exe",
+        "Nemesis Unlimited Behavior Engine.exe",
     })
 
     # Exe names (lowercase) hidden from the dropdown by default.  These are
@@ -346,7 +347,25 @@ class PluginPanel(ctk.CTkFrame):
         "tes5dump64.exe",
         "7z.exe",
         "ffdec_orig.bat",
-        "xdelta.exe"
+        "xdelta.exe",
+        # Nemesis Unlimited Behavior Engine — sub-process / bundled utilities
+        "hkxcmd.exe",
+        "fetch_macholib.bat",
+        "wininst-10.0-amd64.exe",
+        "wininst-10.0.exe",
+        "wininst-14.0-amd64.exe",
+        "wininst-14.0.exe",
+        "wininst-6.0.exe",
+        "wininst-7.1.exe",
+        "wininst-8.0.exe",
+        "wininst-9.0-amd64.exe",
+        "wininst-9.0.exe",
+        "idle.bat",
+        "activate.bat",
+        "deactivate.bat",
+        "nemesis compiler version.bat",
+        "papyrusassembler.exe",
+        "papyruscompiler.exe",
     })
 
     def refresh_exe_list(self):
@@ -369,13 +388,27 @@ class PluginPanel(ctk.CTkFrame):
                 if hasattr(self._game, "get_mod_staging_path") else None
             )
 
+            # Build the full set of exe names that must run from the Data folder:
+            # hardcoded set + any user-configured via the Configure dialog.
+            _lm_path = self._get_launch_mode_path()
+            _user_data_folder_exes: set[str] = set()
+            if _lm_path is not None and _lm_path.is_file():
+                try:
+                    _lm_data = json.loads(_lm_path.read_text(encoding="utf-8"))
+                    for _k, _v in _lm_data.items():
+                        if _k.startswith("__data_folder_") and _v:
+                            _user_data_folder_exes.add(_k[len("__data_folder_"):])
+                except (OSError, ValueError):
+                    pass
+            _all_data_folder_exes = self._DATA_FOLDER_ONLY_EXES | _user_data_folder_exes
+
             # Build a set of Data-folder-only exe names that are actually present
             # under game_path/Data/ (recursively) after deployment.
             data_folder_deployed: set[str] = set()
             if game_path is not None:
                 data_dir = game_path / "Data"
                 if data_dir.is_dir():
-                    for name in self._DATA_FOLDER_ONLY_EXES:
+                    for name in _all_data_folder_exes:
                         for _ in data_dir.rglob(name):
                             data_folder_deployed.add(name)
                             break  # one hit is enough
@@ -395,7 +428,7 @@ class PluginPanel(ctk.CTkFrame):
                                 continue
                             # Exes that require the Data folder are only shown
                             # if they have been deployed there.
-                            if rel.name in self._DATA_FOLDER_ONLY_EXES:
+                            if rel.name in _all_data_folder_exes:
                                 if rel.name not in data_folder_deployed:
                                     continue
                             mod_dir = staging / mod_name
@@ -416,7 +449,7 @@ class PluginPanel(ctk.CTkFrame):
                 if apps_dir.is_dir():
                     for ext in self._EXE_SCAN_EXTENSIONS:
                         for entry in apps_dir.rglob(f"*{ext}"):
-                            if entry.is_file() and entry.name not in self._DATA_FOLDER_ONLY_EXES:
+                            if entry.is_file() and entry.name not in _all_data_folder_exes:
                                 if not any(part.startswith("prefix_") for part in entry.parts):
                                     exes.append(entry)
 
@@ -581,6 +614,43 @@ class PluginPanel(ctk.CTkFrame):
         else:
             data.pop(key, None)
         p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _load_data_folder_exe(self, exe_name: str) -> bool:
+        """Return whether this exe is configured to run from the game's Data folder."""
+        p = self._get_launch_mode_path()
+        if p is None or not p.is_file():
+            return False
+        try:
+            return bool(json.loads(p.read_text(encoding="utf-8")).get(f"__data_folder_{exe_name}", False))
+        except (OSError, ValueError):
+            return False
+
+    def _save_data_folder_exe(self, exe_name: str, enabled: bool) -> None:
+        p = self._get_launch_mode_path()
+        if p is None:
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        except (OSError, ValueError):
+            data = {}
+        key = f"__data_folder_{exe_name}"
+        if enabled:
+            data[key] = True
+        else:
+            data.pop(key, None)
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _is_apps_exe(self, exe_path: "Path") -> bool:
+        """Return True if exe_path lives under the game's Applications folder."""
+        if self._game is None or not hasattr(self._game, "get_mod_staging_path"):
+            return False
+        apps_dir = self._game.get_mod_staging_path().parent / "Applications"
+        try:
+            exe_path.relative_to(apps_dir)
+            return True
+        except ValueError:
+            return False
 
     def _save_deploy_before_launch(self, enabled: bool) -> None:
         p = self._get_launch_mode_path()
@@ -803,40 +873,54 @@ class PluginPanel(ctk.CTkFrame):
         # are always hidden and can't be toggled, so we only look at the user list).
         user_filter = {n.lower() for n in self._load_exe_filter()}
         is_hidden = exe_path.name.lower() in user_filter
+        # Data-folder setting: hardcoded exes are always on; user-configured ones loaded from disk.
+        # Applications-folder exes don't need this (they already run from the right location).
+        _is_apps = self._is_apps_exe(exe_path)
+        is_data_folder_exe = (
+            exe_path.name in self._DATA_FOLDER_ONLY_EXES
+            or self._load_data_folder_exe(exe_path.name)
+        )
+
+        def _handle_result(panel_or_dialog):
+            r = panel_or_dialog
+            if r.result is not None:
+                self._exe_args_var.set(r.result)
+            if r.launch_mode is not None:
+                self._save_launch_mode(exe_path.name, r.launch_mode)
+            if r.deploy_before_launch is not None:
+                self._save_deploy_before_launch(r.deploy_before_launch)
+            if r.proton_override is not None:
+                self._save_proton_override(exe_path.name, r.proton_override)
+            if r.removed:
+                remaining = [p for p in custom_exes if p != exe_path]
+                self._save_custom_exes(remaining)
+                self.refresh_exe_list()
+            if r.hide is not None:
+                name = exe_path.name.lower()
+                current = list(self._load_exe_filter())
+                if r.hide and name not in current:
+                    current.append(name)
+                    self._save_exe_filter(current)
+                    self.refresh_exe_list()
+                elif not r.hide and name in current:
+                    current.remove(name)
+                    self._save_exe_filter(current)
+                    self.refresh_exe_list()
+            if r.data_folder_exe is not None:
+                self._save_data_folder_exe(exe_path.name, r.data_folder_exe)
+                self.refresh_exe_list()
+
         app = self.winfo_toplevel()
         show_fn = getattr(app, "show_exe_config_panel", None)
         if show_fn:
-            def _on_config_done(panel):
-                if panel.result is not None:
-                    self._exe_args_var.set(panel.result)
-                if panel.launch_mode is not None:
-                    self._save_launch_mode(exe_path.name, panel.launch_mode)
-                if panel.deploy_before_launch is not None:
-                    self._save_deploy_before_launch(panel.deploy_before_launch)
-                if panel.proton_override is not None:
-                    self._save_proton_override(exe_path.name, panel.proton_override)
-                if panel.removed:
-                    remaining = [p for p in custom_exes if p != exe_path]
-                    self._save_custom_exes(remaining)
-                    self.refresh_exe_list()
-                if panel.hide is not None:
-                    name = exe_path.name.lower()
-                    current = list(self._load_exe_filter())
-                    if panel.hide and name not in current:
-                        current.append(name)
-                        self._save_exe_filter(current)
-                        self.refresh_exe_list()
-                    elif not panel.hide and name in current:
-                        current.remove(name)
-                        self._save_exe_filter(current)
-                        self.refresh_exe_list()
             show_fn(
                 exe_path=exe_path, game=game, saved_args=saved_args,
                 custom_exes=custom_exes, launch_mode=saved_launch_mode,
                 deploy_before_launch=deploy_before_launch, is_hidden=is_hidden,
                 proton_override=saved_proton_override,
+                is_data_folder_exe=is_data_folder_exe, is_apps_exe=_is_apps,
                 log_fn=self._log,
-                on_done=_on_config_done,
+                on_done=_handle_result,
             )
         else:
             dialog = _ExeConfigDialog(
@@ -849,32 +933,12 @@ class PluginPanel(ctk.CTkFrame):
                 deploy_before_launch=deploy_before_launch,
                 is_hidden=is_hidden,
                 proton_override=saved_proton_override,
+                is_data_folder_exe=is_data_folder_exe,
+                is_apps_exe=_is_apps,
                 log_fn=self._log,
             )
             self.winfo_toplevel().wait_window(dialog)
-            if dialog.result is not None:
-                self._exe_args_var.set(dialog.result)
-            if dialog.launch_mode is not None:
-                self._save_launch_mode(exe_path.name, dialog.launch_mode)
-            if dialog.deploy_before_launch is not None:
-                self._save_deploy_before_launch(dialog.deploy_before_launch)
-            if dialog.proton_override is not None:
-                self._save_proton_override(exe_path.name, dialog.proton_override)
-            if dialog.removed:
-                remaining = [p for p in custom_exes if p != exe_path]
-                self._save_custom_exes(remaining)
-                self.refresh_exe_list()
-            if dialog.hide is not None:
-                name = exe_path.name.lower()
-                current = list(self._load_exe_filter())
-                if dialog.hide and name not in current:
-                    current.append(name)
-                    self._save_exe_filter(current)
-                    self.refresh_exe_list()
-                elif not dialog.hide and name in current:
-                    current.remove(name)
-                    self._save_exe_filter(current)
-                    self.refresh_exe_list()
+            _handle_result(dialog)
 
     def _exe_var_index(self) -> int:
         """Return the index of the currently selected exe in _exe_paths."""
@@ -1150,7 +1214,11 @@ class PluginPanel(ctk.CTkFrame):
         # For exes that must run from the game's Data folder, resolve the
         # deployed path so both the exe path and cwd point there.
         launch_path = exe_path
-        if exe_path.name in self._DATA_FOLDER_ONLY_EXES and game_path is not None:
+        _is_data_folder = (
+            exe_path.name in self._DATA_FOLDER_ONLY_EXES
+            or self._load_data_folder_exe(exe_path.name)
+        )
+        if _is_data_folder and game_path is not None:
             data_dir = game_path / "Data"
             for hit in data_dir.rglob(exe_path.name):
                 launch_path = hit
@@ -1594,7 +1662,11 @@ class PluginPanel(ctk.CTkFrame):
         self._ini_marker_strip_after_id: str | None = None
 
     def _resolve_ini_file_path(self, rel_path: str, mod_name: str) -> Path | None:
-        """Resolve full file path from filemap entry. Returns None if staging_root unknown."""
+        """Resolve full file path from filemap entry. Returns None if staging_root unknown.
+
+        Tries an exact path first; if that doesn't exist, walks each path segment
+        case-insensitively to handle case-normalised filemap paths on Linux.
+        """
         if self._staging_root is None:
             return None
         from Utils.filemap import OVERWRITE_NAME, ROOT_FOLDER_NAME
@@ -1605,7 +1677,23 @@ class PluginPanel(ctk.CTkFrame):
             base = self._staging_root.parent / "Root_Folder"
         else:
             base = self._staging_root / mod_name
-        return base / rel_path
+        exact = base / rel_path
+        if exact.exists():
+            return exact
+        # Case-insensitive fallback: resolve each segment against the actual directory.
+        current = base
+        for segment in rel_path.split("/"):
+            if not current.is_dir():
+                return exact  # can't resolve further — return exact for display
+            seg_lower = segment.lower()
+            match = next(
+                (child for child in current.iterdir() if child.name.lower() == seg_lower),
+                None,
+            )
+            if match is None:
+                return exact  # segment not found — return exact for display
+            current = match
+        return current
 
     def _refresh_ini_files_tab(self):
         """Populate Ini Files tab from filemap.txt, filtering to .ini and .json."""
@@ -1633,7 +1721,7 @@ class PluginPanel(ctk.CTkFrame):
             if ext not in self._INI_JSON_EXTENSIONS:
                 continue
             full_path = self._resolve_ini_file_path(rel_path, mod_name)
-            if full_path is None or not full_path.is_file():
+            if full_path is None:
                 continue
             ini_entries.append((rel_path, mod_name, full_path))
 
@@ -1674,8 +1762,7 @@ class PluginPanel(ctk.CTkFrame):
             return
         for rel_path, mod_name, _ in self._ini_files_displayed:
             tags = ("mod_highlight",) if mod_name == self._highlighted_ini_mod else ()
-            file_name = Path(rel_path).name
-            self._ini_files_tree.insert("", "end", text=file_name, values=(mod_name,), tags=tags)
+            self._ini_files_tree.insert("", "end", text=rel_path, values=(mod_name,), tags=tags)
         self._draw_ini_marker_strip()
 
     def _on_ini_marker_strip_resize(self, _event=None):

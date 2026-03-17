@@ -820,9 +820,9 @@ class ModListPanel(ctk.CTkFrame):
             num = getattr(evt, "num", None)
             delta = getattr(evt, "delta", 0) or 0
             if num == 4 or delta > 0:
-                scroll_frame._parent_canvas.yview_scroll(-30, "units")
+                scroll_frame._parent_canvas.yview_scroll(-3, "units")
             elif num == 5 or delta < 0:
-                scroll_frame._parent_canvas.yview_scroll(30, "units")
+                scroll_frame._parent_canvas.yview_scroll(3, "units")
 
         def _bind_recursive(w):
             w.bind("<MouseWheel>", _on_wheel)

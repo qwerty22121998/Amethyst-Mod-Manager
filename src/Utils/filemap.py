@@ -147,14 +147,31 @@ def _scan_dir(
                         if root_deploy_folders and "/" in rel_str:
                             top_seg = rel_str.split("/", 1)[0]
                             if top_seg.lower() in root_deploy_folders:
-                                root_result[rel_str.lower()] = rel_str
+                                rkey = rel_str.lower()
+                                if rkey in root_result:
+                                    ex = root_result[rkey]
+                                    if _upper_count("/".join(rel_str.split("/")[:-1])) > _upper_count("/".join(ex.split("/")[:-1])):
+                                        root_result[rkey] = rel_str
+                                else:
+                                    root_result[rkey] = rel_str
                                 continue
                         # Extension filter — drop files not in the allowed set
                         if allowed_extensions:
                             ext = os.path.splitext(entry.name)[1].lower()
                             if ext not in allowed_extensions:
                                 continue
-                        result[rel_str.lower()] = rel_str
+                        key = rel_str.lower()
+                        if key in result:
+                            # Two physical files map to the same case-insensitive path
+                            # (e.g. Interface/ vs interface/).  Prefer the one whose
+                            # folder segments have more uppercase characters.
+                            existing = result[key]
+                            ex_folders = "/".join(existing.split("/")[:-1])
+                            new_folders = "/".join(rel_str.split("/")[:-1])
+                            if _upper_count(new_folders) > _upper_count(ex_folders):
+                                result[key] = rel_str
+                        else:
+                            result[key] = rel_str
         except OSError:
             pass
     return source_name, result, root_result

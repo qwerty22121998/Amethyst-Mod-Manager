@@ -282,6 +282,59 @@ def _resolve_direct_files(extract_dir: str) -> list[tuple[str, str, bool]]:
     return result
 
 
+def _resolve_dst_case(dest_root: Path, dst_rel: str) -> Path:
+    """
+    Build dest_root / dst_rel while resolving each path component case-insensitively
+    against what already exists on disk.  This prevents FOMOD installs from creating
+    duplicate folders that differ only in case (e.g. 'Interface' vs 'interface') when
+    running on a case-sensitive Linux filesystem.
+    """
+    parts = dst_rel.replace("\\", "/").split("/")
+    current = dest_root
+    for part in parts:
+        if not part:
+            continue
+        # Check if any existing child matches case-insensitively
+        try:
+            existing = {p.name.lower(): p.name for p in current.iterdir() if current.is_dir()}
+        except OSError:
+            existing = {}
+        resolved = existing.get(part.lower(), part)
+        current = current / resolved
+    return current
+
+
+def _copytree_case_insensitive(src: Path, dst: Path) -> int:
+    """
+    Recursively copy src into dst, resolving every destination directory
+    component case-insensitively against what already exists on disk.
+    This is a case-aware replacement for shutil.copytree(dirs_exist_ok=True).
+    Returns the number of files copied.
+    """
+    copied = 0
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in os.scandir(src):
+        # Resolve this entry's name against what already exists in dst
+        try:
+            existing = {p.name.lower(): p.name for p in dst.iterdir()}
+        except OSError:
+            existing = {}
+        resolved_name = existing.get(entry.name.lower(), entry.name)
+        child_dst = dst / resolved_name
+        if entry.is_dir(follow_symlinks=False):
+            copied += _copytree_case_insensitive(Path(entry.path), child_dst)
+        elif entry.is_file(follow_symlinks=False):
+            child_dst.parent.mkdir(parents=True, exist_ok=True)
+            if child_dst.is_dir():
+                shutil.rmtree(child_dst)
+            elif child_dst.exists():
+                child_dst.chmod(0o644)
+                child_dst.unlink()
+            shutil.copy2(entry.path, child_dst)
+            copied += 1
+    return copied
+
+
 def _copy_file_list(file_list: list[tuple[str, str, bool]],
                     src_root: str, dest_root: Path, log_fn) -> None:
     """
@@ -290,22 +343,21 @@ def _copy_file_list(file_list: list[tuple[str, str, bool]],
     copied = 0
     for src_rel, dst_rel, is_folder in file_list:
         src = Path(src_root) / src_rel
-        dst = dest_root / dst_rel
+        dst = _resolve_dst_case(dest_root, dst_rel) if dst_rel else dest_root / dst_rel
 
         if is_folder:
             # Empty destination means merge folder contents into dest_root
             if not dst_rel:
                 dst = dest_root
             if src.is_dir():
-                shutil.copytree(src, dst, dirs_exist_ok=True)
-                copied += 1
+                copied += _copytree_case_insensitive(src, dst)
         else:
             # Empty destination means place file at dest_root using source filename.
             # Trailing slash/backslash means destination is a directory — append src filename.
             if not dst_rel:
                 dst = dest_root / src.name
             elif dst_rel.endswith("/") or dst_rel.endswith("\\"):
-                dst = dest_root / dst_rel.rstrip("/\\") / src.name
+                dst = _resolve_dst_case(dest_root, dst_rel.rstrip("/\\")) / src.name
             if src.is_file():
                 dst.parent.mkdir(parents=True, exist_ok=True)
                 if dst.is_dir():

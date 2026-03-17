@@ -2798,6 +2798,7 @@ class _ExeConfigDialog(ctk.CTkToplevel):
                  custom_exes: "list | None" = None, launch_mode: "str | None" = None,
                  deploy_before_launch: "bool | None" = None,
                  is_hidden: bool = False, proton_override: "str | None" = None,
+                 is_data_folder_exe: bool = False, is_apps_exe: bool = False,
                  log_fn=None):
         super().__init__(parent, fg_color=BG_DEEP)
         self.title(f"Configure: {exe_path.name}")
@@ -2818,12 +2819,15 @@ class _ExeConfigDialog(ctk.CTkToplevel):
             value=True if deploy_before_launch is None else deploy_before_launch
         )
         self._hide_var = tk.BooleanVar(value=is_hidden)
+        self._data_folder_var = tk.BooleanVar(value=is_data_folder_exe)
+        self._is_apps_exe = is_apps_exe
         self.result: "str | None" = None
         self.launch_mode: "str | None" = None  # set on Save when dropdown is shown
         self.deploy_before_launch: "bool | None" = None  # set on Save when shown
         self.hide: "bool | None" = None  # set on Save for non-launcher exes
         self.removed: bool = False
         self.proton_override: "str | None" = None  # set on Save for non-launcher exes
+        self.data_folder_exe: "bool | None" = None  # set on Save for non-launcher, non-apps exes
 
         # Proton version dropdown (non-launcher exes only)
         from Utils.steam_finder import list_installed_proton
@@ -3083,6 +3087,16 @@ class _ExeConfigDialog(ctk.CTkToplevel):
                 fg_color=ACCENT, hover_color=ACCENT_HOV, border_color=BORDER,
                 checkmark_color=BG_DEEP,
             ).pack(side="left", padx=(12, 4), pady=9)
+        # "Run from Data folder" checkbox — not shown for the game's own launcher
+        # or for exes that already live in the Applications folder.
+        if not is_game_exe and not self._is_apps_exe:
+            ctk.CTkCheckBox(
+                bar, text="Run from Data folder",
+                variable=self._data_folder_var,
+                font=FONT_SMALL, text_color=TEXT_MAIN,
+                fg_color=ACCENT, hover_color=ACCENT_HOV, border_color=BORDER,
+                checkmark_color=BG_DEEP,
+            ).pack(side="left", padx=(4, 4), pady=9)
 
 
     def _on_mod_typed(self, *_):
@@ -3292,6 +3306,8 @@ class _ExeConfigDialog(ctk.CTkToplevel):
             self.hide = self._hide_var.get()
             selected = self._proton_var.get()
             self.proton_override = "" if selected == "Game default" else selected
+            if not self._is_apps_exe:
+                self.data_folder_exe = self._data_folder_var.get()
         self.grab_release()
         self.destroy()
 
@@ -3395,6 +3411,7 @@ class ExeConfigPanel(ctk.CTkFrame):
                  custom_exes: "list | None" = None, launch_mode: "str | None" = None,
                  deploy_before_launch: "bool | None" = None,
                  is_hidden: bool = False, on_done=None, proton_override: "str | None" = None,
+                 is_data_folder_exe: bool = False, is_apps_exe: bool = False,
                  log_fn=None):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
         self._log = log_fn or print
@@ -3409,6 +3426,8 @@ class ExeConfigPanel(ctk.CTkFrame):
             value=True if deploy_before_launch is None else deploy_before_launch
         )
         self._hide_var = tk.BooleanVar(value=is_hidden)
+        self._data_folder_var = tk.BooleanVar(value=is_data_folder_exe)
+        self._is_apps_exe = is_apps_exe
         self._on_done = on_done or (lambda p: None)
         self.result: "str | None" = None
         self.launch_mode: "str | None" = None
@@ -3416,6 +3435,7 @@ class ExeConfigPanel(ctk.CTkFrame):
         self.hide: "bool | None" = None
         self.removed: bool = False
         self.proton_override: "str | None" = None
+        self.data_folder_exe: "bool | None" = None
 
         # Proton version dropdown (non-launcher exes only)
         from Utils.steam_finder import list_installed_proton
@@ -3679,6 +3699,14 @@ class ExeConfigPanel(ctk.CTkFrame):
                 fg_color=ACCENT, hover_color=ACCENT_HOV, border_color=BORDER,
                 checkmark_color=BG_DEEP,
             ).pack(side="left", padx=(12, 4), pady=9)
+        if not is_game_exe and not self._is_apps_exe:
+            ctk.CTkCheckBox(
+                bar, text="Run from Data folder",
+                variable=self._data_folder_var,
+                font=FONT_SMALL, text_color=TEXT_MAIN,
+                fg_color=ACCENT, hover_color=ACCENT_HOV, border_color=BORDER,
+                checkmark_color=BG_DEEP,
+            ).pack(side="left", padx=(4, 4), pady=9)
 
     def _on_mod_typed(self, *_):
         if self._mod_popup and self._mod_popup.winfo_exists():
@@ -3951,6 +3979,8 @@ class ExeConfigPanel(ctk.CTkFrame):
             self.hide = self._hide_var.get()
             selected = self._proton_var.get()
             self.proton_override = "" if selected == "Game default" else selected
+            if not self._is_apps_exe:
+                self.data_folder_exe = self._data_folder_var.get()
         self._on_done(self)
 
     def _on_remove(self):
@@ -4035,35 +4065,38 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             command=self._on_rename_confirm,
         ).grid(row=0, column=1)
 
-        bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
+        bar_h = scaled(52)
+        bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=bar_h)
         bar.grid(row=3, column=0, sticky="ew")
         bar.grid_propagate(False)
         ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(
             side="top", fill="x"
         )
+        btn_h = scaled(28)
+        btn_pady = scaled(12)
         ctk.CTkButton(
-            bar, text="Cancel", width=90, height=28, font=FONT_NORMAL,
+            bar, text="Cancel", width=scaled(90), height=btn_h, font=FONT_NORMAL,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_cancel,
-        ).pack(side="right", padx=(4, 12), pady=12)
+        ).pack(side="right", padx=(scaled(4), scaled(12)), pady=btn_pady)
         ctk.CTkButton(
-            bar, text="Rename", width=90, height=28, font=FONT_NORMAL,
+            bar, text="Rename", width=scaled(90), height=btn_h, font=FONT_NORMAL,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_rename,
-        ).pack(side="right", padx=4, pady=12)
+        ).pack(side="right", padx=scaled(4), pady=btn_pady)
         ctk.CTkButton(
-            bar, text="Replace Selected", width=130, height=28, font=FONT_NORMAL,
+            bar, text="Replace Selected", width=scaled(130), height=btn_h, font=FONT_NORMAL,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_selected,
-        ).pack(side="right", padx=4, pady=12)
+        ).pack(side="right", padx=scaled(4), pady=btn_pady)
         ctk.CTkButton(
-            bar, text="Replace All", width=100, height=28, font=FONT_BOLD,
+            bar, text="Replace All", width=scaled(100), height=btn_h, font=FONT_BOLD,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_all,
-        ).pack(side="right", padx=4, pady=12)
+        ).pack(side="right", padx=scaled(4), pady=btn_pady)
 
         self.update_idletasks()
-        w, h = 460, self.winfo_reqheight()
+        w, h = scaled(460), self.winfo_reqheight()
         owner = self.master
         x = owner.winfo_rootx() + (owner.winfo_width() - w) // 2
         y = owner.winfo_rooty() + (owner.winfo_height() - h) // 2
@@ -4074,7 +4107,7 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             return
         self._rename_frame.grid()
         self.update_idletasks()
-        w, h = 460, self.winfo_reqheight()
+        w, h = scaled(460), self.winfo_reqheight()
         owner = self.master
         x = owner.winfo_rootx() + (owner.winfo_width() - w) // 2
         y = owner.winfo_rooty() + (owner.winfo_height() - h) // 2
@@ -5804,18 +5837,18 @@ class MissingReqsPanel(ctk.CTkFrame):
         self._on_done = on_done or (lambda p: None)
 
         # Title bar
-        title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=36)
+        title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=scaled(36))
         title_bar.pack(fill="x")
         title_bar.pack_propagate(False)
         ctk.CTkLabel(
             title_bar, text=f"Missing requirements \u2014 {mod_name}",
             font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
-        ).pack(side="left", padx=12)
+        ).pack(side="left", padx=scaled(12))
         ctk.CTkButton(
             title_bar, text="\u2715", width=32, height=32, font=FONT_BOLD,
             fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._close,
-        ).pack(side="right", padx=4)
+        ).pack(side="right", padx=scaled(4))
         ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
         # Status label
@@ -5850,7 +5883,7 @@ class MissingReqsPanel(ctk.CTkFrame):
         self._canvas.bind("<MouseWheel>", _on_wheel)
 
         # Footer
-        footer = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=44)
+        footer = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=scaled(44))
         footer.pack(fill="x", side="bottom")
         footer.pack_propagate(False)
         ctk.CTkFrame(footer, fg_color=BORDER, height=1, corner_radius=0).pack(side="top", fill="x")
@@ -5860,7 +5893,7 @@ class MissingReqsPanel(ctk.CTkFrame):
             variable=self._ignore_var,
             font=FONT_SMALL, text_color=TEXT_MAIN,
             checkbox_width=18, checkbox_height=18,
-        ).pack(side="left", padx=12, pady=10)
+        ).pack(side="left", padx=scaled(12), pady=scaled(10))
         ctk.CTkButton(
             footer, text="Close", width=80, height=28,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
@@ -5894,10 +5927,11 @@ class MissingReqsPanel(ctk.CTkFrame):
 
     def _populate(self, missing_list):
         self._status_lbl.pack_forget()
-        ROW_H = 56
-        BTN_W = 70
-        VIEW_W = 56
-        NAME_PAD = 10
+        ROW_H = scaled(56)
+        BTN_W = scaled(70)
+        VIEW_W = scaled(56)
+        BTN_H = scaled(28)
+        NAME_PAD = scaled(10)
         canvas = self._canvas
         canvas_w = [600]
 
@@ -5914,26 +5948,26 @@ class MissingReqsPanel(ctk.CTkFrame):
             canvas.delete("all")
             row_bounds.clear()
             cw = canvas_w[0]
-            btn_left = cw - 2 * BTN_W - 16
-            name_max_px = max(btn_left - NAME_PAD - 8, 20)
+            btn_left = cw - 2 * BTN_W - scaled(16)
+            name_max_px = max(btn_left - NAME_PAD - scaled(8), 20)
             y = 0
             for i, req in enumerate(missing_list):
                 y_top = y
                 notes = (req.notes or "").strip() or "No notes"
                 title = req.mod_name + (" (External)" if req.is_external else "")
                 desc_h = min(16 * 2, 32)
-                row_h = max(ROW_H, 24 + desc_h + 12)
+                row_h = max(ROW_H, scaled(24 + desc_h + 12))
                 y_bot = y_top + row_h
                 row_bounds.append((y_top, y_bot))
                 bg = BG_ROW_ALT if i % 2 else BG_ROW
                 canvas.create_rectangle(0, y_top, cw, y_bot, fill=bg, outline="")
                 canvas.create_text(
-                    NAME_PAD, y_top + 12,
+                    NAME_PAD, y_top + scaled(12),
                     text=title[:80] + ("\u2026" if len(title) > 80 else ""),
                     anchor="w", font=("Segoe UI", _theme.FS11), fill=TEXT_MAIN,
                 )
                 canvas.create_text(
-                    NAME_PAD, y_top + 30,
+                    NAME_PAD, y_top + scaled(30),
                     text=notes[:120] + ("\u2026" if len(notes) > 120 else ""),
                     anchor="nw", width=name_max_px,
                     font=("Segoe UI", _theme.FS10), fill=TEXT_DIM,
@@ -5947,13 +5981,13 @@ class MissingReqsPanel(ctk.CTkFrame):
                 req = missing_list[idx]
                 url = req.url or f"https://www.nexusmods.com/{self._domain or req.game_domain}/mods/{req.mod_id}"
                 vb = ctk.CTkButton(
-                    self, text="View", width=VIEW_W, height=28,
+                    self, text="View", width=VIEW_W, height=BTN_H,
                     fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="#ffffff",
                     font=("Segoe UI", _theme.FS10), cursor="hand2",
                     command=lambda u=url: open_url(u),
                 )
                 ib = ctk.CTkButton(
-                    self, text="Install", width=BTN_W, height=28,
+                    self, text="Install", width=BTN_W, height=BTN_H,
                     fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="#ffffff",
                     font=("Segoe UI", _theme.FS10), cursor="hand2",
                     command=lambda r=req: self._on_install(r),
@@ -5963,10 +5997,10 @@ class MissingReqsPanel(ctk.CTkFrame):
             for idx in range(len(missing_list)):
                 y_top, y_bot = row_bounds[idx]
                 cy = y_top + (y_bot - y_top) // 2
-                vx = cw - BTN_W - 4 - BTN_W - 4
-                ix = cw - BTN_W - 4
-                canvas.create_window(vx, cy, window=view_btns[idx], width=VIEW_W, height=28, tags="btns")
-                canvas.create_window(ix, cy, window=install_btns[idx], width=BTN_W, height=28, tags="btns")
+                vx = cw - BTN_W - scaled(4) - BTN_W - scaled(4)
+                ix = cw - BTN_W - scaled(4)
+                canvas.create_window(vx, cy, window=view_btns[idx], width=VIEW_W, height=BTN_H, tags="btns")
+                canvas.create_window(ix, cy, window=install_btns[idx], width=BTN_W, height=BTN_H, tags="btns")
 
         _repaint()
 
