@@ -115,6 +115,7 @@ mkdir -p "$APP_DIR"
 
 cp "${PROJECT_DIR}/gui.py" "$APP_DIR/"
 cp "${PROJECT_DIR}/version.py" "$APP_DIR/"
+cp "${PROJECT_DIR}/../Changelog.txt" "$APP_DIR/" 2>/dev/null || true
 
 for dir in gui Utils Games LOOT Nexus icons wizards wrappers; do
     cp -r "${PROJECT_DIR}/${dir}" "$APP_DIR/${dir}"

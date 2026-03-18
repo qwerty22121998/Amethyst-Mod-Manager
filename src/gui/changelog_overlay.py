@@ -8,6 +8,8 @@ import tkinter as tk
 from pathlib import Path
 from typing import Callable, Optional
 
+import sys
+
 import customtkinter as ctk
 
 from gui.theme import (
@@ -21,8 +23,30 @@ from gui.theme import (
     FONT_MONO,
 )
 
-# Path to the changelog relative to this file: src/gui/ → src/../../Changelog.txt
-_CHANGELOG_PATH = Path(__file__).parent.parent.parent / "Changelog.txt"
+def _find_changelog() -> Path:
+    """Locate Changelog.txt relative to the app entry point, working for both
+    development (src/gui/changelog_overlay.py → ../../Changelog.txt) and
+    packaged builds (AppImage/flatpak where __main__ lives in usr/app/)."""
+    candidates = [
+        getattr(sys.modules.get("__main__"), "__file__", None),
+        __file__,
+        sys.argv[0] if sys.argv else None,
+    ]
+    for origin in candidates:
+        if not origin:
+            continue
+        base = Path(origin).resolve().parent
+        for path in (
+            base / "Changelog.txt",
+            base.parent / "Changelog.txt",
+            base.parent.parent / "Changelog.txt",
+        ):
+            if path.is_file():
+                return path
+    # Last resort: path relative to this file
+    return Path(__file__).parent.parent.parent / "Changelog.txt"
+
+_CHANGELOG_PATH = _find_changelog()
 
 
 class ChangelogOverlay(tk.Frame):
