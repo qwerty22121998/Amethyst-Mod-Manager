@@ -76,6 +76,7 @@ class TopBar(ctk.CTkFrame):
         self._show_download_custom_handler_fn = show_download_custom_handler_fn
         self._show_mewgenics_deploy_choice_fn = show_mewgenics_deploy_choice_fn
         self._two_rows: bool | None = None  # unknown until first configure
+        self._auto_deploy_in_progress: bool = False
 
         # ── Content area (above separator) ───────────────────────────────────
         # _row1 holds game/profile selectors; _row2 holds action buttons.
@@ -137,9 +138,9 @@ class TopBar(ctk.CTkFrame):
         ).pack(side="left", padx=(0, 2))
 
         ctk.CTkButton(
-            self._row1, text="−", width=32, height=32, font=FONT_BOLD,
+            self._row1, text="⚙", width=32, height=32, font=FONT_BOLD,
             fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
-            command=self._on_remove_profile
+            command=self._on_profile_settings
         ).pack(side="left", padx=(0, 4))
 
         initial_game_name = _initial_game
@@ -471,6 +472,36 @@ class TopBar(ctk.CTkFrame):
             self._reload_mod_panel()
 
         app._mod_panel.show_new_profile_bar(_on_create)
+
+    def _on_profile_settings(self):
+        game_name = self._game_var.get()
+        if game_name not in _gh._GAMES:
+            self._log("No game selected.")
+            return
+        app = self.winfo_toplevel()
+        if not hasattr(app, "_mod_panel"):
+            return
+
+        def _on_renamed(old_name: str, new_name: str):
+            profiles = _profiles_for_game(game_name)
+            self._profile_menu.configure(values=profiles)
+            if self._profile_var.get() == old_name:
+                self._profile_var.set(new_name)
+                self._reload_mod_panel()
+
+        def _on_removed(name: str):
+            profiles = _profiles_for_game(game_name)
+            self._profile_menu.configure(values=profiles)
+            if self._profile_var.get() == name:
+                self._profile_var.set(profiles[0])
+                self._reload_mod_panel()
+
+        app._mod_panel.show_profile_settings(
+            game_name=game_name,
+            current_profile=self._profile_var.get(),
+            on_profile_renamed=_on_renamed,
+            on_profile_removed=_on_removed,
+        )
 
     def _on_remove_profile(self):
         game_name = self._game_var.get()
@@ -971,8 +1002,22 @@ class TopBar(ctk.CTkFrame):
             self._log(f"Installing: {os.path.basename(path)}")
             app = self.winfo_toplevel()
             mod_panel = getattr(app, "_mod_panel", None)
-            install_mod_from_archive(path, app, self._log, game, mod_panel,
-                                     disable_extract=self._disable_extract)
+            status_bar = getattr(app, "_status", None)
+
+            def _extract_progress(done: int, total: int, phase: str | None = None):
+                if status_bar is not None:
+                    app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
+
+            def _worker():
+                try:
+                    install_mod_from_archive(path, app, self._log, game, mod_panel,
+                                             disable_extract=self._disable_extract,
+                                             progress_fn=_extract_progress)
+                finally:
+                    if status_bar is not None:
+                        app.after(0, status_bar.clear_progress)
+
+            threading.Thread(target=_worker, daemon=True).start()
 
         pick_file_mod_archive("Select Mod Archive", lambda p: self.after(0, lambda: _on_file_picked(p)))
 

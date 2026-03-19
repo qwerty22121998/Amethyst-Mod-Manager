@@ -156,13 +156,27 @@ def install_nexus_mod_from_entry(app, api, game, mod_panel, log_fn, entry,
                 except Exception:
                     _prebuilt = None
 
+                status_bar = getattr(app, "_status", None)
+
+                def _extract_progress(done: int, total: int, phase: str | None = None):
+                    if status_bar is not None:
+                        app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
+
                 def _cleanup():
                     delete_archive_and_sidecar(Path(_archive_path))
 
-                install_mod_from_archive(
-                    str(_archive_path), app, log_fn, game, mod_panel,
-                    prebuilt_meta=_prebuilt,
-                    on_installed=_cleanup)
+                def _install_worker():
+                    try:
+                        install_mod_from_archive(
+                            str(_archive_path), app, log_fn, game, mod_panel,
+                            prebuilt_meta=_prebuilt,
+                            on_installed=_cleanup,
+                            progress_fn=_extract_progress)
+                    finally:
+                        if status_bar is not None:
+                            app.after(0, status_bar.clear_progress)
+
+                threading.Thread(target=_install_worker, daemon=True).start()
             app.after(0, _install)
         else:
             app.after(0, lambda: (

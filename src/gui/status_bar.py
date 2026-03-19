@@ -224,29 +224,47 @@ class StatusBar(ctk.CTkFrame):
             return
         p._update_geometry()
 
-    def set_progress(self, done: int, total: int, phase: str | None = None) -> None:
-        """Show / update the deploy progress popup. Call from main thread only."""
+    def set_progress(self, done: int, total: int, phase: str | None = None,
+                     title: str = "Deploying") -> None:
+        """Show / update the deploy/extract progress popup. Call from main thread only."""
         root = self.winfo_toplevel()
         if self._progress_popup is None or not self._progress_popup.winfo_exists():
             self._progress_popup = CTkProgressPopup(
                 root,
-                title="Deploying",
+                title=title,
                 label=phase or "Working...",
                 message=f"{done} / {total}",
             )
             self._progress_popup.update_position = self._reposition_popup
             self._progress_popup._configure_bid = root.bind("<Configure>", self._reposition_popup, add="+")
             self._reposition_popup()
-        frac = done / total if total > 0 else 0
-        self._progress_popup.update_progress(frac)
-        self._progress_popup.update_message(f"{done} / {total}")
+        if total > 0:
+            pb = self._progress_popup.progressbar
+            if pb.cget("mode") == "indeterminate":
+                pb.stop()
+                pb.configure(mode="determinate")
+            frac = done / total
+            self._progress_popup.update_progress(frac)
+            self._progress_popup.update_message(f"{done} / {total}")
+        else:
+            # Indeterminate — animate the bar
+            pb = self._progress_popup.progressbar
+            if pb.cget("mode") != "indeterminate":
+                pb.configure(mode="indeterminate")
+                pb.start()
+            self._progress_popup.update_message("")
         if phase is not None:
             self._progress_popup.update_label(phase)
 
     def clear_progress(self) -> None:
-        """Close the deploy progress popup."""
+        """Close the deploy/extract progress popup."""
         p = getattr(self, "_progress_popup", None)
         if p is not None and p.winfo_exists():
+            try:
+                if p.progressbar.cget("mode") == "indeterminate":
+                    p.progressbar.stop()
+            except Exception:
+                pass
             bid = getattr(p, "_configure_bid", None)
             if bid is not None:
                 try:
@@ -426,53 +444,67 @@ class SettingsPanel(ctk.CTkFrame):
     def _on_clear_cache(self):
         import shutil, threading
         cache_dir = get_download_cache_dir()
-        size = _get_dir_size(cache_dir)
-        if size <= 0:
-            self._cache_status_lbl.configure(text="Cache is empty.", text_color=TEXT_DIM)
-            return
+        self._cache_status_lbl.configure(text="Calculating…", text_color=TEXT_DIM)
 
-        alert = CTkAlert(
-            state="warning",
-            title="Clear Download Cache",
-            body_text=(
-                f"Clear {_fmt_size(size)} of cached downloads?\n\n"
-                f"Location: {cache_dir}\n\n"
-                "This removes archives downloaded for collection installs. "
-                "They will be re-downloaded if you install collections again."
-            ),
-            btn1="Clear",
-            btn2="Cancel",
-            parent=self.winfo_toplevel(),
-            height=280,
-        )
-        if alert.get() != "Clear":
-            return
+        def _size_worker():
+            size = _get_dir_size(cache_dir)
+            self.after(0, lambda: _show_confirm(size))
 
-        def _worker():
-            cleared = 0
+        def _show_confirm(size):
             try:
-                for p in cache_dir.iterdir():
-                    try:
-                        if p.is_file():
-                            p.unlink(missing_ok=True)
-                            cleared += 1
-                        elif p.is_dir():
-                            shutil.rmtree(p, ignore_errors=True)
-                            cleared += 1
-                    except OSError:
-                        pass
-                self.after(0, lambda: _done(cleared))
-            except Exception as exc:
-                self.after(0, lambda: self._cache_status_lbl.configure(
-                    text=f"Failed: {exc}", text_color=TEXT_ERR))
+                if not self._cache_status_lbl.winfo_exists():
+                    return
+            except Exception:
+                return
+            self._cache_status_lbl.configure(text="", text_color=TEXT_DIM)
+            if size <= 0:
+                self._cache_status_lbl.configure(text="Cache is empty.", text_color=TEXT_DIM)
+                return
 
-        def _done(n):
-            self._cache_status_lbl.configure(
-                text=f"Cleared ({n} items).", text_color=TEXT_OK)
-            self._refresh_cache_size()
+            alert = CTkAlert(
+                state="warning",
+                title="Clear Download Cache",
+                body_text=(
+                    f"Clear {_fmt_size(size)} of cached downloads?\n\n"
+                    f"Location: {cache_dir}\n\n"
+                    "This removes archives downloaded for collection installs. "
+                    "They will be re-downloaded if you install collections again."
+                ),
+                btn1="Clear",
+                btn2="Cancel",
+                parent=self.winfo_toplevel(),
+                height=280,
+            )
+            if alert.get() != "Clear":
+                return
 
-        self._cache_status_lbl.configure(text="Clearing…", text_color=TEXT_DIM)
-        threading.Thread(target=_worker, daemon=True).start()
+            def _clear_worker():
+                cleared = 0
+                try:
+                    for p in cache_dir.iterdir():
+                        try:
+                            if p.is_file():
+                                p.unlink(missing_ok=True)
+                                cleared += 1
+                            elif p.is_dir():
+                                shutil.rmtree(p, ignore_errors=True)
+                                cleared += 1
+                        except OSError:
+                            pass
+                    self.after(0, lambda: _done(cleared))
+                except Exception as exc:
+                    self.after(0, lambda: self._cache_status_lbl.configure(
+                        text=f"Failed: {exc}", text_color=TEXT_ERR))
+
+            def _done(n):
+                self._cache_status_lbl.configure(
+                    text=f"Cleared ({n} items).", text_color=TEXT_OK)
+                self._refresh_cache_size()
+
+            self._cache_status_lbl.configure(text="Clearing…", text_color=TEXT_DIM)
+            threading.Thread(target=_clear_worker, daemon=True).start()
+
+        threading.Thread(target=_size_worker, daemon=True).start()
 
     def _on_close(self):
         self._on_done(self)

@@ -163,6 +163,16 @@ def get_vcredist_cache_path() -> Path:
     return path
 
 
+def get_dotnet_cache_dir() -> Path:
+    """Return the directory where .NET runtime installers are cached.
+
+    Result: ~/.config/AmethystModManager/dotnet/
+    """
+    path = get_config_dir() / "dotnet"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def get_custom_game_images_dir() -> Path:
     """Return the directory where downloaded custom game banner images are cached.
 

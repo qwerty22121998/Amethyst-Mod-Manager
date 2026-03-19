@@ -114,6 +114,7 @@ from Nexus.nexus_update_checker import check_for_updates
 
 
 _truncate_cache: dict[tuple, str] = {}
+_TRUNCATE_CACHE_MAX = 2000
 
 
 def _truncate_text_for_width(widget: tk.Widget, text: str, font: tuple, max_px: int) -> str:
@@ -129,21 +130,24 @@ def _truncate_text_for_width(widget: tk.Widget, text: str, font: tuple, max_px: 
         return text
     try:
         if widget.tk.call("font", "measure", font, text) <= max_px:
-            _truncate_cache[key] = text
-            return text
-        ellipsis = "…"
-        ellipsis_w = widget.tk.call("font", "measure", font, ellipsis)
-        out = text
-        while out and widget.tk.call("font", "measure", font, out) + ellipsis_w > max_px:
-            out = out[:-1]
-        result = out + ellipsis
-        _truncate_cache[key] = result
-        return result
+            result = text
+        else:
+            ellipsis = "…"
+            ellipsis_w = widget.tk.call("font", "measure", font, ellipsis)
+            out = text
+            while out and widget.tk.call("font", "measure", font, out) + ellipsis_w > max_px:
+                out = out[:-1]
+            result = out + ellipsis
     except Exception:
         max_chars = max(1, (max_px - 12) // 7)
         result = (text[: max_chars - 1] + "…") if len(text) > max_chars else text
-        _truncate_cache[key] = result
-        return result
+    if len(_truncate_cache) >= _TRUNCATE_CACHE_MAX:
+        # Evict oldest half to keep memory bounded
+        keep = _TRUNCATE_CACHE_MAX // 2
+        for k in list(_truncate_cache)[:keep]:
+            del _truncate_cache[k]
+    _truncate_cache[key] = result
+    return result
 
 
 def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
@@ -876,7 +880,6 @@ class ModListPanel(ctk.CTkFrame):
     def _reposition_all_dl_popups(self, *_) -> None:
         """Stack all live download popups (CTkToplevel) upward from the bottom-right."""
         root = self.winfo_toplevel()
-        root.update_idletasks()
         rx, ry = root.winfo_rootx(), root.winfo_rooty()
         rw, rh = root.winfo_width(), root.winfo_height()
         gap = scaled(8)
@@ -886,7 +889,6 @@ class ModListPanel(ctk.CTkFrame):
             p = slot.popup
             if not p.winfo_exists():
                 continue
-            p.update_idletasks()
             pw, ph = p.winfo_width(), p.winfo_height()
             y -= ph
             x = rx + rw - pw - margin
@@ -4702,25 +4704,24 @@ class ModListPanel(ctk.CTkFrame):
             )
 
             if result.success and result.file_path:
-                def _install():
-                    # Defer if a modal dialog (e.g. FOMOD wizard) currently has
-                    # the input grab — running install_mod_from_archive inside
-                    # wait_window's event loop causes the UI to freeze.
-                    try:
-                        if app.grab_current() is not None:
-                            app.after(500, _install)
-                            return
-                    except Exception:
-                        pass
-                    mod_panel.hide_download_progress(cancel=cancel_event)
-                    log_fn(f"Nexus: Installing update for {mod_name}...")
+                status_bar = getattr(app, "_status", None)
 
+                def _extract_progress(done: int, total: int, phase: str | None = None):
+                    if status_bar is not None:
+                        app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
+
+                def _install_worker():
                     def _cleanup():
                         delete_archive_and_sidecar(Path(result.file_path))
 
-                    install_mod_from_archive(
-                        str(result.file_path), app, log_fn, game, mod_panel,
-                        on_installed=_cleanup)
+                    try:
+                        install_mod_from_archive(
+                            str(result.file_path), app, log_fn, game, mod_panel,
+                            on_installed=_cleanup,
+                            progress_fn=_extract_progress)
+                    finally:
+                        if status_bar is not None:
+                            app.after(0, status_bar.clear_progress)
                     # Update metadata
                     try:
                         new_meta = build_meta_from_download(
@@ -4732,14 +4733,26 @@ class ModListPanel(ctk.CTkFrame):
                             file_info=file_info,
                         )
                         new_meta.has_update = False
-                        # Write to the original mod folder (user may have renamed)
                         write_meta(meta_path, new_meta)
                     except Exception as exc:
                         log_fn(f"Nexus: Warning — could not update metadata: {exc}")
-                    # Refresh update flags
-                    mod_panel._scan_update_flags()
-                    mod_panel._redraw()
+                    app.after(0, mod_panel._scan_update_flags)
+                    app.after(0, mod_panel._redraw)
                     log_fn(f"Nexus: {mod_name} updated successfully.")
+
+                def _install():
+                    # Defer if a modal dialog (e.g. FOMOD wizard) currently has
+                    # the input grab — spawning a thread inside wait_window's event
+                    # loop could cause deadlocks on the _interactive_dialog_lock.
+                    try:
+                        if app.grab_current() is not None:
+                            app.after(500, _install)
+                            return
+                    except Exception:
+                        pass
+                    mod_panel.hide_download_progress(cancel=cancel_event)
+                    log_fn(f"Nexus: Installing update for {mod_name}...")
+                    threading.Thread(target=_install_worker, daemon=True).start()
                 app.after(0, _install)
             else:
                 def _fail():
@@ -4761,9 +4774,23 @@ class ModListPanel(ctk.CTkFrame):
             self._log(f"Reinstall: Archive not found — {archive_path}")
             return
         self._log(f"Reinstalling '{mod_name}' from {archive_path.name}…")
-        install_mod_from_archive(
-            str(archive_path), app, self._log, game, mod_panel=self
-        )
+        status_bar = getattr(app, "_status", None)
+
+        def _extract_progress(done: int, total: int, phase: str | None = None):
+            if status_bar is not None:
+                app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
+
+        def _worker():
+            try:
+                install_mod_from_archive(
+                    str(archive_path), app, self._log, game, mod_panel=self,
+                    progress_fn=_extract_progress,
+                )
+            finally:
+                if status_bar is not None:
+                    app.after(0, status_bar.clear_progress)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _show_overwrites_dialog(self, mod_name: str) -> None:
         """Open the conflict detail dialog for a mod."""
@@ -5205,6 +5232,33 @@ class ModListPanel(ctk.CTkFrame):
                 pass
             self._nexus_browser_panel = None
 
+    def show_profile_settings(self, game_name: str, current_profile: str,
+                               on_profile_renamed=None, on_profile_removed=None):
+        """Show the Profile Settings overlay over the modlist panel."""
+        from gui.profile_settings_overlay import ProfileSettingsOverlay
+        self._close_profile_settings()
+        panel = ProfileSettingsOverlay(
+            self,
+            game_name=game_name,
+            current_profile=current_profile,
+            on_close=self._close_profile_settings,
+            on_profile_renamed=on_profile_renamed,
+            on_profile_removed=on_profile_removed,
+            log_fn=self._log,
+        )
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._profile_settings_panel = panel
+
+    def _close_profile_settings(self):
+        """Destroy the profile settings overlay."""
+        panel = getattr(self, "_profile_settings_panel", None)
+        if panel is not None:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+            self._profile_settings_panel = None
+
     def _on_changelog(self):
         """Show the Changelog overlay over the modlist panel."""
         self._close_changelog()
@@ -5263,9 +5317,7 @@ class ModListPanel(ctk.CTkFrame):
                             log_fn(f"  ⚠ {m.mod_name}: needs {names}{suffix}")
                     else:
                         log_fn("Nexus: All mod requirements satisfied.")
-                    self._scan_update_flags()
-                    self._scan_missing_reqs_flags()
-                    self._scan_endorsed_flags()
+                    self._scan_meta_flags()
                     self._redraw()
                 app.after(0, _done)
             except Exception as exc:

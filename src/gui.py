@@ -906,6 +906,17 @@ class App(ctk.CTk):
                 # refresh framework banners so the status reflects any changes
                 # made to the game root since the last reload.
                 self._plugin_panel._refresh_framework_banners()
+            # Auto deploy: if the game has auto_deploy enabled, trigger deploy
+            # after every successful filemap rebuild — but not if deploy itself
+            # triggered this rebuild (which would cause an infinite loop).
+            _auto_game = _GAMES.get(self._topbar._game_var.get())
+            if self._topbar._auto_deploy_in_progress:
+                # This rebuild was triggered by auto-deploy; clear the guard and stop.
+                self._topbar._auto_deploy_in_progress = False
+            elif (_auto_game and _auto_game.is_configured()
+                    and getattr(_auto_game, "auto_deploy", False)):
+                self._topbar._auto_deploy_in_progress = True
+                self._topbar._run_deploy(_auto_game, self._topbar._profile_var.get())
 
         self._mod_panel._on_filemap_rebuilt = _on_filemap_rebuilt
 

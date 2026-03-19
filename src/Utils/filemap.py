@@ -313,11 +313,11 @@ def read_mod_index(
     """
     global _index_cache
     path_str = str(index_path)
-    try:
-        mtime = index_path.stat().st_mtime
-    except OSError:
-        return None
     with _index_cache_lock:
+        try:
+            mtime = index_path.stat().st_mtime
+        except OSError:
+            return None
         if _index_cache is not None and _index_cache[0] == path_str and _index_cache[1] == mtime:
             return _index_cache[2]
     try:
@@ -574,6 +574,8 @@ def build_filemap(
     # filemap: lowercase_rel_path → (winning_mod_name,)
     filemap_winner: dict[str, str] = {}
     mod_files: dict[str, set[str]] = {}
+    # Track how many filemap slots each mod wins (for CONFLICT_FULL check below)
+    win_count: dict[str, int] = {}
 
     # Build per-mod excluded-file sets for fast lookup (lowercase rel_keys)
     _excluded: dict[str, set[str]] = excluded_mod_files or {}
@@ -587,7 +589,11 @@ def build_filemap(
         active_keys = set(files.keys()) if not exc else {k for k in files if k not in exc}
         mod_files[name] = active_keys
         for rel_key in active_keys:
+            prev = filemap_winner.get(rel_key)
+            if prev is not None:
+                win_count[prev] = win_count.get(prev, 0) - 1
             filemap_winner[rel_key] = name
+            win_count[name] = win_count.get(name, 0) + 1
 
     # Rebuild filemap using the normalised (canonical) rel_str for the destination
     # path so that all mods writing to the same logical folder produce files under
@@ -640,7 +646,7 @@ def build_filemap(
         has_loses = bool(overridden_by[name])
         if not keys or (not has_wins and not has_loses):
             conflict_map[name] = CONFLICT_NONE
-        elif has_loses and all(filemap[k][1] != name for k in keys):
+        elif has_loses and win_count.get(name, 0) <= 0:
             conflict_map[name] = CONFLICT_FULL
         elif has_wins and not has_loses:
             conflict_map[name] = CONFLICT_WINS

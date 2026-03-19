@@ -298,7 +298,10 @@ def find_heroic_game_info_by_exe(exe_name: str) -> "tuple[Path, Path | None, str
         for app_name, entry in installed.items():
             if not isinstance(entry, dict):
                 continue
-            if entry.get("executable", "").lower() != exe_lower:
+            stored_exe = entry.get("executable", "")
+            # Heroic may store a bare name or a relative/absolute path — compare only the filename
+            stored_bare = stored_exe.replace("\\", "/").rsplit("/", 1)[-1].lower()
+            if stored_bare != exe_lower:
                 continue
             install_path_raw = entry.get("install_path", "")
             if not install_path_raw:

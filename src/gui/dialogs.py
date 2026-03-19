@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
 import tkinter as tk
 import tkinter.messagebox
 import tkinter.ttk as ttk
@@ -46,7 +47,7 @@ from gui.theme import (
 )
 import gui.theme as _theme
 from gui.path_utils import _to_wine_path
-from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir, get_vcredist_cache_path, get_custom_games_dir
+from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir, get_vcredist_cache_path, get_dotnet_cache_dir, get_custom_games_dir
 from Utils.exe_args_builder import EXE_PROFILES
 from Utils.xdg import xdg_open, open_url
 
@@ -94,6 +95,24 @@ def _center_crop_to_square(img: "_PilImage.Image", size: int) -> "_PilImage.Imag
     x_off = (new_w - size) // 2
     y_off = (new_h - size) // 2
     return img.crop((x_off, y_off, x_off + size, y_off + size))
+
+
+# Session-level cache: game_id → PhotoImage (keyed by (game_id, pixel_size))
+_IMAGE_CACHE: dict[tuple[str, int], "_PilTk.PhotoImage"] = {}
+# Shared executor for async card image loading (daemon threads)
+_IMG_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="card_img")
+
+
+def _load_card_image_sync(img_path: Path, img_sq: int, px_size: int) -> "_PilImage.Image | None":
+    """Load, crop, and resize a game card image. Returns a PIL Image (not PhotoImage).
+    Safe to call from a worker thread; PhotoImage must be created on the main thread."""
+    try:
+        raw = _PilImage.open(img_path).convert("RGBA")
+        raw = _center_crop_to_square(raw, img_sq)
+        raw = raw.resize((px_size, px_size), _PilImage.Resampling.LANCZOS if hasattr(_PilImage, "Resampling") else _PilImage.LANCZOS)  # type: ignore
+        return raw.convert("RGB")
+    except Exception:
+        return None
 
 
 def ask_yes_no(title: str, message: str, parent=None) -> bool:
@@ -226,8 +245,8 @@ class _GamePickerDialog(ctk.CTkToplevel):
                 scroll._parent_canvas.yview_scroll(-50, "units")
             elif num == 5 or delta < 0:
                 scroll._parent_canvas.yview_scroll(50, "units")
-        self.bind_all("<Button-4>", _fwd_scroll)
-        self.bind_all("<Button-5>", _fwd_scroll)
+        self.bind_all("<Button-4>",   _fwd_scroll)
+        self.bind_all("<Button-5>",   _fwd_scroll)
         self.bind_all("<MouseWheel>", _fwd_scroll)
         self.bind("<Destroy>", lambda e: (
             self.unbind_all("<Button-4>"),
@@ -323,26 +342,56 @@ class _GamePickerDialog(ctk.CTkToplevel):
         img_frame.grid(row=0, column=0, padx=4, pady=(4, 0), sticky="n")
         img_frame.pack_propagate(False)
 
-        img_path = self._icons_dir / f"{game_id}.png"
-        if not img_path.is_file():
-            # Try lowercase fallback
-            img_path = self._icons_dir / f"{game_id.lower()}.png"
-        if not img_path.is_file():
-            # Fall back to cached custom-game image (downloaded from image_url)
-            custom_img = get_custom_game_images_dir() / f"{game_id}.png"
-            if custom_img.is_file():
-                img_path = custom_img
-        if img_path.is_file():
-            raw = _PilImage.open(img_path).convert("RGBA")
-            raw = _center_crop_to_square(raw, self._IMG_SQ)
-            raw = raw.resize((_img_sz, _img_sz), _PilImage.Resampling.LANCZOS if hasattr(_PilImage, "Resampling") else _PilImage.LANCZOS)  # type: ignore
-            photo = _PilTk.PhotoImage(raw.convert("RGB"))
-            self._img_refs.append(photo)
-            img_lbl = tk.Label(img_frame, image=photo, bg=BG_DEEP)
+        # Resolve the image path without loading it yet
+        img_path: Path | None = None
+        _candidate = self._icons_dir / f"{game_id}.png"
+        if not _candidate.is_file():
+            _candidate = self._icons_dir / f"{game_id.lower()}.png"
+        if _candidate.is_file():
+            img_path = _candidate
         else:
-            img_lbl = tk.Label(img_frame, text="?", font=("Segoe UI", 36, "bold"),
-                              fg=TEXT_DIM, bg=BG_DEEP)
-        img_lbl.place(relx=0.5, rely=0.5, anchor="center")
+            _custom = get_custom_game_images_dir() / f"{game_id}.png"
+            if _custom.is_file():
+                img_path = _custom
+
+        # Check session cache first — avoids re-decoding on subsequent opens
+        cache_key = (game_id, _img_sz)
+        cached = _IMAGE_CACHE.get(cache_key)
+        if cached is not None:
+            self._img_refs.append(cached)
+            img_lbl = tk.Label(img_frame, image=cached, bg=BG_DEEP)
+            img_lbl.place(relx=0.5, rely=0.5, anchor="center")
+        else:
+            # Show placeholder immediately; load image asynchronously
+            img_lbl = tk.Label(img_frame, text="", bg=BG_DEEP)
+            img_lbl.place(relx=0.5, rely=0.5, anchor="center")
+            if img_path is not None:
+                _path_snap = img_path
+                _img_sq = self._IMG_SQ
+
+                def _load_async(path=_path_snap, sq=_img_sq, sz=_img_sz, key=cache_key,
+                                lbl=img_lbl):
+                    pil_img = _load_card_image_sync(path, sq, sz)
+                    if pil_img is None:
+                        return
+
+                    def _apply(img=pil_img):
+                        try:
+                            if not lbl.winfo_exists():
+                                return
+                        except Exception:
+                            return
+                        photo = _PilTk.PhotoImage(img)
+                        _IMAGE_CACHE[key] = photo
+                        self._img_refs.append(photo)
+                        lbl.configure(image=photo)
+
+                    try:
+                        self.after(0, _apply)
+                    except Exception:
+                        pass
+
+                _IMG_EXECUTOR.submit(_load_async)
 
         # Register so live image updates can find this card
         self._img_labels[game_id] = (img_lbl, img_frame)
@@ -379,30 +428,38 @@ class _GamePickerDialog(ctk.CTkToplevel):
 
     def _on_image_downloaded(self, game_id: str) -> None:
         """Called (from a worker thread) when a missing banner image has been cached."""
-        def _apply():
-            entry = self._img_labels.get(game_id)
-            if entry is None:
+        img_path = get_custom_game_images_dir() / f"{game_id}.png"
+        if not img_path.is_file():
+            return
+        sz = scaled(self._IMG_SQ)
+        cache_key = (game_id, sz)
+
+        def _load_and_apply():
+            pil_img = _load_card_image_sync(img_path, self._IMG_SQ, sz)
+            if pil_img is None:
                 return
-            img_lbl, img_frame = entry
-            try:
-                if not img_lbl.winfo_exists():
+
+            def _apply(img=pil_img):
+                entry = self._img_labels.get(game_id)
+                if entry is None:
                     return
-            except Exception:
-                return
-            img_path = get_custom_game_images_dir() / f"{game_id}.png"
-            if not img_path.is_file():
-                return
-            try:
-                raw = _PilImage.open(img_path).convert("RGBA")
-                raw = _center_crop_to_square(raw, self._IMG_SQ)
-                sz = scaled(self._IMG_SQ)
-                raw = raw.resize((sz, sz), _PilImage.Resampling.LANCZOS if hasattr(_PilImage, "Resampling") else _PilImage.LANCZOS)  # type: ignore
-                photo = _PilTk.PhotoImage(raw.convert("RGB"))
+                img_lbl, _img_frame = entry
+                try:
+                    if not img_lbl.winfo_exists():
+                        return
+                except Exception:
+                    return
+                photo = _PilTk.PhotoImage(img)
+                _IMAGE_CACHE[cache_key] = photo
                 self._img_refs.append(photo)
                 img_lbl.configure(image=photo, text="")
+
+            try:
+                self.after(0, _apply)
             except Exception:
                 pass
-        self.after(0, _apply)
+
+        _IMG_EXECUTOR.submit(_load_and_apply)
 
     def _make_modal(self):
         self.grab_set()
@@ -476,7 +533,10 @@ class GamePickerPanel(tk.Frame):
         self._img_refs: list = []
         self._img_labels: dict = {}           # game_id → (img_lbl, img_frame)
         self._card_widgets: list = []          # list of card frames (in order)
+        self._card_names: list[str] = []       # parallel list: game name per card
         self._curr_cols: int = 4
+        self._show_installed_only = tk.BooleanVar(value=False)
+        self._installed_game_names: set[str] | None = None  # None = not yet scanned
 
         self._build()
 
@@ -571,9 +631,13 @@ class GamePickerPanel(tk.Frame):
                 self._canvas.xview_scroll(-50 if up else 50, "units")
             else:
                 self._canvas.yview_scroll(-50 if up else 50, "units")
-        self.bind_all("<Button-4>", _fwd_scroll)
-        self.bind_all("<Button-5>", _fwd_scroll)
-        self.bind_all("<MouseWheel>", _fwd_scroll)
+        self._fwd_scroll = _fwd_scroll
+        # Bind on the canvas and inner frame directly — scroll events are delivered
+        # to the widget under the cursor, not the ancestor frame.
+        for _w in (self._canvas, self._inner):
+            _w.bind("<Button-4>",   _fwd_scroll, add="+")
+            _w.bind("<Button-5>",   _fwd_scroll, add="+")
+            _w.bind("<MouseWheel>", _fwd_scroll, add="+")
         self.bind("<Destroy>", self._on_destroy)
 
         # Build cards
@@ -600,6 +664,13 @@ class GamePickerPanel(tk.Frame):
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_download_custom_handler,
         ).pack(side="left", padx=4, pady=10)
+        ctk.CTkCheckBox(
+            btn_bar, text="Show only installed",
+            variable=self._show_installed_only,
+            font=FONT_NORMAL, text_color=TEXT_MAIN,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            command=self._on_installed_filter_toggle,
+        ).pack(side="left", padx=(8, 4), pady=10)
 
     # ------------------------------------------------------------------
     # Card building
@@ -672,14 +743,18 @@ class GamePickerPanel(tk.Frame):
             command=_select,
         ).grid(row=2, column=0, padx=8, pady=(0, 8), sticky="ew")
 
-        # Hover highlight
+        # Hover highlight + forward scroll from every card widget to the canvas
         def _enter(e, c=card): c.configure(border_color=ACCENT)
         def _leave(e, c=card): c.configure(border_color=BORDER)
         for w in (card, img_frame, img_lbl):
             w.bind("<Enter>", _enter)
             w.bind("<Leave>", _leave)
+            w.bind("<Button-4>",   self._fwd_scroll, add="+")
+            w.bind("<Button-5>",   self._fwd_scroll, add="+")
+            w.bind("<MouseWheel>", self._fwd_scroll, add="+")
 
         self._card_widgets.append(card)
+        self._card_names.append(name)
 
     # ------------------------------------------------------------------
     # Scroll helpers
@@ -688,9 +763,10 @@ class GamePickerPanel(tk.Frame):
     def _on_destroy(self, event):
         if event.widget is self:
             try:
-                self.unbind_all("<Button-4>")
-                self.unbind_all("<Button-5>")
-                self.unbind_all("<MouseWheel>")
+                for _w in (self._canvas, self._inner):
+                    _w.unbind("<Button-4>")
+                    _w.unbind("<Button-5>")
+                    _w.unbind("<MouseWheel>")
             except Exception:
                 pass
 
@@ -736,15 +812,23 @@ class GamePickerPanel(tk.Frame):
         for c in range(cols):
             self._inner.grid_columnconfigure(c, weight=0, minsize=slot_w)
 
-        for idx, card in enumerate(self._card_widgets):
-            col = idx % cols
-            row = idx // cols
-            card.grid(
-                row=row, column=col,
-                padx=_pad,
-                pady=_pad,
-                sticky="n",
-            )
+        # Determine which cards are visible (installed filter)
+        installed = self._installed_game_names
+        filter_on = self._show_installed_only.get() and installed is not None
+        visible_idx = 0
+        for i, (card, name) in enumerate(zip(self._card_widgets, self._card_names)):
+            if filter_on and name not in installed:
+                card.grid_remove()
+            else:
+                col = visible_idx % cols
+                row = visible_idx // cols
+                card.grid(
+                    row=row, column=col,
+                    padx=_pad,
+                    pady=_pad,
+                    sticky="n",
+                )
+                visible_idx += 1
 
         # Ensure scroll region allows horizontal scroll when content exceeds viewport
         self._canvas.update_idletasks()
@@ -793,6 +877,70 @@ class GamePickerPanel(tk.Frame):
             pass
 
     # ------------------------------------------------------------------
+    # Installed-only filter
+    # ------------------------------------------------------------------
+
+    def _on_installed_filter_toggle(self):
+        if self._show_installed_only.get() and self._installed_game_names is None:
+            # First activation: kick off background scan, show spinner text on checkbox
+            import threading
+            t = threading.Thread(target=self._scan_installed_games, daemon=True)
+            t.start()
+        else:
+            self._regrid_cards()
+
+    def _scan_installed_games(self):
+        """Runs in a background thread. Detects installed games via Steam + Heroic."""
+        try:
+            from Utils.steam_finder import find_steam_libraries, find_game_by_steam_id, find_game_in_libraries
+            from Utils.heroic_finder import find_heroic_game, find_heroic_game_info_by_exe
+        except Exception:
+            self.after(0, lambda: self._show_installed_only.set(False))
+            return
+
+        libraries = find_steam_libraries()
+        installed: set[str] = set()
+
+        for name, game in self._games.items():
+            found = False
+            all_exe = [game.exe_name] + list(getattr(game, "exe_name_alts", []))
+            # Steam detection via app manifest (most reliable)
+            steam_id = getattr(game, "steam_id", "")
+            if steam_id and libraries:
+                if find_game_by_steam_id(libraries, steam_id, game.exe_name):
+                    found = True
+            # Steam detection via exe scan (fallback / alt editions)
+            if not found and libraries:
+                for exe in all_exe:
+                    if find_game_in_libraries(libraries, exe):
+                        found = True
+                        break
+            # Heroic detection via heroic_app_names (if handler declares them)
+            if not found:
+                heroic_names = getattr(game, "heroic_app_names", [])
+                if heroic_names and find_heroic_game(heroic_names):
+                    found = True
+            # Heroic detection via exe name scan (works even without heroic_app_names)
+            if not found:
+                for exe in all_exe:
+                    bare_exe = exe.replace("\\", "/").rsplit("/", 1)[-1]
+                    if find_heroic_game_info_by_exe(bare_exe):
+                        found = True
+                        break
+            if found:
+                installed.add(name)
+
+        def _apply():
+            self._installed_game_names = installed
+            if self._show_installed_only.get():
+                self._regrid_cards()
+
+        try:
+            self.after(0, _apply)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Custom game definition
     # ------------------------------------------------------------------
 
@@ -826,6 +974,7 @@ class GamePickerPanel(tk.Frame):
             except Exception:
                 pass
         self._card_widgets.clear()
+        self._card_names.clear()
         self._img_labels.clear()
         self._img_refs.clear()
         # Rebuild cards
@@ -1280,13 +1429,84 @@ class _PriorityDialog(ctk.CTkToplevel):
         self.destroy()
 
 
+class _DotNetVersionPanel(ctk.CTkFrame):
+    """Inline overlay panel that asks which .NET version to install."""
+
+    _VERSIONS = [
+        ("10 (latest)", "10"),
+        ("9", "9"),
+        ("8 (LTS)", "8"),
+        ("7", "7"),
+        ("6 (LTS)", "6"),
+        ("5", "5"),
+    ]
+
+    def __init__(self, parent, on_pick):
+        """``on_pick(version: str | None)`` is called when the user selects a
+        version or cancels (``None`` on cancel)."""
+        super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
+        self._on_pick = on_pick
+        self._build()
+
+    def _build(self):
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # Title bar
+        title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
+        title_bar.grid(row=0, column=0, sticky="ew")
+        title_bar.grid_propagate(False)
+        ctk.CTkLabel(
+            title_bar, text="Install .NET — select version",
+            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+        ).pack(side="left", padx=12, pady=8)
+        ctk.CTkButton(
+            title_bar, text="✕", width=32, height=32, font=FONT_BOLD,
+            fg_color="transparent", hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._cancel,
+        ).pack(side="right", padx=4, pady=4)
+
+        # Body
+        body = ctk.CTkFrame(self, fg_color=BG_DEEP)
+        body.grid(row=1, column=0, sticky="nsew")
+
+        inner = ctk.CTkFrame(body, fg_color="transparent")
+        inner.place(relx=0.5, rely=0.5, anchor="center")
+
+        btn_cfg = dict(width=260, height=34, font=FONT_BOLD,
+                       fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white")
+
+        for label, ver in self._VERSIONS:
+            ctk.CTkButton(
+                inner, text=f".NET {label}",
+                command=lambda v=ver: self._pick(v),
+                **btn_cfg,
+            ).pack(pady=(0, 6))
+
+    def _pick(self, version: str):
+        self._dismiss()
+        self._on_pick(version)
+
+    def _cancel(self):
+        self._dismiss()
+        self._on_pick(None)
+
+    def _dismiss(self):
+        try:
+            self.place_forget()
+            self.destroy()
+        except Exception:
+            pass
+
+
 class _ProtonToolsDialog(ctk.CTkToplevel):
     """Modal dialog with Proton-related tools for the selected game."""
 
     def __init__(self, parent, game, log_fn):
         super().__init__(parent, fg_color=BG_DEEP)
         self.title("Proton Tools")
-        self.geometry("380x420")
+        self.geometry("380x460")
         self.resizable(False, False)
         self.transient(parent)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -1342,6 +1562,10 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
 
         ctk.CTkButton(
             body, text="Install d3dcompiler_47", command=self._run_install_d3dcompiler_47, **btn_cfg
+        ).pack(pady=(0, 6))
+
+        ctk.CTkButton(
+            body, text="Install .NET …", command=self._run_install_dotnet, **btn_cfg
         ).pack(pady=(0, 6))
 
         ctk.CTkButton(
@@ -1619,6 +1843,58 @@ class _ProtonToolsDialog(ctk.CTkToplevel):
 
         self._close_and_run(lambda: threading.Thread(target=_launch, daemon=True).start())
 
+    def _run_install_dotnet(self):
+        proton_script, env = self._get_proton_env()
+        if proton_script is None:
+            return
+
+        log = self._log
+
+        def _on_version_picked(version):
+            if version is None:
+                return
+            cache_dir = get_dotnet_cache_dir()
+            filename = f"windowsdesktop-runtime-{version}-win-x64.exe"
+            cache_path = cache_dir / filename
+            _DOTNET_URLS = {
+                "5": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/5.0.17/windowsdesktop-runtime-5.0.17-win-x64.exe",
+                "6": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/6.0.36/windowsdesktop-runtime-6.0.36-win-x64.exe",
+                "7": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/7.0.20/windowsdesktop-runtime-7.0.20-win-x64.exe",
+                "8": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/8.0.25/windowsdesktop-runtime-8.0.25-win-x64.exe",
+                "9": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/9.0.14/windowsdesktop-runtime-9.0.14-win-x64.exe",
+                "10": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.5/windowsdesktop-runtime-10.0.5-win-x64.exe",
+            }
+            dl_url = _DOTNET_URLS.get(version)
+            if dl_url is None:
+                log(f"Proton Tools: no download URL known for .NET {version}.")
+                return
+
+            def _download_and_run():
+                import urllib.request
+                try:
+                    if not cache_path.is_file():
+                        log(f"Proton Tools: downloading .NET {version} runtime …")
+                        urllib.request.urlretrieve(dl_url, cache_path)
+                        log("Proton Tools: download complete.")
+                    else:
+                        log(f"Proton Tools: using cached .NET {version} installer.")
+                    log(f"Proton Tools: launching .NET {version} installer in game prefix …")
+                    subprocess.Popen(
+                        ["python3", str(proton_script), "run", str(cache_path)],
+                        env=env,
+                        cwd=cache_path.parent,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception as e:
+                    log(f"Proton Tools error (.NET {version}): {e}")
+
+            self._close_and_run(lambda: threading.Thread(target=_download_and_run, daemon=True).start())
+
+        panel = _DotNetVersionPanel(self, on_pick=_on_version_picked)
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        panel.lift()
+
     def _on_close(self):
         try:
             self.grab_release()
@@ -1673,6 +1949,7 @@ class ProtonToolsPanel(ctk.CTkFrame):
         ctk.CTkButton(inner, text="Browse prefix",                 command=self._browse_prefix,         **btn_cfg).pack(pady=(0, 6))
         ctk.CTkButton(inner, text="Install VC++ Redistributable",  command=self._run_install_vcredist, **btn_cfg).pack(pady=(0, 6))
         ctk.CTkButton(inner, text="Install d3dcompiler_47",         command=self._run_install_d3dcompiler_47, **btn_cfg).pack(pady=(0, 6))
+        ctk.CTkButton(inner, text="Install .NET …",                 command=self._run_install_dotnet,  **btn_cfg).pack(pady=(0, 6))
         ctk.CTkButton(inner, text="Open game folder",               command=self._open_game_folder,    **btn_cfg).pack(pady=(0, 6))
 
     def _get_proton_env(self):
@@ -1893,6 +2170,59 @@ class ProtonToolsPanel(ctk.CTkFrame):
                 log(f"Proton Tools error (d3dcompiler_47): {e}")
 
         self._close_and_run(lambda: threading.Thread(target=_launch, daemon=True).start())
+
+    def _run_install_dotnet(self):
+        proton_script, env = self._get_proton_env()
+        if proton_script is None:
+            return
+
+        log = self._log
+        container = self.master
+
+        def _on_version_picked(version):
+            if version is None:
+                return
+            cache_dir = get_dotnet_cache_dir()
+            filename = f"windowsdesktop-runtime-{version}-win-x64.exe"
+            cache_path = cache_dir / filename
+            _DOTNET_URLS = {
+                "5": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/5.0.17/windowsdesktop-runtime-5.0.17-win-x64.exe",
+                "6": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/6.0.36/windowsdesktop-runtime-6.0.36-win-x64.exe",
+                "7": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/7.0.20/windowsdesktop-runtime-7.0.20-win-x64.exe",
+                "8": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/8.0.25/windowsdesktop-runtime-8.0.25-win-x64.exe",
+                "9": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/9.0.14/windowsdesktop-runtime-9.0.14-win-x64.exe",
+                "10": "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.5/windowsdesktop-runtime-10.0.5-win-x64.exe",
+            }
+            dl_url = _DOTNET_URLS.get(version)
+            if dl_url is None:
+                log(f"Proton Tools: no download URL known for .NET {version}.")
+                return
+
+            def _download_and_run():
+                import urllib.request
+                try:
+                    if not cache_path.is_file():
+                        log(f"Proton Tools: downloading .NET {version} runtime …")
+                        urllib.request.urlretrieve(dl_url, cache_path)
+                        log("Proton Tools: download complete.")
+                    else:
+                        log(f"Proton Tools: using cached .NET {version} installer.")
+                    log(f"Proton Tools: launching .NET {version} installer in game prefix …")
+                    subprocess.Popen(
+                        ["python3", str(proton_script), "run", str(cache_path)],
+                        env=env,
+                        cwd=cache_path.parent,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception as e:
+                    log(f"Proton Tools error (.NET {version}): {e}")
+
+            self._close_and_run(lambda: threading.Thread(target=_download_and_run, daemon=True).start())
+
+        panel = _DotNetVersionPanel(container, on_pick=_on_version_picked)
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        panel.lift()
 
     def _on_close(self):
         self._on_done(self)

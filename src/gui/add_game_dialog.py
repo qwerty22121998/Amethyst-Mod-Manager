@@ -909,6 +909,7 @@ class ReconfigureGamePanel(ctk.CTkFrame):
         self.removed: bool = False
         self._deploy_mode_var = tk.StringVar(value="hardlink")
         self._symlink_plugins_var = tk.BooleanVar(value=False)
+        self._auto_deploy_var = tk.BooleanVar(value=False)
 
         self._build_ui()
 
@@ -935,6 +936,7 @@ class ReconfigureGamePanel(ctk.CTkFrame):
                 self._set_staging(game._staging_path, status="configured")
             else:
                 self._set_staging_text(str(game.get_mod_staging_path()))
+            self._auto_deploy_var.set(game.auto_deploy)
         else:
             self._start_scan()
             self._set_staging_text(str(game.get_mod_staging_path()))
@@ -1133,6 +1135,13 @@ class ReconfigureGamePanel(ctk.CTkFrame):
                 font=FONT_NORMAL, text_color=TEXT_MAIN,
                 fg_color=ACCENT, hover_color=ACCENT_HOV,
             ).grid(row=17, column=0, sticky="w", padx=16, pady=(0, 8))
+
+        ctk.CTkCheckBox(
+            body, text="Auto deploy (automatically deploy when a mod is enabled, disabled, or reordered)",
+            variable=self._auto_deploy_var,
+            font=FONT_NORMAL, text_color=TEXT_MAIN,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+        ).grid(row=18, column=0, sticky="w", padx=16, pady=(0, 8))
 
         # Button bar
         btn_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=52)
@@ -1571,6 +1580,7 @@ class ReconfigureGamePanel(ctk.CTkFrame):
             self._game.set_symlink_plugins(self._symlink_plugins_var.get())
         if hasattr(self._game, "set_staging_path"):
             self._game.set_staging_path(self._custom_staging)
+        self._game.auto_deploy = self._auto_deploy_var.get()
         _create_profile_structure(self._game)
         self.result = self._found_path
         self._on_done(self)

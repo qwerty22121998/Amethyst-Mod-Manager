@@ -76,6 +76,7 @@ def _read_prefix_runner(compat_data: Path) -> str:
 
 
 _truncate_cache: dict[tuple, str] = {}
+_TRUNCATE_CACHE_MAX = 2000
 
 def _truncate_plugin_name(widget: tk.Widget, text: str, font: tuple, max_px: int) -> str:
     """Return *text* truncated with '…' so it fits within *max_px* pixels.
@@ -85,17 +86,21 @@ def _truncate_plugin_name(widget: tk.Widget, text: str, font: tuple, max_px: int
     if cached is not None:
         return cached
     if max_px <= 0:
-        _truncate_cache[key] = ""
-        return ""
-    measure = widget.tk.call("font", "measure", font, text)
-    if measure <= max_px:
-        _truncate_cache[key] = text
-        return text
-    ellipsis = "…"
-    ellipsis_w = widget.tk.call("font", "measure", font, ellipsis)
-    while text and widget.tk.call("font", "measure", font, text) + ellipsis_w > max_px:
-        text = text[:-1]
-    result = text + ellipsis
+        result = ""
+    else:
+        measure = widget.tk.call("font", "measure", font, text)
+        if measure <= max_px:
+            result = text
+        else:
+            ellipsis = "…"
+            ellipsis_w = widget.tk.call("font", "measure", font, ellipsis)
+            while text and widget.tk.call("font", "measure", font, text) + ellipsis_w > max_px:
+                text = text[:-1]
+            result = text + ellipsis
+    if len(_truncate_cache) >= _TRUNCATE_CACHE_MAX:
+        keep = _TRUNCATE_CACHE_MAX // 2
+        for k in list(_truncate_cache)[:keep]:
+            del _truncate_cache[k]
     _truncate_cache[key] = result
     return result
 
@@ -377,132 +382,146 @@ class PluginPanel(ctk.CTkFrame):
         "papyruscompiler.exe",
     })
 
-    def refresh_exe_list(self):
-        """Scan for .exe and .bat files and populate the dropdown."""
-        exes: list[Path] = []
-        game_exe_path: Path | None = None
+    def refresh_exe_list(self, _select_after=None):
+        """Scan for .exe and .bat files in a background thread, then populate the dropdown.
 
-        if self._game is not None:
-            # 0. Add the game's own exe (exe_name resolved against game_path)
-            game_path = self._game.get_game_path() if hasattr(self._game, "get_game_path") else None
-            exe_name = self._game.exe_name if hasattr(self._game, "exe_name") else None
-            if game_path and exe_name:
-                candidate = game_path / exe_name
-                if candidate.is_file():
-                    game_exe_path = candidate
-                    exes.append(candidate)
+        _select_after: optional callable(exes) invoked on the main thread after the list is applied.
+        """
+        game = self._game
 
-            staging = (
-                self._game.get_effective_mod_staging_path()
-                if hasattr(self._game, "get_mod_staging_path") else None
-            )
+        def _worker():
+            exes: list[Path] = []
+            game_exe_path: Path | None = None
 
-            # Build the full set of exe names that must run from the Data folder:
-            # hardcoded set + any user-configured via the Configure dialog.
-            _lm_path = self._get_launch_mode_path()
-            _user_data_folder_exes: set[str] = set()
-            if _lm_path is not None and _lm_path.is_file():
-                try:
-                    _lm_data = json.loads(_lm_path.read_text(encoding="utf-8"))
-                    for _k, _v in _lm_data.items():
-                        if _k.startswith("__data_folder_") and _v:
-                            _user_data_folder_exes.add(_k[len("__data_folder_"):])
-                except (OSError, ValueError):
-                    pass
-            _all_data_folder_exes = self._DATA_FOLDER_ONLY_EXES | _user_data_folder_exes
+            if game is not None:
+                # 0. Add the game's own exe (exe_name resolved against game_path)
+                game_path = game.get_game_path() if hasattr(game, "get_game_path") else None
+                exe_name = game.exe_name if hasattr(game, "exe_name") else None
+                if game_path and exe_name:
+                    candidate = game_path / exe_name
+                    if candidate.is_file():
+                        game_exe_path = candidate
+                        exes.append(candidate)
 
-            # Build a set of Data-folder-only exe names that are actually present
-            # under game_path/Data/ (recursively) after deployment.
-            data_folder_deployed: set[str] = set()
-            if game_path is not None:
-                data_dir = game_path / "Data"
-                if data_dir.is_dir():
-                    for name in _all_data_folder_exes:
-                        for _ in data_dir.rglob(name):
-                            data_folder_deployed.add(name)
-                            break  # one hit is enough
-
-            # 1. Scan filemap for .exe/.bat files — resolve from the mods staging folder
-            if staging is not None and staging.is_dir():
-                filemap_path = staging.parent / "filemap.txt"
-                if filemap_path.is_file():
-                    try:
-                        for line in filemap_path.read_text(encoding="utf-8").splitlines():
-                            line = line.strip()
-                            if not line or "\t" not in line:
-                                continue
-                            rel_path, mod_name = line.split("\t", 1)
-                            rel = Path(rel_path)
-                            if rel.suffix.lower() not in self._EXE_SCAN_EXTENSIONS:
-                                continue
-                            # Exes that require the Data folder are only shown
-                            # if they have been deployed there.
-                            if rel.name in _all_data_folder_exes:
-                                if rel.name not in data_folder_deployed:
-                                    continue
-                            mod_dir = staging / mod_name
-                            candidate = mod_dir / rel_path
-                            if candidate.is_file():
-                                exes.append(candidate)
-                    except OSError:
-                        pass
-
-            # 2. Scan Profiles/<game>/Applications/ for .exe/.bat files (recursive),
-            #    excluding custom_exes.json entries (added separately below)
-            if staging is not None:
-                _shared_staging = (
-                    self._game.get_mod_staging_path()
-                    if hasattr(self._game, "get_mod_staging_path") else staging
+                staging = (
+                    game.get_effective_mod_staging_path()
+                    if hasattr(game, "get_mod_staging_path") else None
                 )
-                apps_dir = _shared_staging.parent / "Applications"
-                if apps_dir.is_dir():
-                    for ext in self._EXE_SCAN_EXTENSIONS:
-                        for entry in apps_dir.rglob(f"*{ext}"):
-                            if entry.is_file() and entry.name not in _all_data_folder_exes:
-                                if not any(part.startswith("prefix_") for part in entry.parts):
-                                    exes.append(entry)
 
-            # 3. Custom exes saved via "Add custom EXE" (arbitrary paths on disk)
-            for p in self._load_custom_exes():
-                if p not in exes:
-                    exes.append(p)
+                # Build the full set of exe names that must run from the Data folder:
+                # hardcoded set + any user-configured via the Configure dialog.
+                _lm_path = self._get_launch_mode_path()
+                _user_data_folder_exes: set[str] = set()
+                if _lm_path is not None and _lm_path.is_file():
+                    try:
+                        _lm_data = json.loads(_lm_path.read_text(encoding="utf-8"))
+                        for _k, _v in _lm_data.items():
+                            if _k.startswith("__data_folder_") and _v:
+                                _user_data_folder_exes.add(_k[len("__data_folder_"):])
+                    except (OSError, ValueError):
+                        pass
+                _all_data_folder_exes = self._DATA_FOLDER_ONLY_EXES | _user_data_folder_exes
 
-        # Sort: game exe first, then Applications/, then custom/filemap entries, alpha within each
-        apps_dir_root = None
-        if self._game and hasattr(self._game, "get_mod_staging_path"):
-            apps_dir_root = self._game.get_mod_staging_path().parent / "Applications"
+                # Build a set of Data-folder-only exe names that are actually present
+                # under game_path/Data/ (recursively) after deployment.
+                data_folder_deployed: set[str] = set()
+                if game_path is not None:
+                    data_dir = game_path / "Data"
+                    if data_dir.is_dir():
+                        for name in _all_data_folder_exes:
+                            for _ in data_dir.rglob(name):
+                                data_folder_deployed.add(name)
+                                break  # one hit is enough
 
-        custom_set = set(self._load_custom_exes())
+                # 1. Scan filemap for .exe/.bat files — resolve from the mods staging folder
+                if staging is not None and staging.is_dir():
+                    filemap_path = staging.parent / "filemap.txt"
+                    if filemap_path.is_file():
+                        try:
+                            for line in filemap_path.read_text(encoding="utf-8").splitlines():
+                                line = line.strip()
+                                if not line or "\t" not in line:
+                                    continue
+                                rel_path, mod_name = line.split("\t", 1)
+                                rel = Path(rel_path)
+                                if rel.suffix.lower() not in self._EXE_SCAN_EXTENSIONS:
+                                    continue
+                                # Exes that require the Data folder are only shown
+                                # if they have been deployed there.
+                                if rel.name in _all_data_folder_exes:
+                                    if rel.name not in data_folder_deployed:
+                                        continue
+                                mod_dir = staging / mod_name
+                                candidate = mod_dir / rel_path
+                                if candidate.is_file():
+                                    exes.append(candidate)
+                        except OSError:
+                            pass
 
-        def _sort_key(p: Path):
-            if game_exe_path is not None and p == game_exe_path:
-                return (0, p.name.lower())
-            in_apps = apps_dir_root is not None and p.is_relative_to(apps_dir_root)
-            if in_apps:
-                return (1, p.name.lower())
-            if p in custom_set:
-                return (2, p.name.lower())
-            return (3, p.name.lower())
+                # 2. Scan Profiles/<game>/Applications/ for .exe/.bat files (recursive),
+                #    excluding custom_exes.json entries (added separately below)
+                if staging is not None:
+                    _shared_staging = (
+                        game.get_mod_staging_path()
+                        if hasattr(game, "get_mod_staging_path") else staging
+                    )
+                    apps_dir = _shared_staging.parent / "Applications"
+                    if apps_dir.is_dir():
+                        for ext in self._EXE_SCAN_EXTENSIONS:
+                            for entry in apps_dir.rglob(f"*{ext}"):
+                                if entry.is_file() and entry.name not in _all_data_folder_exes:
+                                    if not any(part.startswith("prefix_") for part in entry.parts):
+                                        exes.append(entry)
 
-        exes.sort(key=_sort_key)
+                # 3. Custom exes saved via "Add custom EXE" (arbitrary paths on disk)
+                for p in self._load_custom_exes():
+                    if p not in exes:
+                        exes.append(p)
 
-        # Apply exe filter — built-in defaults combined with user-hidden list.
-        # Custom exes always bypass the filter.
-        _filtered_names = self._EXE_FILTER_DEFAULTS | {n.lower() for n in self._load_exe_filter()}
-        if _filtered_names:
-            exes = [
-                p for p in exes
-                if p.name.lower() not in _filtered_names or p in custom_set
-            ]
+            # Sort: game exe first, then Applications/, then custom/filemap entries, alpha within each
+            apps_dir_root = None
+            if game and hasattr(game, "get_mod_staging_path"):
+                apps_dir_root = game.get_mod_staging_path().parent / "Applications"
 
-        # Auto-populate exe_args.json with default prefixes for known tools
-        if self._game is not None and exes:
-            try:
-                from Utils.exe_args_builder import build_default_exe_args
-                build_default_exe_args(exes, self._game, log_fn=self._log)
-            except Exception:
-                pass
+            custom_set = set(self._load_custom_exes())
 
+            def _sort_key(p: Path):
+                if game_exe_path is not None and p == game_exe_path:
+                    return (0, p.name.lower())
+                in_apps = apps_dir_root is not None and p.is_relative_to(apps_dir_root)
+                if in_apps:
+                    return (1, p.name.lower())
+                if p in custom_set:
+                    return (2, p.name.lower())
+                return (3, p.name.lower())
+
+            exes.sort(key=_sort_key)
+
+            # Apply exe filter — built-in defaults combined with user-hidden list.
+            # Custom exes always bypass the filter.
+            _filtered_names = self._EXE_FILTER_DEFAULTS | {n.lower() for n in self._load_exe_filter()}
+            if _filtered_names:
+                exes = [
+                    p for p in exes
+                    if p.name.lower() not in _filtered_names or p in custom_set
+                ]
+
+            # Auto-populate exe_args.json with default prefixes for known tools
+            if game is not None and exes:
+                try:
+                    from Utils.exe_args_builder import build_default_exe_args
+                    build_default_exe_args(exes, game, log_fn=self._log)
+                except Exception:
+                    pass
+
+            self.after(0, lambda: self._apply_exe_list(exes, game_exe_path, _select_after))
+
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _apply_exe_list(self, exes: "list[Path]", game_exe_path: "Path | None",
+                        select_after=None) -> None:
+        """Apply exe scan results to the UI (must be called on the main thread)."""
         self._exe_paths = exes
         self._game_exe_path = game_exe_path
         labels = [p.name for p in exes] + [self._ADD_CUSTOM_SENTINEL]
@@ -514,6 +533,8 @@ class PluginPanel(ctk.CTkFrame):
             self._on_exe_selected(labels[0])
         else:
             self._exe_var.set("(no executables)")
+        if select_after is not None:
+            select_after(exes)
 
     def _on_exe_selected(self, name: str):
         """Called when the user selects an exe from the dropdown. Loads saved args if present."""
@@ -784,15 +805,14 @@ class PluginPanel(ctk.CTkFrame):
                 existing.append(chosen)
                 self._save_custom_exes(existing)
 
-            def _refresh_and_select():
-                self.refresh_exe_list()
-                for p in self._exe_paths:
+            def _after_refresh(exes):
+                for p in exes:
                     if p == chosen:
                         self._exe_var.set(p.name)
                         self._on_exe_selected(p.name)
                         break
 
-            self.after(0, _refresh_and_select)
+            self.after(0, lambda: self.refresh_exe_list(_select_after=_after_refresh))
 
         threading.Thread(
             target=_run_file_picker_worker,
@@ -2233,13 +2253,28 @@ class PluginPanel(ctk.CTkFrame):
         self._log(f"Installing: {os.path.basename(archive_path)}")
         mod_panel = getattr(app, "_mod_panel", None)
 
+        status_bar = getattr(app, "_status", None)
+
+        def _extract_progress(done: int, total: int, phase: str | None = None):
+            if status_bar is not None:
+                app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
+
         def _cleanup():
             self._downloads_panel.refresh()
 
         disable_extract = getattr(topbar, "_disable_extract", False)
-        install_mod_from_archive(archive_path, app, self._log, game, mod_panel,
-                                 on_installed=_cleanup,
-                                 disable_extract=disable_extract)
+
+        def _worker():
+            try:
+                install_mod_from_archive(archive_path, app, self._log, game, mod_panel,
+                                         on_installed=_cleanup,
+                                         disable_extract=disable_extract,
+                                         progress_fn=_extract_progress)
+            finally:
+                if status_bar is not None:
+                    app.after(0, status_bar.clear_progress)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _build_plugins_tab(self):
         tab = self._tabs.tab("Plugins")

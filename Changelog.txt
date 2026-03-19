@@ -1,3 +1,11 @@
+- v1.0.7
+- Replaced the remove profile button with a settings button where profiles can be renamed/removed
+- The Vramr wrapper was capped to 2 threads, It is now set to auto.
+- Added a install .net button to the proton window, This brings up a sub menu with a selection of versions.
+- Extraction of files during install now shows a progress bar.
+- py7zr was skipping files over 1gb to avoid out of memory issues. It now checks available memory and only skips if there is not enough.
+- Added a checkbox to the add game menu that shows only installed games
+- Added an auto deploy option to the Configure game window, When a mod is enabled/disabled/moved the modlist will autodeploy when enabled
 
 - v1.0.6
 - Logging into nexus now updates the api key on successful login instead of having to close the nexus settings window first

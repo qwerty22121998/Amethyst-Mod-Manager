@@ -262,7 +262,7 @@ def _optimise_one_texture(args: tuple) -> str:
             if needs_resize:
                 img = Image.open(dds_path)
                 resized = img.resize((target_w, target_h), Image.LANCZOS)
-                src_for_compress = tmp_path / "resized.png"
+                src_for_compress = tmp_path / "resized.tga"
                 resized.save(src_for_compress)
             else:
                 src_for_compress = dds_path
@@ -360,9 +360,12 @@ def _run_native_optimise(
     total = len(tasks)
     log_fn(f"  Processing {total} textures natively (Pillow + CompressonatorCLI)...")
 
-    # Use 2 parallel workers — Compressonator already uses multiple CPU threads
-    # internally, so more workers would cause contention on the Deck's 8 threads.
-    workers = min(2, total) if total > 0 else 1
+    # Scale workers to half the logical CPU count — Compressonator uses multiple
+    # threads internally per job, so half-cores avoids contention while keeping
+    # all physical cores busy. Floor at 1, cap at total tasks.
+    cpu_count = os.cpu_count() or 4
+    workers = min(max(1, cpu_count // 2), total) if total > 0 else 1
+    log_fn(f"  Using {workers} workers ({cpu_count} logical CPUs detected).")
     done = 0
     errors = 0
 

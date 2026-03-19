@@ -38,6 +38,32 @@ from Nexus.nexus_meta import write_meta, resolve_nexus_meta_for_archive
 from gui.ctk_components import CTkNotification
 
 
+def _show_replace_dialog_on_main(parent_window, mod_name: str,
+                                 result_holder: list, done_event: threading.Event) -> None:
+    """Run on main thread via after(0, ...). Shows _ReplaceModDialog, stores result, signals done."""
+    try:
+        dlg = _ReplaceModDialog(parent_window, mod_name)
+        parent_window.wait_window(dlg)
+        result_holder[0] = dlg
+    except Exception:
+        result_holder[0] = None
+    finally:
+        done_event.set()
+
+
+def _show_select_files_dialog_on_main(parent_window, file_list: list,
+                                      result_holder: list, done_event: threading.Event) -> None:
+    """Run on main thread via after(0, ...). Shows _SelectFilesDialog, stores result, signals done."""
+    try:
+        dlg = _SelectFilesDialog(parent_window, file_list)
+        parent_window.wait_window(dlg)
+        result_holder[0] = dlg
+    except Exception:
+        result_holder[0] = None
+    finally:
+        done_event.set()
+
+
 def _show_set_prefix_dialog_on_main(parent_window, required, file_list, mod_name: str,
                                     result_holder: list, done_event: threading.Event) -> None:
     """Run on main thread via after(0, ...). Shows _SetPrefixDialog, stores result, signals done."""
@@ -457,7 +483,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                              headless: bool = False,
                              preferred_name: str = "",
                              skip_index_update: bool = False,
-                             overwrite_existing: "bool | None" = None) -> None:
+                             overwrite_existing: "bool | None" = None,
+                             progress_fn=None) -> None:
     """
     Extract archive to a temp directory, detect FOMOD, run the wizard if
     present, then copy the resolved files into the game's mod staging area.
@@ -497,9 +524,17 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             dest_root = game.get_effective_mod_staging_path() / mod_name
             was_existing_mod = dest_root.exists()
             if dest_root.exists():
-                replace_dialog = _ReplaceModDialog(parent_window, mod_name)
-                parent_window.wait_window(replace_dialog)
-                if replace_dialog.result == "cancel":
+                if threading.current_thread() is threading.main_thread():
+                    replace_dialog = _ReplaceModDialog(parent_window, mod_name)
+                    parent_window.wait_window(replace_dialog)
+                else:
+                    with _interactive_dialog_lock:
+                        _rh: list = [None]
+                        _ev = threading.Event()
+                        parent_window.after(0, lambda: _show_replace_dialog_on_main(parent_window, mod_name, _rh, _ev))
+                        _ev.wait()
+                        replace_dialog = _rh[0]
+                if replace_dialog is None or replace_dialog.result == "cancel":
                     log_fn(f"Install cancelled — '{mod_name}' already exists.")
                     return
                 if replace_dialog.result == "rename":
@@ -583,7 +618,9 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             try:
                 log_fn("Extracting with zipfile…")
                 with zipfile.ZipFile(archive_path, "r") as z:
-                    for member in z.infolist():
+                    members = z.infolist()
+                    _total = len(members)
+                    for _i, member in enumerate(members):
                         # Normalise Windows backslash paths so Linux extractors
                         # create the correct folder hierarchy instead of treating
                         # the whole path as a single filename.
@@ -591,6 +628,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                         if fixed_name != member.filename:
                             member.filename = fixed_name
                         z.extract(member, extract_dir)
+                        if progress_fn is not None:
+                            progress_fn(_i + 1, _total, "Extracting…")
                 _zip_done = True
             except Exception as e_zip:
                 log_fn(f"zipfile failed ({e_zip}), retrying with 7z…")
@@ -599,6 +638,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 if _7z_bin:
                     shutil.rmtree(extract_dir, ignore_errors=True)
                     os.makedirs(extract_dir, exist_ok=True)
+                    if progress_fn is not None:
+                        progress_fn(0, 0, "Extracting…")
                     result = subprocess.run(
                         [_7z_bin, "x", archive_path, f"-o{extract_dir}", "-y"],
                         capture_output=True, text=True,
@@ -613,6 +654,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             if not _zip_done:
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 os.makedirs(extract_dir, exist_ok=True)
+                if progress_fn is not None:
+                    progress_fn(0, 0, "Extracting…")
                 result = subprocess.run(
                     ["bsdtar", "-xf", archive_path, "-C", extract_dir],
                     capture_output=True, text=True,
@@ -625,23 +668,39 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             _7z_done = False
             # py7zr decompresses entirely into RAM — skip it for large archives
             # to avoid OOM kills on memory-constrained systems (Steam Deck etc.).
-            _archive_mb = os.path.getsize(archive_path) / (1024 * 1024)
-            _py7zr_limit_mb = 200
-            if _archive_mb <= _py7zr_limit_mb:
+            _archive_bytes = os.path.getsize(archive_path)
+            _archive_mb = _archive_bytes / (1024 * 1024)
+            # Check available RAM; keep a 512 MB safety margin.
+            try:
+                with open("/proc/meminfo") as _mf:
+                    for _line in _mf:
+                        if _line.startswith("MemAvailable:"):
+                            _avail_mb = int(_line.split()[1]) / 1024
+                            break
+                    else:
+                        _avail_mb = 512.0  # fallback if not found
+            except OSError:
+                _avail_mb = 512.0
+            _py7zr_safe = _archive_mb < (_avail_mb - 512)
+            if _py7zr_safe:
                 try:
                     log_fn("Extracting with py7zr…")
+                    if progress_fn is not None:
+                        progress_fn(0, 0, "Extracting…")
                     with py7zr.SevenZipFile(archive_path, "r") as z:
                         z.extractall(extract_dir)
                     _7z_done = True
                 except Exception as e7:
                     log_fn(f"py7zr failed ({e7}), retrying with 7z…")
             else:
-                log_fn(f"Archive is {_archive_mb:.0f} MB — skipping py7zr to avoid OOM, using 7z binary…")
+                log_fn(f"Archive is {_archive_mb:.0f} MB, only {_avail_mb:.0f} MB RAM available — skipping py7zr to avoid OOM, using 7z binary…")
             if not _7z_done:
                 _7z_bin = shutil.which("7zzs") or shutil.which("7z") or shutil.which("7za")
                 if _7z_bin:
                     shutil.rmtree(extract_dir, ignore_errors=True)
                     os.makedirs(extract_dir, exist_ok=True)
+                    if progress_fn is not None:
+                        progress_fn(0, 0, "Extracting…")
                     result = subprocess.run(
                         [_7z_bin, "x", archive_path, f"-o{extract_dir}", "-y"],
                         capture_output=True, text=True,
@@ -656,6 +715,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             if not _7z_done:
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 os.makedirs(extract_dir, exist_ok=True)
+                if progress_fn is not None:
+                    progress_fn(0, 0, "Extracting…")
                 result = subprocess.run(
                     ["bsdtar", "-xf", archive_path, "-C", extract_dir],
                     capture_output=True, text=True,
@@ -666,7 +727,12 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         elif any(ext.endswith(s) for s in (".tar.gz", ".tar.bz2", ".tar.xz", ".tar")):
             log_fn("Extracting with tarfile…")
             with tarfile.open(archive_path, "r:*") as t:
-                t.extractall(extract_dir)
+                members = t.getmembers()
+                _total = len(members)
+                for _i, member in enumerate(members):
+                    t.extract(member, extract_dir, filter="fully_trusted")
+                    if progress_fn is not None:
+                        progress_fn(_i + 1, _total, "Extracting…")
         elif ext.endswith(".rar"):
             import subprocess
             _rar_done = False
@@ -674,7 +740,12 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 import rarfile
                 log_fn("Extracting with rarfile…")
                 with rarfile.RarFile(archive_path, "r") as r:
-                    r.extractall(extract_dir)
+                    members = r.infolist()
+                    _total = len(members)
+                    for _i, member in enumerate(members):
+                        r.extract(member, extract_dir)
+                        if progress_fn is not None:
+                            progress_fn(_i + 1, _total, "Extracting…")
                 _rar_done = True
             except ImportError:
                 pass
@@ -682,6 +753,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 log_fn(f"rarfile failed ({e_rar}), trying next method…")
             if not _rar_done and shutil.which("unrar"):
                 log_fn("Extracting with unrar…")
+                if progress_fn is not None:
+                    progress_fn(0, 0, "Extracting…")
                 result = subprocess.run(
                     ["unrar", "x", "-y", archive_path, extract_dir + os.sep],
                     capture_output=True, text=True,
@@ -692,6 +765,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                     _rar_done = True
             if not _rar_done:
                 log_fn("Extracting with bsdtar…")
+                if progress_fn is not None:
+                    progress_fn(0, 0, "Extracting…")
                 result = subprocess.run(
                     ["bsdtar", "-xf", archive_path, "-C", extract_dir],
                     capture_output=True, text=True,
@@ -1015,9 +1090,17 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 log_fn(f"Collection install: '{mod_name}' folder already exists — skipping re-install.")
                 return mod_name
             else:
-                replace_dialog = _ReplaceModDialog(parent_window, mod_name)
-                parent_window.wait_window(replace_dialog)
-                if replace_dialog.result == "cancel":
+                if threading.current_thread() is threading.main_thread():
+                    replace_dialog = _ReplaceModDialog(parent_window, mod_name)
+                    parent_window.wait_window(replace_dialog)
+                else:
+                    with _interactive_dialog_lock:
+                        _rh: list = [None]
+                        _ev = threading.Event()
+                        parent_window.after(0, lambda: _show_replace_dialog_on_main(parent_window, mod_name, _rh, _ev))
+                        _ev.wait()
+                        replace_dialog = _rh[0]
+                if replace_dialog is None or replace_dialog.result == "cancel":
                     log_fn(f"Install cancelled — '{mod_name}' already exists.")
                     return
                 if replace_dialog.result == "rename":
@@ -1030,9 +1113,17 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
 
         if replace_selected_only:
             expanded = _expand_folders_for_dialog(file_list, mod_root)
-            sel_dialog = _SelectFilesDialog(parent_window, expanded)
-            parent_window.wait_window(sel_dialog)
-            if sel_dialog.result is None:
+            if threading.current_thread() is threading.main_thread():
+                sel_dialog = _SelectFilesDialog(parent_window, expanded)
+                parent_window.wait_window(sel_dialog)
+            else:
+                with _interactive_dialog_lock:
+                    _rh2: list = [None]
+                    _ev2 = threading.Event()
+                    parent_window.after(0, lambda: _show_select_files_dialog_on_main(parent_window, expanded, _rh2, _ev2))
+                    _ev2.wait()
+                    sel_dialog = _rh2[0]
+            if sel_dialog is None or sel_dialog.result is None:
                 log_fn("Install cancelled — no files selected.")
                 return None
             chosen = sel_dialog.result

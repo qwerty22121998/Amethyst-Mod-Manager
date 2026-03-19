@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from Utils.config_paths import get_game_config_path
+from Utils.config_paths import get_game_config_dir, get_game_config_path
 
 if TYPE_CHECKING:
     from typing import Any
@@ -747,6 +747,40 @@ class BaseGame(ABC):
         works correctly when the AppImage filesystem is mounted read-only.
         """
         return get_game_config_path(self.name)
+
+    @property
+    def _settings_file(self) -> Path:
+        """Path to this game's game_settings.json in the user config directory.
+
+        Stores lightweight per-game UI preferences (e.g. auto_deploy) that are
+        independent of the path configuration persisted in paths.json.
+
+        Resolves to: ~/.config/AmethystModManager/games/<game_name>/game_settings.json
+        """
+        return get_game_config_dir(self.name) / "game_settings.json"
+
+    def _load_settings(self) -> dict:
+        try:
+            if self._settings_file.exists():
+                return json.loads(self._settings_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+        return {}
+
+    def _save_settings(self, data: dict) -> None:
+        self._settings_file.parent.mkdir(parents=True, exist_ok=True)
+        self._settings_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    @property
+    def auto_deploy(self) -> bool:
+        """If True, the manager will automatically deploy after every filemap rebuild."""
+        return self._load_settings().get("auto_deploy", False)
+
+    @auto_deploy.setter
+    def auto_deploy(self, value: bool) -> None:
+        data = self._load_settings()
+        data["auto_deploy"] = bool(value)
+        self._save_settings(data)
 
     def _migrate_old_config(self) -> None:
         """One-time migration: copy paths.json from the old in-tree location.
