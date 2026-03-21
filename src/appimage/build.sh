@@ -114,6 +114,7 @@ APP_DIR="${APPDIR}/usr/app"
 mkdir -p "$APP_DIR"
 
 cp "${PROJECT_DIR}/gui.py" "$APP_DIR/"
+cp "${PROJECT_DIR}/cli.py" "$APP_DIR/"
 cp "${PROJECT_DIR}/version.py" "$APP_DIR/"
 cp "${PROJECT_DIR}/../Changelog.txt" "$APP_DIR/" 2>/dev/null || true
 

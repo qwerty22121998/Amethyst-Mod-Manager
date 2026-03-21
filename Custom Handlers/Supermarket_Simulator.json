@@ -6,6 +6,7 @@
   "mod_data_path": "BepInEx/plugins",
   "steam_id": "2670630",
   "nexus_game_domain": "supermarketsimulator",
+  "editable": false,
   "image_url": "https://cdn2.steamgriddb.com/thumb/b074bde23201f4fa168329239ec3bfa2.jpg",
   "mod_folder_strip_prefixes": [
     "BepInEx",

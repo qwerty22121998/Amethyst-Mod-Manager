@@ -26,4 +26,13 @@ mkdir -p "$MOD_MANAGER_PROFILES_DIR"
 
 # Launch
 cd "${APPDIR}/usr/app"
-exec "${PYTHON_PREFIX}/bin/python3.13" gui.py "$@"
+
+# If the first argument is a known CLI subcommand, run the CLI instead of the GUI.
+case "$1" in
+    deploy|restore|list-games|list-profiles)
+        exec "${PYTHON_PREFIX}/bin/python3.13" cli.py "$@"
+        ;;
+    *)
+        exec "${PYTHON_PREFIX}/bin/python3.13" gui.py "$@"
+        ;;
+esac

@@ -49,9 +49,9 @@ import keyring
 import requests
 
 from Utils.app_log import app_log
-
 from Utils.config_paths import get_config_dir
 from version import __version__
+from Nexus.nexus_api import _KEYRING_SERVICE
 
 # ---------------------------------------------------------------------------
 # Keyring availability check — fall back to file storage when DBus is slow
@@ -183,7 +183,6 @@ CLIENT_SECRET: str = "d6bc16f2c28a5c5bc19261d458b70117"
 
 _SCOPES = "openid profile public"
 
-_KEYRING_SERVICE      = "AmethystModManager"
 _KEYRING_ACCESS_KEY   = "nexus_oauth_access_token"
 _KEYRING_REFRESH_KEY  = "nexus_oauth_refresh_token"
 _KEYRING_EXPIRES_KEY  = "nexus_oauth_expires_at"   # stored as str(float)

@@ -223,6 +223,15 @@ class NxmHandler:
         return base / "applications" / _DESKTOP_FILE_NAME
 
     @staticmethod
+    def _flatpak_desktop_path() -> Path:
+        """Flatpak exports dir — visible to Flatpak-sandboxed browsers."""
+        return (
+            Path.home()
+            / ".local" / "share" / "flatpak" / "exports" / "share"
+            / "applications" / _DESKTOP_FILE_NAME
+        )
+
+    @staticmethod
     def _get_exec_command() -> str:
         """
         Build the Exec= line for the .desktop file.
@@ -266,6 +275,17 @@ class NxmHandler:
         desktop_path.write_text(desktop_content)
         app_log(f"Wrote NXM .desktop file: {desktop_path}")
 
+        # Also write to Flatpak exports dir so Flatpak-sandboxed browsers can
+        # see the handler.  The dir may not exist if Flatpak isn't installed,
+        # so we only write if the parent already exists.
+        flatpak_path = cls._flatpak_desktop_path()
+        if flatpak_path.parent.exists():
+            try:
+                flatpak_path.write_text(desktop_content)
+                app_log(f"Wrote NXM .desktop file to Flatpak exports: {flatpak_path}")
+            except OSError as exc:
+                app_log(f"Could not write Flatpak .desktop file: {exc}")
+
         # Register as default handler
         if shutil.which("xdg-mime"):
             try:
@@ -276,22 +296,38 @@ class NxmHandler:
                     capture_output=True,
                 )
                 app_log("Registered nxm:// protocol handler via xdg-mime")
-                return True
             except subprocess.CalledProcessError as exc:
                 app_log(f"xdg-mime default failed: {exc.stderr}")
                 return False
+        else:
+            app_log("xdg-mime not found — nxm:// handler not registered")
+            return False
 
-        app_log("xdg-mime not found — nxm:// handler not registered")
-        return False
+        # Refresh the desktop database so Flatpak apps pick up the new entry.
+        if shutil.which("update-desktop-database"):
+            for db_dir in {desktop_path.parent, flatpak_path.parent}:
+                if db_dir.exists():
+                    try:
+                        subprocess.run(
+                            ["update-desktop-database", str(db_dir)],
+                            check=True,
+                            capture_output=True,
+                        )
+                        app_log(f"Updated desktop database: {db_dir}")
+                    except subprocess.CalledProcessError as exc:
+                        app_log(f"update-desktop-database failed for {db_dir}: {exc.stderr}")
+
+        return True
 
     @classmethod
     def unregister(cls) -> None:
-        """Remove the .desktop file (best-effort)."""
-        try:
-            cls._desktop_path().unlink(missing_ok=True)
-            app_log("Removed NXM .desktop file")
-        except OSError as exc:
-            app_log(f"Could not remove NXM .desktop: {exc}")
+        """Remove the .desktop file(s) (best-effort)."""
+        for path in (cls._desktop_path(), cls._flatpak_desktop_path()):
+            try:
+                path.unlink(missing_ok=True)
+                app_log(f"Removed NXM .desktop file: {path}")
+            except OSError as exc:
+                app_log(f"Could not remove NXM .desktop {path}: {exc}")
 
     @classmethod
     def is_registered(cls) -> bool:

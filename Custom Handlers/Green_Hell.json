@@ -6,6 +6,7 @@
   "mod_data_path": "BepInEx/plugins",
   "steam_id": "815370",
   "nexus_game_domain": "greenhell",
+  "editable": false,
   "image_url": "https://cdn2.steamgriddb.com/icon/44ed1c3ad932e297c528b1ed9d849eb2/32/256x256.png",
   "mod_folder_strip_prefixes": [
     "BepInEx",

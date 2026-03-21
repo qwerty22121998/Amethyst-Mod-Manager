@@ -298,7 +298,7 @@ class Fallout_3(BaseGame):
             target.unlink()
             _log("  Removed plugins.txt symlink from prefix.")
 
-    def _swap_launcher(self, log_fn) -> None:
+    def swap_launcher(self, log_fn) -> None:
         """Replace the game launcher with the script extender if present."""
         _log = log_fn
         if self._game_path is None:
@@ -386,9 +386,6 @@ class Fallout_3(BaseGame):
 
         _log("Step 4: Symlinking plugins.txt into Proton prefix ...")
         self._symlink_plugins_txt(profile, _log)
-
-        _log(f"Step 5: Swapping launcher for {self._script_extender_exe} ...")
-        self._swap_launcher(_log)
 
         _log(
             f"Deploy complete. "
@@ -823,11 +820,6 @@ class Starfield(Fallout_3):
         return "Starfield.exe"
 
     @property
-    def plugin_extensions(self) -> list[str]:
-        # .esp support was added alongside native plugins.txt support in patch 1.12.30 (June 2024).
-        return [".esp", ".esl", ".esm"]
-
-    @property
     def steam_id(self) -> str:
         return "1716740"
 
@@ -865,10 +857,6 @@ class Enderal(Fallout_3):
         return "Enderal Launcher.exe"
 
     @property
-    def plugin_extensions(self) -> list[str]:
-        return [".esp", ".esl", ".esm"]
-
-    @property
     def steam_id(self) -> str:
         return "933480"
 
@@ -903,10 +891,6 @@ class EnderalSE(Fallout_3):
     @property
     def exe_name(self) -> str:
         return "Enderal Launcher.exe"
-
-    @property
-    def plugin_extensions(self) -> list[str]:
-        return [".esp", ".esl", ".esm"]
 
     @property
     def steam_id(self) -> str:

@@ -6,6 +6,7 @@
   "mod_data_path": "Mods",
   "steam_id": "294100",
   "nexus_game_domain": "rimworld",
+  "editable": false,
   "image_url": "https://cdn2.steamgriddb.com/icon/243cf57526fe06ee06497f6e84ae75ff/32/1024x1024.png",
   "mod_folder_strip_prefixes": [
     "Mods"

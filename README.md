@@ -111,36 +111,9 @@ The manager supports many supporting applications used to mod games. Place the a
 
 The other xedit applications for the other games also work as well as the quickautoclean applications.
 
-## Running Windows Apps (e.g. SSEEdit)
+## WIKI
 
-1. Add the folder containing the exe to Applications folder in the game's staging path.
-2. Hit **Refresh** on the top right.
-3. You can configure the exe to change the arguments or the output mod/folder.
-4. Make sure your game is deployed before running so the application gets the right files.
-5. Hit **Run exe** — it will run using the Proton version and prefix the game uses.
-
-## VRAMr + BENDr + ParallaxR
-
-The following applications were tested and run in Ge-proton 10, It is recommended to have ge-proton 10 installed for these to work. These are very experimental and may not work as expected.
-
-VRAMr (v15.0723 and v16+) works by using an experimental python wrapper. Run VRAMr.bat (v15) or VRAMr.exe (v16+) from the dropdown. The optimisation step uses Compressonator for native Linux support, which is faster than running texconv through Wine/Proton.
-
-BENDr (Version 2.21) Uses a similar process
-
-ParallaxR (Version 2.0) Uses a similar process, Requires a patched ucrtbase.dll (This one can be quite slow, Not much I can do about that)
-
-> Why is ucrtbase.dll included? Wine is missing implementations for a few C99 math functions (crealf, cimagf, etc.) that HeightMap.exe requires. This is a copy of Wine's own ucrtbase.dll with those ~4 stub functions patched to work correctly.
-
-**Any issues with this should be reported here and not to the VRAMr devs, This is experimental and not an offical Linux release**
-
-- Place the Vramr/Bendr/ParallaxR folder in Skyrim Special Edition/Applications/ in the games staging folder
-- In Amethyst mod manager, run VRAMr.bat or VRAMr.exe (depending on version) / BENDr.bat / ParallaxR.bat **Make sure your modlist is deployed first**
-- It will run the wrapper script, Progress will be added to the log, A temporary wine prefix will be created in the home directory
-- Output will be placed as a mod in a VRAMr/BENDr/ParallaxR folder. Refresh the modlist and enable it. Delete it if you want to do another run but remember to deploy before you do so.
-
-## Planned Features
-
-- Adding/Installing collections directly into the manager as a new profile, This is currently working, See the wiki for screenshots of what this will look like. This Will be added once the application is registered with Nexus and some more polish is added.
+See the wiki page for a detailed guide on how to the use the mod manager and its functions
 
 ## Supporting the project
 

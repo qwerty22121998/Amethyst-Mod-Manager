@@ -27,10 +27,13 @@ from Nexus.nexus_download import delete_archive_and_sidecar
 from gui.theme import (
     BG_DEEP,
     BG_HEADER,
+    BG_PANEL,
     ACCENT,
     ACCENT_HOV,
     TEXT_MAIN,
+    TEXT_DIM,
     FONT_BOLD,
+    FONT_NORMAL,
 )
 
 
@@ -44,7 +47,7 @@ def install_nexus_mod_from_entry(app, api, game, mod_panel, log_fn, entry,
     mod_name = getattr(entry, "name", "") or f"Mod {mod_id}"
 
     if api is None:
-        log_fn(f"{label}: Set your Nexus API key first.")
+        log_fn(f"{label}: Login to Nexus first")
         return
     if game is None or not game.is_configured():
         log_fn(f"{label}: No configured game selected.")
@@ -247,6 +250,7 @@ class NexusBrowserOverlay(tk.Frame):
                 font=FONT_BOLD, command=self._on_open_settings,
             ).pack(side="left", padx=(12, 6), pady=5)
 
+
         ctk.CTkButton(
             toolbar, text="✕ Close", width=85, height=36,
             fg_color="#6b3333", hover_color="#8c4444", text_color="white",
@@ -323,6 +327,31 @@ class NexusBrowserOverlay(tk.Frame):
             install_fn=self._install_from_trending,
             get_installed_mod_ids=_get_installed_mod_ids,
         )
+
+        # If not logged in, show a centered login prompt over the content area
+        if self._api is None and self._on_open_settings:
+            login_frame = tk.Frame(content, bg=BG_DEEP)
+            login_frame.grid(row=0, column=0, sticky="nsew")
+            login_frame.grid_rowconfigure(0, weight=1)
+            login_frame.grid_columnconfigure(0, weight=1)
+
+            inner = ctk.CTkFrame(login_frame, fg_color=BG_PANEL, corner_radius=10)
+            inner.grid(row=0, column=0)
+
+            ctk.CTkLabel(
+                inner, text="You are not logged in to Nexus Mods.",
+                font=FONT_BOLD, text_color=TEXT_MAIN,
+            ).pack(padx=32, pady=(24, 6))
+            ctk.CTkLabel(
+                inner, text="Log in to browse, track, and download mods.",
+                font=FONT_NORMAL, text_color=TEXT_DIM,
+            ).pack(padx=32, pady=(0, 16))
+            ctk.CTkButton(
+                inner, text="Log in via Nexus Mods", width=200, height=36,
+                fg_color="#d98f40", hover_color="#e5a04d", text_color="white",
+                font=FONT_BOLD, command=self._on_open_settings,
+            ).pack(padx=32, pady=(0, 24))
+            return
 
         self._current_panel = "Browse"
         self._show_panel("Browse")

@@ -85,7 +85,7 @@ from Utils.plugins import (
 )
 from Utils.profile_state import read_disabled_plugins
 from Nexus.nexus_api import NexusAPI, load_api_key, clear_api_key
-from Nexus.nexus_oauth import load_oauth_tokens
+from Nexus.nexus_oauth import load_oauth_tokens, clear_oauth_tokens
 from Nexus.nexus_download import NexusDownloader, delete_archive_and_sidecar
 from Nexus.nxm_handler import NxmLink, NxmCollectionLink, NxmHandler, NxmIPC, parse_nxm_url
 from Nexus.nexus_meta import build_meta_from_download, write_meta
@@ -393,6 +393,9 @@ class App(ctk.CTk):
 
     def _init_nexus_api(self):
         """Load saved API key (or OAuth tokens) and initialise the Nexus client."""
+        # Reset any existing client so a stale session can't persist after credentials are cleared
+        self._nexus_api = None
+        self._nexus_downloader = None
         # Legacy personal API keys are no longer used — clear any stored key on startup
         clear_api_key()
         key = load_api_key()
@@ -411,26 +414,32 @@ class App(ctk.CTk):
         else:
             tokens = load_oauth_tokens()
             if tokens:
-                self._nexus_api = NexusAPI.from_oauth(tokens)
-                self._nexus_downloader = NexusDownloader(self._nexus_api)
-                def _fetch_user_oauth():
-                    try:
-                        import requests as _req
-                        resp = _req.get(
-                            "https://users.nexusmods.com/oauth/userinfo",
-                            headers={"Authorization": f"Bearer {tokens.access_token}"},
-                            timeout=15,
-                        )
-                        resp.raise_for_status()
-                        data = resp.json()
-                        self._nexus_username = (
-                            data.get("name") or data.get("preferred_username") or data.get("sub")
-                        )
-                    except Exception:
-                        self._nexus_username = None
-                    self.call_threadsafe(self._update_window_title)
-                threading.Thread(target=_fetch_user_oauth, daemon=True).start()
-            else:
+                try:
+                    self._nexus_api = NexusAPI.from_oauth(tokens)
+                except Exception as exc:
+                    app_log(f"OAuth token refresh failed, clearing saved tokens: {exc}")
+                    clear_oauth_tokens()
+                    tokens = None
+                if tokens:
+                    self._nexus_downloader = NexusDownloader(self._nexus_api)
+                    def _fetch_user_oauth():
+                        try:
+                            import requests as _req
+                            resp = _req.get(
+                                "https://users.nexusmods.com/oauth/userinfo",
+                                headers={"Authorization": f"Bearer {tokens.access_token}"},
+                                timeout=15,
+                            )
+                            resp.raise_for_status()
+                            data = resp.json()
+                            self._nexus_username = (
+                                data.get("name") or data.get("preferred_username") or data.get("sub")
+                            )
+                        except Exception:
+                            self._nexus_username = None
+                        self.call_threadsafe(self._update_window_title)
+                    threading.Thread(target=_fetch_user_oauth, daemon=True).start()
+            if not tokens and not self._nexus_api:
                 self._nexus_api = None
                 self._nexus_downloader = None
                 self._nexus_username = None

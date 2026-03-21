@@ -6,6 +6,7 @@
   "mod_data_path": "GAMEDATA/MODS",
   "steam_id": "275850",
   "nexus_game_domain": "nomanssky",
+  "editable": false,
   "image_url": "https://cdn2.steamgriddb.com/icon_thumb/179e48cecceef8d753185783917e5bd8.png",
   "mod_folder_strip_prefixes": [
     "GAMEDATA",

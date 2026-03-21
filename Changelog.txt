@@ -1,3 +1,12 @@
+- v1.0.8
+- Script extender swap now happens after the root folder has been deployed instead of before meaning script extenders now work with root folder building.
+- Added a basic CLI mode. See the github wiki for documentation
+- Fixed an invalid oauth refresh token crashing the application on startup
+- Fixed Nxm handler not working in a flatpak browser
+- Removed a lot of redundant code from a previous update.
+- Custom game handlers now show up with the other games in the add game menu.
+
+
 - v1.0.7
 - Replaced the remove profile button with a settings button where profiles can be renamed/removed
 - The Vramr wrapper was capped to 2 threads, It is now set to auto.

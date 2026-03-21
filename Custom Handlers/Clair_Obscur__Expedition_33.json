@@ -6,6 +6,7 @@
   "mod_data_path": "Sandfall",
   "steam_id": "1903340",
   "nexus_game_domain": "clairobscurexpedition33",
+  "editable": false,
   "image_url": "https://cdn2.steamgriddb.com/icon/5fd2e6e3604c8ebacfcc8104c8e24daa/32/256x256.png",
   "mod_folder_strip_prefixes": [
     "Sandfall"

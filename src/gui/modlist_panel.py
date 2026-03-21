@@ -73,7 +73,6 @@ from gui.install_mod import install_mod_from_archive, _show_mod_notification
 from gui.add_game_dialog import AddGameDialog, sync_modlist_with_mods_folder
 from gui.modlist_filters_dialog import ModlistFiltersDialog
 from gui.backup_restore_dialog import BackupRestoreDialog
-from gui.nexus_settings_dialog import NexusSettingsDialog
 
 from Utils.filemap import (
     build_filemap,
@@ -4186,7 +4185,7 @@ class ModListPanel(ctk.CTkFrame):
         app = self.winfo_toplevel()
         api = getattr(app, "_nexus_api", None)
         if api is None:
-            self._log("Nexus: Set your API key first.")
+            self._log("Nexus: Login to Nexus first.")
             return
         if self._modlist_path is None:
             self._log("No profile loaded.")
@@ -4250,7 +4249,7 @@ class ModListPanel(ctk.CTkFrame):
         app = self.winfo_toplevel()
         api = getattr(app, "_nexus_api", None)
         if api is None:
-            self._log("Nexus: Set your API key first.")
+            self._log("Nexus: Login to Nexus first.")
             return
         log_fn = self._log
 
@@ -4286,7 +4285,7 @@ class ModListPanel(ctk.CTkFrame):
         app = self.winfo_toplevel()
         api = getattr(app, "_nexus_api", None)
         if api is None:
-            self._log("Nexus: Set your API key first.")
+            self._log("Nexus: Login to Nexus first.")
             return
         log_fn = self._log
 
@@ -4321,7 +4320,7 @@ class ModListPanel(ctk.CTkFrame):
         """Show the mod files overlay so the user can pick which file to install."""
         app = self.winfo_toplevel()
         if getattr(app, "_nexus_api", None) is None:
-            self._log("Nexus: Set your API key first (Nexus button).")
+            self._log("Nexus: Login to Nexus first (Nexus button).")
             return
         if self._modlist_path is None:
             return
@@ -5042,7 +5041,7 @@ class ModListPanel(ctk.CTkFrame):
         """Check for mod updates and missing requirements in one background pass."""
         app = self.winfo_toplevel()
         if app._nexus_api is None:
-            self._log("Nexus: Set your API key first (Nexus button).")
+            self._log("Nexus: Login to Nexus first (Nexus button).")
             return
         game = self._game
         if game is None or not game.is_configured():

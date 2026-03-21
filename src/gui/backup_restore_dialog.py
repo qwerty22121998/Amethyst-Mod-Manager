@@ -18,15 +18,15 @@ from Utils.profile_backup import list_backups, restore_backup
 # ---------------------------------------------------------------------------
 # Colors / fonts (kept in sync with gui.py)
 # ---------------------------------------------------------------------------
-BG_DEEP = "#1a1a1a"
-BG_PANEL = "#252526"
+BG_DEEP   = "#1a1a1a"
+BG_PANEL  = "#252526"
 BG_HEADER = "#2a2a2b"
-BG_HOVER = "#3e3e40"
-ACCENT = "#0078d4"
+BG_HOVER  = "#3e3e40"
+ACCENT    = "#0078d4"
 ACCENT_HOV = "#1084d8"
 TEXT_MAIN = "#d4d4d4"
-TEXT_DIM = "#858585"
-BORDER = "#444444"
+TEXT_DIM  = "#858585"
+BORDER    = "#444444"
 
 def _font_normal(): return ("Segoe UI", _theme.FS12)
 def _font_bold():   return ("Segoe UI", _theme.FS12, "bold")
@@ -34,172 +34,10 @@ def _font_small():  return ("Segoe UI", _theme.FS10)
 def _font_list():   return ("Segoe UI", _theme.FS11)
 
 
-class BackupRestoreDialog(ctk.CTkToplevel):
-    """
-    Modal dialog listing backup slots (newest first). User selects one and
-    clicks Restore to overwrite modlist.txt (and plugins.txt if present) with
-    that backup, then on_restored() is called.
-    """
-
-    WIDTH = 380
-    HEIGHT = 400
-
-    def __init__(
-        self,
-        parent: tk.Widget,
-        profile_dir: Path,
-        profile_name: str = "default",
-        on_restored: Optional[Callable[[], None]] = None,
-    ):
-        super().__init__(parent, fg_color=BG_DEEP)
-        self.title(f"Restore backup — {profile_name}")
-        self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
-        self.resizable(True, True)
-        self.transient(parent)
-        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
-        self.after(100, self._make_modal)
-
-        self._profile_dir = profile_dir
-        self._profile_name = profile_name
-        self._on_restored = on_restored or (lambda: None)
-        self._backups = list_backups(profile_dir)  # [(datetime, backup_dir), ...]
-
-        self._build()
-
-    def _make_modal(self):
-        try:
-            self.grab_set()
-            self.focus_set()
-        except Exception:
-            pass
-
-    def _on_cancel(self):
-        try:
-            self.grab_release()
-        except Exception:
-            pass
-        self.destroy()
-
-    def _build(self):
-        pad = {"padx": 16, "pady": (8, 0)}
-
-        ctk.CTkLabel(
-            self,
-            text="Restore backup",
-            font=_font_bold(),
-            text_color=TEXT_MAIN,
-        ).pack(**pad, anchor="w")
-
-        ctk.CTkLabel(
-            self,
-            text="Select a backup to restore modlist and plugins for this profile.",
-            font=_font_small(),
-            text_color=TEXT_DIM,
-        ).pack(padx=16, pady=(2, 12), anchor="w")
-
-        ctk.CTkFrame(self, fg_color=BORDER, height=1).pack(fill="x", padx=16, pady=2)
-
-        # List area
-        list_frame = ctk.CTkFrame(self, fg_color="transparent")
-        list_frame.pack(padx=16, pady=8, fill="both", expand=True)
-
-        if not self._backups:
-            ctk.CTkLabel(
-                list_frame,
-                text="No backups yet. Backups are created when you deploy.",
-                font=_font_small(),
-                text_color=TEXT_DIM,
-                wraplength=320,
-            ).pack(pady=20)
-            self._restore_btn = None
-        else:
-            # Listbox: one line per backup, formatted timestamp (newest at top)
-            lb_frame = tk.Frame(list_frame, bg=BG_PANEL)
-            lb_frame.pack(fill="both", expand=True)
-
-            scrollbar = tk.Scrollbar(lb_frame, bg=BG_PANEL, troughcolor=BG_DEEP, activebackground=ACCENT)
-            scrollbar.pack(side="right", fill="y")
-
-            self._listbox = tk.Listbox(
-                lb_frame,
-                font=_font_list(),
-                bg=BG_PANEL,
-                fg=TEXT_MAIN,
-                selectbackground=ACCENT,
-                selectforeground="white",
-                activestyle="none",
-                highlightthickness=0,
-                borderwidth=0,
-                yscrollcommand=scrollbar.set,
-            )
-            self._listbox.pack(side="left", fill="both", expand=True)
-            scrollbar.config(command=self._listbox.yview)
-
-            self._display_strs: list[str] = []
-            for dt, _backup_dir in self._backups:
-                self._display_strs.append(dt.strftime("%Y-%m-%d %H:%M:%S"))
-                self._listbox.insert("end", self._display_strs[-1])
-
-            self._listbox.bind("<<ListboxSelect>>", self._on_selection)
-            self._listbox.selection_clear(0, "end")
-
-        # Buttons
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(8, 16))
-
-        self._restore_btn = ctk.CTkButton(
-            btn_frame,
-            text="Restore",
-            width=100,
-            height=32,
-            font=_font_bold(),
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOV,
-            text_color="white",
-            command=self._on_restore,
-            state="disabled",  # enabled when user selects a backup
-        )
-        self._restore_btn.pack(side="right", padx=(8, 0))
-
-        ctk.CTkButton(
-            btn_frame,
-            text="Cancel",
-            width=100,
-            height=32,
-            font=_font_normal(),
-            fg_color=BG_HEADER,
-            hover_color=BORDER,
-            text_color=TEXT_MAIN,
-            command=self._on_cancel,
-        ).pack(side="right")
-
-    def _on_selection(self, *_):
-        if hasattr(self, "_restore_btn") and self._restore_btn is not None and self._backups:
-            sel = self._listbox.curselection()
-            self._restore_btn.configure(state="normal" if sel else "disabled")
-
-    def _on_restore(self):
-        if not self._backups or not hasattr(self, "_listbox"):
-            return
-        sel = self._listbox.curselection()
-        if not sel:
-            return
-        idx = int(sel[0])
-        _dt, backup_dir = self._backups[idx]
-        restore_backup(self._profile_dir, backup_dir)
-        self._on_restored()
-        self._on_cancel()
-
-
-# ---------------------------------------------------------------------------
-# BackupRestorePanel — inline overlay version (no modal/toplevel)
-# ---------------------------------------------------------------------------
-
 class BackupRestorePanel(ctk.CTkFrame):
     """
-    Inline panel version of BackupRestoreDialog.
-    Overlays the plugin-panel container; uses on_done(panel) callback instead
-    of destroy/grab.
+    Inline panel listing backup slots. Overlays the plugin-panel container;
+    uses on_done(panel) callback to signal dismissal.
     """
 
     def __init__(
@@ -211,11 +49,11 @@ class BackupRestorePanel(ctk.CTkFrame):
         on_done: Optional[Callable] = None,
     ):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
-        self._profile_dir = profile_dir
+        self._profile_dir  = profile_dir
         self._profile_name = profile_name
-        self._on_restored = on_restored or (lambda: None)
-        self._on_done = on_done or (lambda p: None)
-        self._backups = list_backups(profile_dir)
+        self._on_restored  = on_restored or (lambda: None)
+        self._on_done      = on_done or (lambda p: None)
+        self._backups      = list_backups(profile_dir)
 
         # Title bar
         title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=scaled(36))
@@ -235,20 +73,15 @@ class BackupRestorePanel(ctk.CTkFrame):
         self._build()
 
     def _build(self):
-        pad = {"padx": 16, "pady": (8, 0)}
-
         ctk.CTkLabel(
-            self,
-            text="Restore backup",
-            font=_font_bold(),
-            text_color=TEXT_MAIN,
-        ).pack(**pad, anchor="w")
+            self, text="Restore backup",
+            font=_font_bold(), text_color=TEXT_MAIN,
+        ).pack(padx=16, pady=(8, 0), anchor="w")
 
         ctk.CTkLabel(
             self,
             text="Select a backup to restore modlist and plugins for this profile.",
-            font=_font_small(),
-            text_color=TEXT_DIM,
+            font=_font_small(), text_color=TEXT_DIM,
         ).pack(padx=16, pady=(2, 12), anchor="w")
 
         ctk.CTkFrame(self, fg_color=BORDER, height=1).pack(fill="x", padx=16, pady=2)
@@ -256,79 +89,54 @@ class BackupRestorePanel(ctk.CTkFrame):
         list_frame = ctk.CTkFrame(self, fg_color="transparent")
         list_frame.pack(padx=16, pady=8, fill="both", expand=True)
 
+        self._restore_btn = None
         if not self._backups:
             ctk.CTkLabel(
                 list_frame,
                 text="No backups yet. Backups are created when you deploy.",
-                font=_font_small(),
-                text_color=TEXT_DIM,
-                wraplength=320,
+                font=_font_small(), text_color=TEXT_DIM, wraplength=320,
             ).pack(pady=20)
-            self._restore_btn = None
         else:
             lb_frame = tk.Frame(list_frame, bg=BG_PANEL)
             lb_frame.pack(fill="both", expand=True)
 
-            scrollbar = tk.Scrollbar(
-                lb_frame, bg=BG_PANEL, troughcolor=BG_DEEP, activebackground=ACCENT
-            )
+            scrollbar = tk.Scrollbar(lb_frame, bg=BG_PANEL, troughcolor=BG_DEEP, activebackground=ACCENT)
             scrollbar.pack(side="right", fill="y")
 
             self._listbox = tk.Listbox(
                 lb_frame,
-                font=_font_list(),
-                bg=BG_PANEL,
-                fg=TEXT_MAIN,
-                selectbackground=ACCENT,
-                selectforeground="white",
-                activestyle="none",
-                highlightthickness=0,
-                borderwidth=0,
+                font=_font_list(), bg=BG_PANEL, fg=TEXT_MAIN,
+                selectbackground=ACCENT, selectforeground="white",
+                activestyle="none", highlightthickness=0, borderwidth=0,
                 yscrollcommand=scrollbar.set,
             )
             self._listbox.pack(side="left", fill="both", expand=True)
             scrollbar.config(command=self._listbox.yview)
 
-            self._display_strs: list[str] = []
-            for dt, _backup_dir in self._backups:
-                self._display_strs.append(dt.strftime("%Y-%m-%d %H:%M:%S"))
-                self._listbox.insert("end", self._display_strs[-1])
+            for dt, _ in self._backups:
+                self._listbox.insert("end", dt.strftime("%Y-%m-%d %H:%M:%S"))
 
             self._listbox.bind("<<ListboxSelect>>", self._on_selection)
             self._listbox.selection_clear(0, "end")
 
-        # Buttons
         btn_frame = ctk.CTkFrame(self, fg_color="transparent")
         btn_frame.pack(fill="x", padx=16, pady=(8, 16))
 
         self._restore_btn = ctk.CTkButton(
-            btn_frame,
-            text="Restore",
-            width=100,
-            height=32,
-            font=_font_bold(),
-            fg_color=ACCENT,
-            hover_color=ACCENT_HOV,
-            text_color="white",
-            command=self._on_restore,
-            state="disabled",
+            btn_frame, text="Restore", width=100, height=32,
+            font=_font_bold(), fg_color=ACCENT, hover_color=ACCENT_HOV,
+            text_color="white", command=self._on_restore, state="disabled",
         )
         self._restore_btn.pack(side="right", padx=(8, 0))
 
         ctk.CTkButton(
-            btn_frame,
-            text="Cancel",
-            width=100,
-            height=32,
-            font=_font_normal(),
-            fg_color=BG_HEADER,
-            hover_color=BORDER,
-            text_color=TEXT_MAIN,
-            command=self._on_cancel,
+            btn_frame, text="Cancel", width=100, height=32,
+            font=_font_normal(), fg_color=BG_HEADER, hover_color=BORDER,
+            text_color=TEXT_MAIN, command=self._on_cancel,
         ).pack(side="right")
 
     def _on_selection(self, *_):
-        if hasattr(self, "_restore_btn") and self._restore_btn is not None and self._backups:
+        if self._restore_btn is not None and self._backups:
             sel = self._listbox.curselection()
             self._restore_btn.configure(state="normal" if sel else "disabled")
 
@@ -338,11 +146,55 @@ class BackupRestorePanel(ctk.CTkFrame):
         sel = self._listbox.curselection()
         if not sel:
             return
-        idx = int(sel[0])
-        _dt, backup_dir = self._backups[idx]
+        _dt, backup_dir = self._backups[int(sel[0])]
         restore_backup(self._profile_dir, backup_dir)
         self._on_restored()
         self._on_done(self)
 
     def _on_cancel(self):
         self._on_done(self)
+
+
+class BackupRestoreDialog(ctk.CTkToplevel):
+    """Modal window wrapper around BackupRestorePanel."""
+
+    WIDTH  = 380
+    HEIGHT = 400
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        profile_dir: Path,
+        profile_name: str = "default",
+        on_restored: Optional[Callable[[], None]] = None,
+    ):
+        super().__init__(parent, fg_color=BG_DEEP)
+        self.title(f"Restore backup — {profile_name}")
+        self.geometry(f"{self.WIDTH}x{self.HEIGHT}")
+        self.resizable(True, True)
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self._on_panel_done)
+        self.after(100, self._make_modal)
+
+        self._panel = BackupRestorePanel(
+            self,
+            profile_dir=profile_dir,
+            profile_name=profile_name,
+            on_restored=on_restored,
+            on_done=lambda _: self._on_panel_done(),
+        )
+        self._panel.pack(fill="both", expand=True)
+
+    def _make_modal(self):
+        try:
+            self.grab_set()
+            self.focus_set()
+        except Exception:
+            pass
+
+    def _on_panel_done(self):
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()

@@ -7,28 +7,16 @@ Mod structure:
   Staged mods live in Profiles/Skyrim Special Edition/mods/
 """
 
-import json
 import shutil
 from pathlib import Path
 
-from Games.base_game import BaseGame, WizardTool
-from Utils.deploy import LinkMode, deploy_core, deploy_filemap, load_per_mod_strip_prefixes, load_separator_deploy_paths, expand_separator_deploy_paths, cleanup_custom_deploy_dirs, move_to_core, restore_data_core
+from Games.Bethesda.Bethesda import Fallout_3
+from Games.base_game import WizardTool
+from Utils.deploy import LinkMode, deploy_core, deploy_filemap, load_per_mod_strip_prefixes, load_separator_deploy_paths, expand_separator_deploy_paths, cleanup_custom_deploy_dirs, restore_data_core, move_to_core
 from Utils.modlist import read_modlist
-from Utils.config_paths import get_profiles_dir
-from Utils.steam_finder import find_prefix
-
-_PROFILES_DIR = get_profiles_dir()
 
 
-class SkyrimSE(BaseGame):
-
-    def __init__(self):
-        self._game_path: Path | None = None
-        self._prefix_path: Path | None = None
-        self._deploy_mode: LinkMode = LinkMode.HARDLINK
-        self._staging_path: Path | None = None
-        self._symlink_plugins: bool = False
-        self.load_paths()
+class SkyrimSE(Fallout_3):
 
     # -----------------------------------------------------------------------
     # Identity
@@ -47,63 +35,42 @@ class SkyrimSE(BaseGame):
         return "SkyrimSELauncher.exe"
 
     @property
-    def plugin_extensions(self) -> list[str]:
-        return [".esp", ".esl", ".esm"]
-
-    @property
     def steam_id(self) -> str:
         return "489830"
 
     @property
     def nexus_game_domain(self) -> str:
         return "skyrimspecialedition"
-    
-    @property
-    def mod_folder_strip_prefixes(self) -> set[str]:
-        return {"Data"}
-    
+
     @property
     def mod_required_top_level_folders(self) -> set[str]:
-        return {"skse",
-                "textures",
-                "sound",
-                "meshes",
-                "mcm",
-                "scripts",
-                "interface",
-                "lightplacer",
-                "mapmarkers",
-                "music",
-                "nemesis_engine",
-                "seq",
-                "shadercache",
-                "shaders",
-                "grass",
-                "video",
-                "source",
-                "calientetools",
-                "data",
-                }
+        # Skyrim SE subset — excludes Fallout-specific folders (f4se, materials,
+        # tools, nvse, config, menus, fose) that Fallout_3 includes.
+        return {
+            "skse",
+            "textures",
+            "sound",
+            "meshes",
+            "mcm",
+            "scripts",
+            "interface",
+            "lightplacer",
+            "mapmarkers",
+            "music",
+            "nemesis_engine",
+            "seq",
+            "shadercache",
+            "shaders",
+            "grass",
+            "video",
+            "source",
+            "calientetools",
+            "data",
+        }
 
-    @property
-    def mod_auto_strip_until_required(self) -> bool:
-        return True
-
-    @property
-    def mod_required_file_types(self) -> set[str]:
-        return {".esp", ".esl", ".esm",".ini"}
-
-    @property
-    def mod_install_as_is_if_no_match(self) -> bool:
-        return True
-    
     @property
     def mod_folder_strip_prefixes_post(self) -> set[str]:
         return {"data"}
-
-    @property
-    def loot_sort_enabled(self) -> bool:
-        return True
 
     @property
     def loot_game_type(self) -> str:
@@ -133,113 +100,6 @@ class SkyrimSE(BaseGame):
         ]
 
     # -----------------------------------------------------------------------
-    # Paths
-    # -----------------------------------------------------------------------
-
-    def get_game_path(self) -> Path | None:
-        return self._game_path
-
-    def get_mod_data_path(self) -> Path | None:
-        """Mods go into the Data/ subfolder of the Skyrim root directory."""
-        if self._game_path is None:
-            return None
-        return self._game_path / "Data"
-
-    def get_mod_staging_path(self) -> Path:
-        if self._staging_path is not None:
-            return self._staging_path / "mods"
-        return _PROFILES_DIR / self.name / "mods"
-
-    # -----------------------------------------------------------------------
-    # Configuration persistence
-    # -----------------------------------------------------------------------
-
-    def load_paths(self) -> bool:
-        self._migrate_old_config()
-        if not self._paths_file.exists():
-            self._game_path = None
-            self._prefix_path = None
-            self._staging_path = None
-            return False
-        try:
-            data = json.loads(self._paths_file.read_text(encoding="utf-8"))
-            raw = data.get("game_path", "")
-            if raw:
-                self._game_path = Path(raw)
-            raw_pfx = data.get("prefix_path", "")
-            if raw_pfx:
-                self._prefix_path = Path(raw_pfx)
-            raw_mode = data.get("deploy_mode", "hardlink")
-            self._deploy_mode = {
-                "symlink": LinkMode.SYMLINK,
-                "copy":    LinkMode.COPY,
-            }.get(raw_mode, LinkMode.HARDLINK)
-            raw_staging = data.get("staging_path", "")
-            if raw_staging:
-                self._staging_path = Path(raw_staging)
-            self._symlink_plugins = data.get("symlink_plugins", False)
-            self._validate_staging()
-            # If prefix is missing or no longer valid, scan for it and persist
-            if not self._prefix_path or not self._prefix_path.is_dir():
-                found = find_prefix(self.steam_id)
-                if found:
-                    self._prefix_path = found
-                    self.save_paths()
-            return bool(self._game_path)
-        except (json.JSONDecodeError, OSError):
-            pass
-        self._game_path = None
-        self._prefix_path = None
-        return False
-
-    def save_paths(self) -> None:
-        self._paths_file.parent.mkdir(parents=True, exist_ok=True)
-        mode_str = {
-            LinkMode.SYMLINK: "symlink",
-            LinkMode.COPY:    "copy",
-        }.get(self._deploy_mode, "hardlink")
-        data = {
-            "game_path":       str(self._game_path)    if self._game_path    else "",
-            "prefix_path":     str(self._prefix_path)  if self._prefix_path  else "",
-            "deploy_mode":     mode_str,
-            "staging_path":    str(self._staging_path) if self._staging_path else "",
-            "symlink_plugins": self._symlink_plugins,
-        }
-        self._paths_file.write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
-
-    def get_prefix_path(self) -> Path | None:
-        return self._prefix_path
-
-    def get_deploy_mode(self) -> LinkMode:
-        return self._deploy_mode
-
-    def set_deploy_mode(self, mode: LinkMode) -> None:
-        self._deploy_mode = mode
-        self.save_paths()
-
-    @property
-    def symlink_plugins(self) -> bool:
-        return self._symlink_plugins
-
-    def set_symlink_plugins(self, value: bool) -> None:
-        self._symlink_plugins = value
-        self.save_paths()
-
-    def set_prefix_path(self, path: Path | str | None) -> None:
-        self._prefix_path = Path(path) if path else None
-        self.save_paths()
-
-    def set_staging_path(self, path: "Path | str | None") -> None:
-        self._staging_path = Path(path) if path else None
-        self.save_paths()
-
-    def set_game_path(self, path: Path | str | None) -> None:
-        self._game_path = Path(path) if path else None
-        self.save_paths()
-
-    # -----------------------------------------------------------------------
     # Deployment
     # -----------------------------------------------------------------------
 
@@ -251,43 +111,11 @@ class SkyrimSE(BaseGame):
     # from writing to it.  We round-trip it through the overwrite folder.
     _SHADER_CACHE = "ShaderCache"
 
-    def _plugins_txt_target(self) -> Path | None:
-        """Return the in-prefix path where Skyrim SE expects plugins.txt."""
-        if self._prefix_path is None:
-            return None
-        return self._prefix_path / self._APPDATA_SUBPATH / "plugins.txt"
+    @property
+    def _script_extender_exe(self) -> str:
+        return "skse64_loader.exe"
 
-    def _symlink_plugins_txt(self, profile: str, log_fn) -> None:
-        """Symlink the active profile's plugins.txt into the Proton prefix."""
-        _log = log_fn
-        target = self._plugins_txt_target()
-        if target is None:
-            _log("  WARN: Prefix path not set — skipping plugins.txt symlink.")
-            return
-
-        source = self.get_profile_root() / "profiles" / profile / "plugins.txt"
-        if not source.is_file():
-            _log(f"  WARN: plugins.txt not found at {source} — skipping symlink.")
-            return
-
-        if target.exists() or target.is_symlink():
-            target.unlink()
-
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.symlink_to(source)
-        _log(f"  Linked plugins.txt → {target}")
-
-    def _remove_plugins_txt_symlink(self, log_fn) -> None:
-        """Remove the plugins.txt symlink from the Proton prefix on restore."""
-        _log = log_fn
-        target = self._plugins_txt_target()
-        if target is None:
-            return
-        if target.is_symlink():
-            target.unlink()
-            _log("  Removed plugins.txt symlink from prefix.")
-
-    def _swap_launcher(self, log_fn) -> None:
+    def swap_launcher(self, log_fn) -> None:
         """Replace SkyrimSELauncher.exe with skse64_loader.exe if present."""
         _log = log_fn
         if self._game_path is None:
@@ -411,9 +239,6 @@ class SkyrimSE(BaseGame):
 
         _log("Step 6: Symlinking plugins.txt into Proton prefix ...")
         self._symlink_plugins_txt(profile, _log)
-
-        _log("Step 7: Swapping launcher for SKSE ...")
-        self._swap_launcher(_log)
 
         _log(
             f"Deploy complete. "

@@ -1,0 +1,46 @@
+{
+  "name": "Schedule 1",
+  "game_id": "Schedule_1",
+  "exe_name": "Schedule I.exe",
+  "deploy_type": "standard",
+  "mod_data_path": "Mods",
+  "steam_id": "3164500",
+  "nexus_game_domain": "schedule1",
+  "editable": false,
+  "image_url": "https://cdn2.steamgriddb.com/icon_thumb/60a52d6250f2541bd7a002be5c30ab40.png",
+  "mod_folder_strip_prefixes": [
+    "mods",
+    "Mods"
+  ],
+  "conflict_ignore_filenames": [
+    "*.md",
+    "manifest.json"
+  ],
+  "mod_folder_strip_prefixes_post": [],
+  "mod_install_prefix": "",
+  "mod_required_top_level_folders": [],
+  "mod_auto_strip_until_required": true,
+  "mod_required_file_types": [
+    ".dll"
+  ],
+  "mod_install_as_is_if_no_match": true,
+  "restore_before_deploy": true,
+  "normalize_folder_case": true,
+  "wine_dll_overrides": {
+    "version": "native,builtin"
+  },
+  "custom_routing_rules": [
+    {
+      "dest": "",
+      "folders": [
+        "plugins"
+      ]
+    },
+    {
+      "dest": "",
+      "folders": [
+        "userdata"
+      ]
+    }
+  ]
+}

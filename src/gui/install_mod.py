@@ -38,62 +38,51 @@ from Nexus.nexus_meta import write_meta, resolve_nexus_meta_for_archive
 from gui.ctk_components import CTkNotification
 
 
-def _show_replace_dialog_on_main(parent_window, mod_name: str,
-                                 result_holder: list, done_event: threading.Event) -> None:
-    """Run on main thread via after(0, ...). Shows _ReplaceModDialog, stores result, signals done."""
+def _run_dialog_on_main(parent_window, factory, result_holder: list,
+                        done_event: threading.Event, result_attr: str | None = None) -> None:
+    """Run on main thread via after(0, ...). Creates dialog via factory(parent), waits, stores result."""
     try:
-        dlg = _ReplaceModDialog(parent_window, mod_name)
+        dlg = factory(parent_window)
         parent_window.wait_window(dlg)
-        result_holder[0] = dlg
+        result_holder[0] = getattr(dlg, result_attr) if result_attr else dlg
     except Exception:
         result_holder[0] = None
     finally:
         done_event.set()
+
+
+def _show_replace_dialog_on_main(parent_window, mod_name: str,
+                                 result_holder: list, done_event: threading.Event) -> None:
+    _run_dialog_on_main(parent_window,
+                        lambda p: _ReplaceModDialog(p, mod_name),
+                        result_holder, done_event)
 
 
 def _show_select_files_dialog_on_main(parent_window, file_list: list,
                                       result_holder: list, done_event: threading.Event) -> None:
-    """Run on main thread via after(0, ...). Shows _SelectFilesDialog, stores result, signals done."""
-    try:
-        dlg = _SelectFilesDialog(parent_window, file_list)
-        parent_window.wait_window(dlg)
-        result_holder[0] = dlg
-    except Exception:
-        result_holder[0] = None
-    finally:
-        done_event.set()
+    _run_dialog_on_main(parent_window,
+                        lambda p: _SelectFilesDialog(p, file_list),
+                        result_holder, done_event)
 
 
 def _show_set_prefix_dialog_on_main(parent_window, required, file_list, mod_name: str,
                                     result_holder: list, done_event: threading.Event) -> None:
-    """Run on main thread via after(0, ...). Shows _SetPrefixDialog, stores result, signals done."""
-    try:
-        dlg = _SetPrefixDialog(parent_window, required, file_list, mod_name=mod_name)
-        parent_window.wait_window(dlg)
-        result_holder[0] = dlg.result
-    except Exception:
-        result_holder[0] = None
-    finally:
-        done_event.set()
+    _run_dialog_on_main(parent_window,
+                        lambda p: _SetPrefixDialog(p, required, file_list, mod_name=mod_name),
+                        result_holder, done_event, result_attr="result")
 
 
 def _show_fomod_dialog_on_main(parent_window, config, mod_root,
                                installed_files: set, active_files: set,
                                saved_selections, selections_path,
                                result_holder: list, done_event: threading.Event) -> None:
-    """Run on main thread via after(0, ...). Shows FomodDialog, stores result, signals done."""
-    try:
-        dialog = FomodDialog(parent_window, config, mod_root,
-                             installed_files=installed_files,
-                             active_files=active_files,
-                             saved_selections=saved_selections,
-                             selections_path=selections_path)
-        parent_window.wait_window(dialog)
-        result_holder[0] = dialog.result
-    except Exception:
-        result_holder[0] = None
-    finally:
-        done_event.set()
+    _run_dialog_on_main(parent_window,
+                        lambda p: FomodDialog(p, config, mod_root,
+                                             installed_files=installed_files,
+                                             active_files=active_files,
+                                             saved_selections=saved_selections,
+                                             selections_path=selections_path),
+                        result_holder, done_event, result_attr="result")
 
 
 def _show_mod_notification(parent_window, message: str, state: str = "success") -> None:

@@ -658,7 +658,8 @@ class TopBar(ctk.CTkFrame):
             return
 
         # For user-defined custom games, open the definition editor first
-        if getattr(game, "is_custom", False):
+        # (skipped when editable=false, e.g. repo-distributed handlers)
+        if getattr(game, "is_custom", False) and getattr(game, "editable", True):
             existing_defn = getattr(game, "_defn", None)
             if self._show_custom_game_panel_fn:
                 def _on_custom_game_done(panel):
@@ -893,6 +894,11 @@ class TopBar(ctk.CTkFrame):
                                             mode=deploy_mode, log_fn=_tlog)
                     if count:
                         _tlog("Root Folder: transferred files to game root.")
+
+                # Launcher swap runs after root-folder deploy so that script
+                # extender executables (e.g. nvse_loader.exe) are present first.
+                if hasattr(game, "swap_launcher"):
+                    game.swap_launcher(_tlog)
             except Exception as e:
                 import traceback as _tb
                 self.after(0, lambda err=e, tb=_tb.format_exc(): self._log(f"Deploy error: {err}\n{tb}"))

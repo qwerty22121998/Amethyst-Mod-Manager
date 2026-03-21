@@ -12,6 +12,7 @@ JSON format (~/.config/AmethystModManager/custom_games/<game_id>.json):
   "steam_id":          "",           // optional Steam App ID
   "nexus_game_domain": "",           // optional Nexus domain slug
   "image_url":         ""            // optional banner image URL
+  "editable":          true          // false = skip definition editor on reconfigure (for repo handlers)
 }
 
 Deploy types
@@ -264,6 +265,10 @@ class StandardCustomGame(BaseGame):
     @property
     def is_custom(self) -> bool:
         return True
+
+    @property
+    def editable(self) -> bool:
+        return self._defn.get("editable", True)
 
     # ------------------------------------------------------------------
     # Advanced mod-handling properties (read from JSON definition)
@@ -614,6 +619,10 @@ class Ue5CustomGame(UE5Game):
     @property
     def is_custom(self) -> bool:
         return True
+
+    @property
+    def editable(self) -> bool:
+        return self._defn.get("editable", True)
 
     # ------------------------------------------------------------------
     # Paths

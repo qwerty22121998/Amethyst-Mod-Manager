@@ -32,6 +32,36 @@ from gui.theme import (
 )
 
 
+def _add_tool_row(parent, tool: "WizardTool", open_fn, padx=0) -> None:
+    """Render a clickable row for a single wizard tool."""
+    row = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=6)
+    row.pack(fill="x", pady=(0, 8), padx=padx)
+
+    inner = ctk.CTkFrame(row, fg_color="transparent")
+    inner.pack(fill="x", padx=12, pady=10)
+
+    text_frame = ctk.CTkFrame(inner, fg_color="transparent")
+    text_frame.pack(side="left", fill="x", expand=True)
+
+    ctk.CTkLabel(
+        text_frame, text=tool.label,
+        font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+    ).pack(anchor="w")
+
+    if tool.description:
+        ctk.CTkLabel(
+            text_frame, text=tool.description,
+            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
+            wraplength=280,
+        ).pack(anchor="w")
+
+    ctk.CTkButton(
+        inner, text="Open", width=70, height=30, font=FONT_BOLD,
+        fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+        command=lambda t=tool: open_fn(t),
+    ).pack(side="right", padx=(8, 0))
+
+
 def _resolve_dialog_class(dotted_path: str) -> type:
     """Import and return the class referenced by *dotted_path*.
 
@@ -110,38 +140,7 @@ class WizardDialog(ctk.CTkToplevel):
             return
 
         for tool in tools:
-            self._add_tool_row(body, tool)
-
-    def _add_tool_row(self, parent, tool: "WizardTool"):
-        """Render a clickable row for a single wizard tool."""
-        row = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=6)
-        row.pack(fill="x", pady=(0, 8))
-
-        inner = ctk.CTkFrame(row, fg_color="transparent")
-        inner.pack(fill="x", padx=12, pady=10)
-
-        # Label + description on the left
-        text_frame = ctk.CTkFrame(inner, fg_color="transparent")
-        text_frame.pack(side="left", fill="x", expand=True)
-
-        ctk.CTkLabel(
-            text_frame, text=tool.label,
-            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
-        ).pack(anchor="w")
-
-        if tool.description:
-            ctk.CTkLabel(
-                text_frame, text=tool.description,
-                font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
-                wraplength=280,
-            ).pack(anchor="w")
-
-        # Open button on the right
-        ctk.CTkButton(
-            inner, text="Open", width=70, height=30, font=FONT_BOLD,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-            command=lambda t=tool: self._open_tool(t),
-        ).pack(side="right", padx=(8, 0))
+            _add_tool_row(body, tool, self._open_tool)
 
     # ------------------------------------------------------------------
     # Actions
@@ -227,35 +226,7 @@ class WizardPanel(ctk.CTkFrame):
             return
 
         for tool in tools:
-            self._add_tool_row(body, tool)
-
-    def _add_tool_row(self, parent, tool: "WizardTool"):
-        row = ctk.CTkFrame(parent, fg_color=BG_PANEL, corner_radius=6)
-        row.pack(fill="x", pady=(0, 8), padx=16)
-
-        inner = ctk.CTkFrame(row, fg_color="transparent")
-        inner.pack(fill="x", padx=12, pady=10)
-
-        text_frame = ctk.CTkFrame(inner, fg_color="transparent")
-        text_frame.pack(side="left", fill="x", expand=True)
-
-        ctk.CTkLabel(
-            text_frame, text=tool.label,
-            font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
-        ).pack(anchor="w")
-
-        if tool.description:
-            ctk.CTkLabel(
-                text_frame, text=tool.description,
-                font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
-                wraplength=280,
-            ).pack(anchor="w")
-
-        ctk.CTkButton(
-            inner, text="Open", width=70, height=30, font=FONT_BOLD,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-            command=lambda t=tool: self._open_tool(t),
-        ).pack(side="right", padx=(8, 0))
+            _add_tool_row(body, tool, self._open_tool, padx=16)
 
     def _open_tool(self, tool: "WizardTool"):
         """Close the panel and open the tool's dedicated wizard."""
