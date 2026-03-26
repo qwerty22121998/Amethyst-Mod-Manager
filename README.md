@@ -50,8 +50,10 @@ curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/s
 | Kingdom Come Deliverance | 1 and 2 |
 | Hogwarts Legacy | |
 | Marvel Rivals | |
+| Expedition 33 | |
 | Subnautica | |
 | Subnautica Below Zero | |
+| No Mans Sky | |
 | Resident Evil | 2, 3, 4, 7, Village, Requiem |
 | The Sims 4 | |
 | TCG Card Shop Simulator | |
