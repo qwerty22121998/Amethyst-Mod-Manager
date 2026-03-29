@@ -555,12 +555,15 @@ class SettingsPanel(ctk.CTkFrame):
         ctk.CTkLabel(dl_order_row, text="Order:", font=FONT_NORMAL, text_color=TEXT_MAIN,
                      ).pack(side="left", padx=(0, 8))
 
-        self._dl_order_var = tk.StringVar(value=_col_cfg["download_order"])
+        _DL_ORDER_LABELS = {"largest": "Largest first", "smallest": "Smallest first"}
+        _DL_ORDER_FROM_LABEL = {v: k for k, v in _DL_ORDER_LABELS.items()}
+        self._dl_order_var = tk.StringVar(value=_DL_ORDER_LABELS.get(_col_cfg["download_order"], "Largest first"))
+        self._dl_order_from_label = _DL_ORDER_FROM_LABEL
         ctk.CTkOptionMenu(
             dl_order_row,
             variable=self._dl_order_var,
-            values=["largest", "smallest"],
-            width=scaled(120),
+            values=["Smallest first", "Largest first"],
+            width=scaled(140),
             font=FONT_NORMAL,
         ).pack(side="left")
 
@@ -583,25 +586,6 @@ class SettingsPanel(ctk.CTkFrame):
             dl_concurrent_row, text=str(_col_cfg["max_concurrent"]),
             font=FONT_NORMAL, text_color=TEXT_MAIN, width=scaled(20))
         self._max_concurrent_lbl.pack(side="left", padx=(6, 0))
-
-        # Install sub-label
-        ctk.CTkLabel(body, text="Install", font=FONT_SMALL, text_color=TEXT_DIM,
-                     anchor="w").grid(row=15, column=0, columnspan=3, sticky="w", pady=(0, 4))
-
-        inst_row = ctk.CTkFrame(body, fg_color="transparent")
-        inst_row.grid(row=16, column=0, columnspan=3, sticky="w")
-
-        ctk.CTkLabel(inst_row, text="Order:", font=FONT_NORMAL, text_color=TEXT_MAIN,
-                     ).pack(side="left", padx=(0, 8))
-
-        self._inst_order_var = tk.StringVar(value=_col_cfg["install_order"])
-        ctk.CTkOptionMenu(
-            inst_row,
-            variable=self._inst_order_var,
-            values=["smallest", "largest"],
-            width=scaled(120),
-            font=FONT_NORMAL,
-        ).pack(side="left")
 
         # ---- footer ----
         foot = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=scaled(44))
@@ -753,9 +737,8 @@ class SettingsPanel(ctk.CTkFrame):
             save_ui_scale(round(self._scale_var.get() * 20) / 20)
         save_normalize_folder_case(self._norm_case_var.get())
         save_collection_settings(
-            download_order=self._dl_order_var.get(),
+            download_order=self._dl_order_from_label.get(self._dl_order_var.get(), "largest"),
             max_concurrent=int(round(self._max_concurrent_var.get())),
-            install_order=self._inst_order_var.get(),
         )
         self._on_done(self)
 
@@ -769,9 +752,8 @@ class SettingsPanel(ctk.CTkFrame):
             save_ui_scale(round(self._scale_var.get() * 20) / 20)
         save_normalize_folder_case(self._norm_case_var.get())
         save_collection_settings(
-            download_order=self._dl_order_var.get(),
+            download_order=self._dl_order_from_label.get(self._dl_order_var.get(), "largest"),
             max_concurrent=int(round(self._max_concurrent_var.get())),
-            install_order=self._inst_order_var.get(),
         )
         self._on_done(self)
         python = sys.executable

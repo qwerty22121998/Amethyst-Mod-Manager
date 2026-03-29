@@ -8,7 +8,7 @@ Workflow:
   3. Topologically sort mods so dependencies always appear before dependents.
   4. Write the Patch 7+ modsettings.lsx (Mods node only, no ModOrder).
 
-The GustavDev base-game entry is always written first and never removed.
+The GustavX base-game entry is always written first and never removed.
 """
 
 from __future__ import annotations
@@ -52,20 +52,20 @@ _SYSTEM_UUIDS: frozenset[str] = frozenset({
     "e1ce736b-52e6-e713-e9e7-e6abbb15a198",   # CrossplayUI
 })
 
-_GUSTAV_DEV = {
-    "Folder":        "GustavDev",
-    "MD5":           "",
-    "Name":          "GustavDev",
+_GUSTAV_X = {
+    "Folder":        "GustavX",
+    "MD5":           "ef3fcba3f3684b3088ad1f9874d4957c",
+    "Name":          "GustavX",
     "PublishHandle":  "0",
-    "UUID":          "28ac9ce2-2aba-8cda-b3b5-6e922f71b6b8",
-    "Version64":     "36028797018963968",
+    "UUID":          "cb555efe-2d9e-131f-8195-a89329d218ea",
+    "Version64":     "145241946983300916",
 }
 
 # Patch 7+ modsettings.lsx template
 _MODSETTINGS_HEADER = """\
 <?xml version="1.0" encoding="UTF-8"?>
 <save>
-  <version major="4" minor="7" revision="1" build="3"/>
+  <version major="4" minor="8" revision="0" build="100"/>
   <region id="ModuleSettings">
     <node id="root">
       <children>
@@ -297,8 +297,8 @@ def build_modsettings_xml(ordered_mods: list[BG3ModInfo]) -> str:
     """Build the full modsettings.lsx XML string."""
     parts = [_MODSETTINGS_HEADER]
 
-    # GustavDev always first
-    parts.append(_format_entry(_GUSTAV_DEV))
+    # GustavX always first
+    parts.append(_format_entry(_GUSTAV_X))
 
     # Then each mod in resolved order
     for mod in ordered_mods:
@@ -329,12 +329,15 @@ def write_modsettings(
     patch module UUIDs are recognised during the dependency check and don't
     produce false "not installed" warnings.
 
-    Returns the number of mod entries written (excluding GustavDev).
+    Returns the number of mod entries written (excluding GustavX).
     """
     _log = log_fn or (lambda _: None)
 
     entries = read_modlist(modlist_path)
     enabled = [e for e in entries if e.enabled and not e.is_separator]
+    # modlist.txt is highest-priority-first; modsettings.lsx needs
+    # lowest-priority-first (later entries override earlier ones in BG3).
+    enabled = list(reversed(enabled))
 
     _log("Scanning .pak files for mod metadata ...")
     mod_infos = scan_mod_paks(staging_root, enabled)
@@ -376,9 +379,9 @@ def write_modsettings(
 
 
 def write_vanilla_modsettings(modsettings_path: Path, log_fn=None) -> None:
-    """Write a clean modsettings.lsx with only the GustavDev entry."""
+    """Write a clean modsettings.lsx with only the GustavX entry."""
     _log = log_fn or (lambda _: None)
     xml = build_modsettings_xml([])
     modsettings_path.parent.mkdir(parents=True, exist_ok=True)
     modsettings_path.write_text(xml, encoding="utf-8")
-    _log("Reset modsettings.lsx to vanilla (GustavDev only).")
+    _log("Reset modsettings.lsx to vanilla (GustavX only).")

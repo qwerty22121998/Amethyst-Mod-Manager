@@ -1811,12 +1811,19 @@ class NexusAPI:
             mod_count = int(rev.get("modCount") or 0)
             download_link_path = rev.get("downloadLink") or ""
             mods: list[NexusCollectionMod] = []
+            _seen_file_ids: set[int] = set()
             for entry in (rev.get("modFiles") or []):
                 f = entry.get("file") or {}
                 mod = f.get("mod") or {}
+                fid = int(entry.get("fileId") or 0)
+                if fid and fid in _seen_file_ids:
+                    app_log(f"get_collection_detail: duplicate fileId {fid} in modFiles — skipping")
+                    continue
+                if fid:
+                    _seen_file_ids.add(fid)
                 mods.append(NexusCollectionMod(
                     mod_id=int(mod.get("modId") or 0),
-                    file_id=int(entry.get("fileId") or 0),
+                    file_id=fid,
                     mod_name=mod.get("name", "") or "",
                     mod_author=mod.get("author", "") or "",
                     file_name=f.get("name", "") or "",

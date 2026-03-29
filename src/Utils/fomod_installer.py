@@ -243,7 +243,11 @@ def resolve_files(config: ModuleConfig,
         for group in step.groups:
             selected_names = set(step_selections.get(group.name, []))
             for plugin in group.plugins:
-                if plugin.name in selected_names:
+                # SelectAll groups must always install every plugin regardless
+                # of what the selections dict contains (e.g. collection installs
+                # that have no explicit entry for this group, or plugins with
+                # an empty name that can never match a selection string).
+                if group.group_type == "SelectAll" or plugin.name in selected_names:
                     for fi in plugin.files:
                         prioritized.append((fi.priority, fi.source_path,
                                             fi.destination_path, fi.is_folder))

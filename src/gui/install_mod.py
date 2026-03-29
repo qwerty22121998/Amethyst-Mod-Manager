@@ -21,6 +21,10 @@ _interactive_dialog_lock = threading.Lock()
 # same free space before any of them has started writing.
 _tmp_space_lock = threading.Lock()
 _tmp_space_reserved: int = 0  # bytes currently claimed by in-flight extractions
+
+# py7zr / liblzma is not safe to run in multiple threads simultaneously —
+# concurrent extractions can segfault.  Serialize all py7zr calls globally.
+_py7zr_lock = threading.Lock()
 from pathlib import Path
 from datetime import datetime
 
@@ -714,11 +718,13 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
         if ext.endswith(".zip"):
             import subprocess
             _zip_done = False
-            # For large ZIPs, skip the Python extractor and go straight to the
-            # 7z binary which is significantly faster for large archives.
+            # For large ZIPs, prefer native tools (7z or bsdtar) over Python's
+            # single-threaded zipfile — they use C/multi-threaded extraction.
             _archive_mb = os.path.getsize(archive_path) / (1024 * 1024)
             _7z_bin = shutil.which("7zzs") or shutil.which("7z") or shutil.which("7za")
-            _use_python_zip = _archive_mb < 200 or not _7z_bin
+            _bsdtar_bin = shutil.which("bsdtar")
+            _has_native = _7z_bin or _bsdtar_bin
+            _use_python_zip = _archive_mb < 50 or not _has_native
             if _use_python_zip:
                 try:
                     log_fn("Extracting with zipfile…")
@@ -736,97 +742,117 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                         z.extractall(extract_dir, members)
                     _zip_done = True
                 except Exception as e_zip:
-                    log_fn(f"zipfile failed ({e_zip}), retrying with 7z…")
-            if not _zip_done:
-                if _7z_bin:
-                    shutil.rmtree(extract_dir, ignore_errors=True)
-                    os.makedirs(extract_dir, exist_ok=True)
-                    if progress_fn is not None:
-                        progress_fn(0, 0, "Extracting…")
-                    result = subprocess.run(
-                        [_7z_bin, "x", archive_path, f"-o{extract_dir}", "-y", "-mmt=on"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                    )
-                    if result.returncode == 0:
-                        _zip_done = True
-                        log_fn("Extracted with 7z.")
-                    else:
-                        log_fn(f"7z failed ({result.stderr.strip()}), retrying with bsdtar…")
-                else:
-                    log_fn("7z/7za not found, trying bsdtar…")
-            if not _zip_done:
+                    log_fn(f"zipfile failed ({e_zip}), retrying with native tools…")
+            if not _zip_done and _7z_bin:
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 os.makedirs(extract_dir, exist_ok=True)
                 if progress_fn is not None:
                     progress_fn(0, 0, "Extracting…")
                 result = subprocess.run(
-                    ["bsdtar", "-xf", archive_path, "-C", extract_dir],
+                    [_7z_bin, "x", archive_path, f"-o{extract_dir}", "-y", "-mmt=on"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                 )
-                if result.returncode != 0:
-                    raise RuntimeError(f"bsdtar failed: {result.stderr.strip()}")
-                log_fn("Extracted with bsdtar.")
+                if result.returncode == 0:
+                    _zip_done = True
+                    log_fn("Extracted with 7z.")
+                else:
+                    log_fn(f"7z failed ({result.stderr.strip()}), retrying with bsdtar…")
+            if not _zip_done and _bsdtar_bin:
+                shutil.rmtree(extract_dir, ignore_errors=True)
+                os.makedirs(extract_dir, exist_ok=True)
+                if progress_fn is not None:
+                    progress_fn(0, 0, "Extracting…")
+                result = subprocess.run(
+                    [_bsdtar_bin, "-xf", archive_path, "-C", extract_dir],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                )
+                if result.returncode == 0:
+                    _zip_done = True
+                    log_fn("Extracted with bsdtar.")
+                else:
+                    log_fn(f"bsdtar failed ({result.stderr.strip()}).")
+            if not _zip_done:
+                # Last resort: Python zipfile if native tools failed or weren't tried
+                try:
+                    shutil.rmtree(extract_dir, ignore_errors=True)
+                    os.makedirs(extract_dir, exist_ok=True)
+                    log_fn("Extracting with zipfile (fallback)…")
+                    with zipfile.ZipFile(archive_path, "r") as z:
+                        members = z.infolist()
+                        if any("\\" in m.filename for m in members):
+                            for m in members:
+                                m.filename = m.filename.replace("\\", "/")
+                        if progress_fn is not None:
+                            progress_fn(0, 0, "Extracting…")
+                        z.extractall(extract_dir, members)
+                    _zip_done = True
+                except Exception as e_zip2:
+                    raise RuntimeError(f"All extraction methods failed for ZIP: {e_zip2}")
         elif ext.endswith(".7z"):
             import subprocess
             _7z_done = False
-            # py7zr decompresses entirely into RAM — skip it for large archives
-            # to avoid OOM kills on memory-constrained systems (Steam Deck etc.).
             _archive_bytes = os.path.getsize(archive_path)
             _archive_mb = _archive_bytes / (1024 * 1024)
-            # Check available RAM; keep a 512 MB safety margin.
-            try:
-                with open("/proc/meminfo") as _mf:
-                    for _line in _mf:
-                        if _line.startswith("MemAvailable:"):
-                            _avail_mb = int(_line.split()[1]) / 1024
-                            break
-                    else:
-                        _avail_mb = 512.0  # fallback if not found
-            except OSError:
-                _avail_mb = 512.0
-            _py7zr_safe = _archive_mb < (_avail_mb - 512)
-            if _py7zr_safe:
-                try:
-                    log_fn("Extracting with py7zr…")
-                    if progress_fn is not None:
-                        progress_fn(0, 0, "Extracting…")
-                    with py7zr.SevenZipFile(archive_path, "r") as z:
-                        z.extractall(extract_dir)
+            # Prefer native 7z binary (multi-threaded) or bsdtar (native C)
+            # over py7zr which is single-threaded and globally serialized.
+            _7z_bin = shutil.which("7zzs") or shutil.which("7z") or shutil.which("7za")
+            _bsdtar_bin = shutil.which("bsdtar")
+            if _7z_bin:
+                if progress_fn is not None:
+                    progress_fn(0, 0, "Extracting…")
+                result = subprocess.run(
+                    [_7z_bin, "x", archive_path, f"-o{extract_dir}", "-y", "-mmt=on"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                )
+                if result.returncode == 0:
                     _7z_done = True
-                except Exception as e7:
-                    log_fn(f"py7zr failed ({e7}), retrying with 7z…")
-            else:
-                log_fn(f"Archive is {_archive_mb:.0f} MB, only {_avail_mb:.0f} MB RAM available — skipping py7zr to avoid OOM, using 7z binary…")
-            if not _7z_done:
-                _7z_bin = shutil.which("7zzs") or shutil.which("7z") or shutil.which("7za")
-                if _7z_bin:
-                    shutil.rmtree(extract_dir, ignore_errors=True)
-                    os.makedirs(extract_dir, exist_ok=True)
-                    if progress_fn is not None:
-                        progress_fn(0, 0, "Extracting…")
-                    result = subprocess.run(
-                        [_7z_bin, "x", archive_path, f"-o{extract_dir}", "-y", "-mmt=on"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                    )
-                    if result.returncode == 0:
-                        _7z_done = True
-                        log_fn("Extracted with 7z.")
-                    else:
-                        log_fn(f"7z failed ({result.stderr.strip()}), retrying with bsdtar…")
+                    log_fn("Extracted with 7z.")
                 else:
-                    log_fn("7z/7za not found, trying bsdtar…")
-            if not _7z_done:
+                    log_fn(f"7z failed ({result.stderr.strip()}), trying next method…")
+            if not _7z_done and _bsdtar_bin:
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 os.makedirs(extract_dir, exist_ok=True)
                 if progress_fn is not None:
                     progress_fn(0, 0, "Extracting…")
                 result = subprocess.run(
-                    ["bsdtar", "-xf", archive_path, "-C", extract_dir],
+                    [_bsdtar_bin, "-xf", archive_path, "-C", extract_dir],
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                 )
-                if result.returncode != 0:
-                    raise RuntimeError(f"bsdtar failed: {result.stderr.strip()}")
-                log_fn("Extracted with bsdtar.")
+                if result.returncode == 0:
+                    _7z_done = True
+                    log_fn("Extracted with bsdtar.")
+                else:
+                    log_fn(f"bsdtar failed ({result.stderr.strip()}), trying py7zr…")
+            if not _7z_done:
+                # Fallback to py7zr — single-threaded and serialized, but works
+                # when no native tools are available.
+                # Check available RAM; keep a 512 MB safety margin.
+                try:
+                    with open("/proc/meminfo") as _mf:
+                        for _line in _mf:
+                            if _line.startswith("MemAvailable:"):
+                                _avail_mb = int(_line.split()[1]) / 1024
+                                break
+                        else:
+                            _avail_mb = 512.0
+                except OSError:
+                    _avail_mb = 512.0
+                _py7zr_safe = _archive_mb < (_avail_mb - 512)
+                if _py7zr_safe:
+                    try:
+                        log_fn("Extracting with py7zr…")
+                        if progress_fn is not None:
+                            progress_fn(0, 0, "Extracting…")
+                        with _py7zr_lock:
+                            with py7zr.SevenZipFile(archive_path, "r") as z:
+                                z.extractall(extract_dir)
+                        _7z_done = True
+                    except Exception as e7:
+                        log_fn(f"py7zr failed ({e7}).")
+                else:
+                    log_fn(f"Archive is {_archive_mb:.0f} MB, only {_avail_mb:.0f} MB RAM available — skipping py7zr to avoid OOM.")
+            if not _7z_done:
+                raise RuntimeError(f"All extraction methods failed for 7z archive.")
         elif any(ext.endswith(s) for s in (".tar.gz", ".tar.bz2", ".tar.xz", ".tar")):
             log_fn("Extracting with tarfile…")
             if progress_fn is not None:

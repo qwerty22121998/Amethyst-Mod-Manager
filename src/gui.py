@@ -1651,7 +1651,7 @@ class App(ctk.CTk):
 
     # -- Optional mods panel (overlays plugin panel) --------------------------
 
-    def show_optional_mods_panel(self, optional_mods: list, on_done):
+    def show_optional_mods_panel(self, optional_mods: list, on_done, pre_skipped_fids=None):
         """Show OptionalModsPanel as overlay on plugin panel. on_done(panel) receives the
         panel; panel.result is None (cancelled) or set of file_ids to skip."""
         self._ensure_plugin_panel_visible()
@@ -1664,6 +1664,7 @@ class App(ctk.CTk):
                 self._plugin_panel_container,
                 optional_mods=optional_mods,
                 on_done=_done,
+                pre_skipped_fids=pre_skipped_fids,
             )
         self._show_plugin_overlay("_optional_mods_panel", _factory)
 

@@ -1,3 +1,11 @@
+- v1.1.2
+- Fixed several instances of auto fomod not working during collections install
+- Reworked collection install logic, Mods now begin installing as soon as they are installed
+- Optional mod selections in collections are now saved to the collections profile.
+- When reinstalling a collection, Unticking the optional mods now deletes them from the staging folder
+- Moved the collection download progress bar to the central modlist panel overlay. This now also shows download speed in mb/s
+- Fixed modsettings.lsx reading modlist.txt in reverse and updated version header.
+
 - v1.1.1
 - The plugin panel can now be collapsed/hidden
 - The overwrite folder now displays conflicts correctly

@@ -5503,3 +5503,78 @@ class CollectionInstallModeDialog(tk.Frame):
     def _on_cancel(self):
         self._on_done(None)
 
+
+class CollectionContinueInstallDialog(tk.Frame):
+    """Overlay panel shown when a collection is already installed in a profile.
+
+    Instead of offering new/append, shows a single 'Continue Install' action
+    targeting the profile that already contains this collection's URL.
+    """
+
+    def __init__(self, parent, profile_name: str, on_done):
+        super().__init__(parent, bg=BG_DEEP)
+        self._on_done = on_done
+        self._profile_name = profile_name
+        self._build()
+
+    def _build(self):
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        card = tk.Frame(self, bg=BG_PANEL, bd=0, highlightthickness=1,
+                        highlightbackground=BORDER)
+        card.grid(row=0, column=0)
+        card.grid_columnconfigure(0, weight=1)
+
+        row = 0
+
+        # Header bar
+        header = tk.Frame(card, bg=BG_HEADER, height=42)
+        header.grid(row=row, column=0, sticky="ew")
+        header.grid_propagate(False)
+        tk.Label(
+            header, text="Continue Collection Install",
+            font=FONT_BOLD, fg=TEXT_MAIN, bg=BG_HEADER,
+        ).pack(side="left", padx=12, pady=8)
+        row += 1
+
+        # Separator
+        tk.Frame(card, bg=BORDER, height=1).grid(row=row, column=0, sticky="ew")
+        row += 1
+
+        # Body
+        body = tk.Frame(card, bg=BG_PANEL)
+        body.grid(row=row, column=0, sticky="ew", padx=24, pady=(16, 8))
+        body.grid_columnconfigure(0, weight=1)
+        row += 1
+
+        tk.Label(
+            body, text=f"This collection is already installed in profile\n'{self._profile_name}'",
+            font=FONT_BOLD, fg=TEXT_MAIN, bg=BG_PANEL, anchor="center", justify="center",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 14))
+
+        # Separator before buttons
+        tk.Frame(card, bg=BORDER, height=1).grid(row=row, column=0, sticky="ew")
+        row += 1
+
+        # Button bar
+        bar = tk.Frame(card, bg=BG_HEADER, height=44)
+        bar.grid(row=row, column=0, sticky="ew")
+        bar.grid_propagate(False)
+        ctk.CTkButton(
+            bar, text="Cancel", width=80, height=28, font=FONT_NORMAL,
+            fg_color=BG_DEEP, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=(4, 12), pady=8)
+        ctk.CTkButton(
+            bar, text="Continue Install", width=120, height=28, font=FONT_BOLD,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            command=self._on_ok,
+        ).pack(side="right", padx=4, pady=8)
+
+    def _on_ok(self):
+        self._on_done(("continue", self._profile_name, False))
+
+    def _on_cancel(self):
+        self._on_done(None)
+

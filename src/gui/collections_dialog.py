@@ -22,12 +22,18 @@ import customtkinter as ctk
 from PIL import Image
 
 from gui.ctk_components import CTkAlert, CTkLoader
-from gui.dialogs import CollectionInstallModeDialog
+from gui.dialogs import CollectionInstallModeDialog, CollectionContinueInstallDialog
 from gui.game_helpers import (
     _create_profile,
     _profiles_for_game,
+    _vanilla_plugins_for_game,
+    find_profile_with_collection_url,
     get_collection_url_from_profile,
     save_collection_url_to_profile,
+)
+from Utils.profile_state import (
+    read_collection_optional_skipped,
+    write_collection_optional_skipped,
 )
 from gui.install_mod import install_mod_from_archive
 from gui.mod_card import CARD_PAD, make_placeholder_image
@@ -39,6 +45,8 @@ from Utils.config_paths import get_download_cache_dir
 from Nexus.nexus_download import delete_archive_and_sidecar
 from Nexus.nexus_meta import build_meta_from_download
 from Utils.xdg import open_url
+from Utils.plugins import PluginEntry, write_plugins, write_loadorder
+from LOOT.loot_sorter import sort_plugins as _loot_sort, is_available as _loot_available
 
 # Collections-specific card dimensions (5-column grid)
 _COLL_COLS  = 5
@@ -101,6 +109,11 @@ def _topo_sort_collection(schema_mods: list[dict], mod_rules: list[dict]) -> dic
             logical_to_fid[logical] = fid
         if fid not in fid_order:
             fid_order.append(fid)
+
+    # Reverse so that mods[-1] (last installed = highest priority in collection.json)
+    # gets position 0 → top of modlist.txt (highest priority in the manager).
+    # Without this, mods[0] (lowest priority) would incorrectly end up at the top.
+    fid_order = list(reversed(fid_order))
 
     all_fids: set[int] = set(fid_order)
 
@@ -219,8 +232,7 @@ def _fomod_choices_from_collection(choices: dict) -> "dict[str, dict[str, list[s
         }
     """
     result: dict = {}
-    for step in choices.get("options", []):
-        step_name = step.get("name", "")
+    for step_idx, step in enumerate(choices.get("options", [])):
         groups: dict = {}
         for group in step.get("groups", []):
             group_name = group.get("name", "")
@@ -228,7 +240,7 @@ def _fomod_choices_from_collection(choices: dict) -> "dict[str, dict[str, list[s
             if plugin_names:
                 groups[group_name] = plugin_names
         if groups:
-            result[step_name] = groups
+            result[str(step_idx)] = groups
     return result
 
 
@@ -464,12 +476,13 @@ class OptionalModsPanel(ctk.CTkFrame):
     on_done(panel) is called when user clicks Install or Cancel.
     """
 
-    def __init__(self, parent, optional_mods: list, on_done=None):
+    def __init__(self, parent, optional_mods: list, on_done=None, pre_skipped_fids: "set[int] | None" = None):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
         self.result = None
         self._optional_mods = optional_mods
         self._vars: dict[int, tk.BooleanVar] = {}
         self._on_done = on_done or (lambda p: None)
+        _pre_skipped = pre_skipped_fids or set()
 
         # Title bar
         title_bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=36)
@@ -494,7 +507,7 @@ class OptionalModsPanel(ctk.CTkFrame):
         scroll.grid_columnconfigure(0, weight=1)
 
         for mod in optional_mods:
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=mod.file_id not in _pre_skipped)
             self._vars[mod.file_id] = var
             name_text = mod.mod_name or mod.file_name or "(Unknown)"
             author_text = f" by {mod.mod_author}" if mod.mod_author else ""
@@ -1146,36 +1159,26 @@ class CollectionDetailDialog(tk.Frame):
             self._status_var.set("Mod list not loaded yet — please wait.")
             return
 
-        # --- Optional mods selection (overlay on plugin panel) ---
-        optional_mods = [m for m in mods if m.optional]
-        if optional_mods:
-            show_fn = getattr(app, "show_optional_mods_panel", None)
-            if show_fn:
-                def _on_optional_done(panel):
-                    if panel.result is None:
-                        return
-                    mods_to_use = list(mods)
-                    if panel.result:
-                        mods_to_use = [
-                            m for m in mods_to_use
-                            if not m.optional or m.file_id not in panel.result
-                        ]
-                    self._continue_install_collection(app, mods_to_use, downloader)
-                show_fn(optional_mods, _on_optional_done)
-                return
-            # Fallback: no app overlay support — skip optional selection and install all
-            mods = [m for m in mods if not m.optional]
-
+        # Show profile selection first so we can pre-populate optional mod choices
+        # from any previously saved selection for that profile.
         self._continue_install_collection(app, list(mods), downloader)
 
-    def _continue_install_collection(self, app, mods, downloader):
-        """Proceed with collection install after optional mods have been resolved."""
+    def _continue_install_collection(self, app, all_mods, downloader):
+        """Show the profile-selection dialog, then handle optional mods after a profile
+        is chosen (so saved choices can be pre-populated for existing profiles)."""
         if not self._game:
             return
 
         existing_profiles = _profiles_for_game(self._game.name)
         mod_panel = getattr(app, "_mod_panel", None)
         overlay_parent = mod_panel if mod_panel is not None else self
+
+        # Check if this collection is already installed in an existing profile
+        game_domain = getattr(self._game, "nexus_game_domain", None) or self._game_domain
+        collection_url = f"https://www.nexusmods.com/{game_domain}/collections/{self._collection.slug}"
+        if self._revision_number is not None:
+            collection_url += f"/revisions/{self._revision_number}"
+        existing_profile = find_profile_with_collection_url(self._game.name, collection_url)
 
         def _on_mode_chosen(result):
             try:
@@ -1185,20 +1188,82 @@ class CollectionDetailDialog(tk.Frame):
             if result is None:
                 self._status_var.set("Install cancelled.")
                 return
-            self._finish_install_collection(app, mods, downloader, result)
+            self._after_profile_selected(app, all_mods, downloader, result)
 
-        overlay = CollectionInstallModeDialog(overlay_parent, existing_profiles, _on_mode_chosen)
+        if existing_profile:
+            overlay = CollectionContinueInstallDialog(
+                overlay_parent, existing_profile, _on_mode_chosen
+            )
+        else:
+            overlay = CollectionInstallModeDialog(
+                overlay_parent, existing_profiles, _on_mode_chosen
+            )
         overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
         overlay.lift()
 
-    def _finish_install_collection(self, app, mods, downloader, mode_result):
+    def _after_profile_selected(self, app, all_mods, downloader, mode_result):
+        """Called after the profile dialog is dismissed. Shows the optional mods panel
+        (if any), pre-populating choices saved from a previous install of this profile."""
+        if not self._game:
+            return
+
+        optional_mods = [m for m in all_mods if m.optional]
+        if optional_mods:
+            # Load previously saved skipped fids for existing profiles so the user
+            # doesn't have to re-select after a crash or reinstall.
+            pre_skipped_fids: "set[int]" = set()
+            mode, append_profile_name, _ = mode_result
+            if mode in ("append", "continue") and append_profile_name:
+                profile_root = self._game.get_profile_root()
+                existing_profile_dir = profile_root / "profiles" / append_profile_name
+                if existing_profile_dir.is_dir():
+                    pre_skipped_fids = read_collection_optional_skipped(existing_profile_dir)
+
+            show_fn = getattr(app, "show_optional_mods_panel", None)
+            if show_fn:
+                def _on_optional_done(panel):
+                    if panel.result is None:
+                        return
+                    skipped_fids = panel.result or set()
+                    mods_to_use = [
+                        m for m in all_mods
+                        if not m.optional or m.file_id not in skipped_fids
+                    ]
+                    self._finish_install_collection(
+                        app, mods_to_use, downloader, mode_result, skipped_fids
+                    )
+                show_fn(optional_mods, _on_optional_done, pre_skipped_fids=pre_skipped_fids)
+                return
+            # Fallback: no app overlay support — install all optional mods
+            # (they are not skipped in headless/fallback mode)
+
+        self._finish_install_collection(app, list(all_mods), downloader, mode_result, set())
+
+    def _finish_install_collection(self, app, mods, downloader, mode_result, skipped_fids: "set[int] | None" = None):
         """Called after the install-mode overlay is dismissed."""
         if not self._game:
             return
 
         mode, append_profile_name, overwrite_existing = mode_result
 
-        if mode == "new":
+        if mode == "continue":
+            # Continue install into the profile that already has this collection.
+            # Resolve profile dir like "append", but pass overwrite_existing=None
+            # to _run_install so load order + plugins.txt are written fresh.
+            profile_name = append_profile_name
+            profile_root = self._game.get_profile_root()
+            profile_dir = profile_root / "profiles" / profile_name
+            if not profile_dir.is_dir():
+                self._status_var.set(f"Profile '{profile_name}' not found.")
+                return
+            self._log(f"Collection install: continuing into existing profile '{profile_name}' at {profile_dir}")
+            # Update the stored collection URL in case the revision changed
+            game_domain = getattr(self._game, "nexus_game_domain", None) or self._game_domain
+            collection_url = f"https://www.nexusmods.com/{game_domain}/collections/{self._collection.slug}"
+            if self._revision_number is not None:
+                collection_url += f"/revisions/{self._revision_number}"
+            save_collection_url_to_profile(profile_dir, collection_url)
+        elif mode == "new":
             # Sanitise collection name → profile name, append revision number
             raw = self._collection.name or self._collection.slug or "Collection"
             base = re.sub(r"[^\w\s\-]", "", raw).strip().replace(" ", "_") or "Collection"
@@ -1242,6 +1307,14 @@ class CollectionDetailDialog(tk.Frame):
                 return
             self._log(f"Collection install: appending into existing profile '{profile_name}' at {profile_dir}")
 
+        # Persist the optional mod choices so a crash-recovery or reinstall can
+        # pre-populate the optional mods panel with the same selections.
+        if skipped_fids is not None:
+            try:
+                write_collection_optional_skipped(profile_dir, skipped_fids)
+            except Exception:
+                pass
+
         self._status_var.set(f"Starting install of {len(mods)} mods into '{profile_name}'…")
 
         # Show a blocking overlay so the user can't click anything during install
@@ -1260,12 +1333,13 @@ class CollectionDetailDialog(tk.Frame):
                 downloader,
                 app,
                 len(mods),
-                None if mode == "new" else overwrite_existing,
+                None if mode in ("new", "continue") else overwrite_existing,
+                skipped_fids,
             ),
             daemon=True,
         ).start()
 
-    def _run_install(self, mods, download_link_path, profile_dir, old_profile, downloader, app, total, overwrite_existing: "bool | None" = None):
+    def _run_install(self, mods, download_link_path, profile_dir, old_profile, downloader, app, total, overwrite_existing: "bool | None" = None, skipped_fids: "set[int] | None" = None):
         """Background thread: download then install each mod in collection-defined order.
 
         Load order is driven by ``collection.json`` from the collection archive:
@@ -1344,6 +1418,16 @@ class CollectionDetailDialog(tk.Frame):
                     self._log(f"Collection install: could not download collection.json: {exc} — "
                               "continuing with GraphQL order")
 
+        # Save a copy of the manifest to the profile folder for inspection / future use
+        if collection_schema:
+            try:
+                import json as _json
+                manifest_path = profile_dir / "collection.json"
+                manifest_path.write_text(_json.dumps(collection_schema, indent=2), encoding="utf-8")
+                self._log(f"Collection install: saved manifest to {manifest_path}")
+            except Exception as _exc:
+                self._log(f"Collection install: could not save manifest: {_exc}")
+
         # Build a mapping from file_id → priority position (0 = highest priority)
         # respecting modRules before/after constraints via topological sort.
         schema_mods: list[dict] = collection_schema.get("mods", [])
@@ -1351,7 +1435,24 @@ class CollectionDetailDialog(tk.Frame):
         schema_file_id_to_pos: dict[int, int] = _topo_sort_collection(schema_mods, mod_rules)
         schema_pos_to_name: dict[int, str] = {}  # collection.json logical name
         schema_file_id_to_logical: dict[int, str] = {}  # file_id → logicalFilename
+        schema_file_id_to_mod_id: dict[int, int] = {}   # file_id → mod_id from collection.json
         fomod_by_file_id: dict[int, dict] = {}   # file_id → saved_selections dict
+        # First pass: collect raw logicalFilename values to detect duplicates
+        _raw_logical: dict[int, str] = {}   # file_id → raw logicalFilename from source
+        _raw_name: dict[int, str] = {}      # file_id → schema mod name
+        for schema_mod in schema_mods:
+            src = schema_mod.get("source") or {}
+            fid = src.get("fileId")
+            if fid is not None:
+                fid = int(fid)
+                _raw_logical[fid] = src.get("logicalFilename") or ""
+                _raw_name[fid] = schema_mod.get("name") or ""
+        # Count how many file_ids share each logicalFilename
+        _logical_counts: dict[str, int] = {}
+        for raw in _raw_logical.values():
+            if raw:
+                _logical_counts[raw] = _logical_counts.get(raw, 0) + 1
+
         for pos, schema_mod in enumerate(schema_mods):
             src = schema_mod.get("source") or {}
             fid = src.get("fileId")
@@ -1359,8 +1460,19 @@ class CollectionDetailDialog(tk.Frame):
                 fid = int(fid)
                 topo_pos = schema_file_id_to_pos.get(fid, pos)
                 schema_pos_to_name[topo_pos] = schema_mod.get("name") or ""
-                logical = src.get("logicalFilename") or schema_mod.get("name") or ""
+                raw_logical = _raw_logical.get(fid, "")
+                schema_name = _raw_name.get(fid, "")
+                # If multiple entries share the same logicalFilename, fall back to
+                # the more specific schema name to avoid folder-name collisions
+                # (e.g. "Capital Whiterun Expansion" shared by main mod + meshes patch).
+                if raw_logical and _logical_counts.get(raw_logical, 0) > 1:
+                    logical = schema_name or raw_logical
+                else:
+                    logical = raw_logical or schema_name
                 schema_file_id_to_logical[fid] = logical
+                mid = src.get("modId")
+                if mid:
+                    schema_file_id_to_mod_id[fid] = int(mid)
                 choices = schema_mod.get("choices") or {}
                 if choices.get("type") == "fomod":
                     fomod_by_file_id[fid] = _fomod_choices_from_collection(choices)
@@ -1421,6 +1533,30 @@ class CollectionDetailDialog(tk.Frame):
                 except Exception:
                     pass
 
+        # ------------------------------------------------------------------
+        # Remove staging folders for unticked optional mods
+        # ------------------------------------------------------------------
+        if skipped_fids:
+            import shutil as _shutil_skip
+            for skip_fid in skipped_fids:
+                folder_name = already_installed_by_fid.get(skip_fid)
+                if folder_name:
+                    skip_dir = staging_path / folder_name
+                    if skip_dir.is_dir():
+                        self._log(f"Collection install: removing unticked optional mod '{folder_name}' (file_id={skip_fid})")
+                        try:
+                            _shutil_skip.rmtree(skip_dir)
+                        except Exception as exc:
+                            self._log(f"Collection install: failed to remove '{folder_name}': {exc}")
+                    # Remove from modlist.txt as well
+                    if modlist_path.is_file():
+                        try:
+                            entries = read_modlist(modlist_path)
+                            entries = [e for e in entries if e.name != folder_name]
+                            write_modlist(modlist_path, entries)
+                        except Exception:
+                            pass
+
         # Maps collection.json position (or fallback index) → installed folder name
         install_order: list[tuple[int, str]] = []  # (sort_key, folder_name)
 
@@ -1444,7 +1580,12 @@ class CollectionDetailDialog(tk.Frame):
                 logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
                 schema_name = schema_pos_to_name.get(schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
                 candidates: list[str] = []
-                for raw in (logical, schema_name, mod.mod_name or ""):
+                # Only use mod.mod_name as a fallback when we have no logical/schema
+                # name — otherwise two mods from the same page (e.g. main mod + meshes
+                # patch both named "Capital Whiterun Expansion" in GraphQL) would
+                # incorrectly be treated as the same already-installed mod.
+                name_sources = (logical, schema_name) if (logical or schema_name) else (mod.mod_name or "",)
+                for raw in name_sources:
                     if raw:
                         for s in _suggest_mod_names(raw):
                             if s and s not in candidates:
@@ -1463,14 +1604,25 @@ class CollectionDetailDialog(tk.Frame):
                 to_download.append(mod)
 
         # ------------------------------------------------------------------
-        # Step 2a: Download up to 3 mods in parallel
+        # Step 2: Pipeline — download and install concurrently.
+        # Downloads and installs run as a producer-consumer pipeline so
+        # install workers begin extracting archives as soon as each
+        # download finishes, rather than waiting for ALL downloads first.
+        # A bounded queue provides back-pressure: when _PIPELINE_QUEUE_SIZE
+        # archives are downloaded-but-not-yet-installed, download threads
+        # block — preventing disk/memory exhaustion.
         # ------------------------------------------------------------------
         import concurrent.futures as _cf
+        import queue as _queue
         from Utils.ui_config import load_collection_settings as _load_col_cfg
         _col_cfg = _load_col_cfg()
 
         _DL_WORKERS = _col_cfg["max_concurrent"]
-        # file_id → (DownloadResult, effective_game_domain) — domain is the one we actually used
+        _INSTALL_WORKERS = 4
+        _PIPELINE_QUEUE_SIZE = max(_INSTALL_WORKERS + 1, 5)
+        _DONE_SENTINEL = None  # pushed once per install consumer to signal shutdown
+
+        # file_id → (DownloadResult, effective_game_domain) — kept for post-install order tracking
         _dl_results: dict[int, tuple] = {}
         _dl_lock = threading.Lock()
         _dl_done = 0
@@ -1478,7 +1630,6 @@ class CollectionDetailDialog(tk.Frame):
         mod_panel = getattr(app, "_mod_panel", None)
 
         # --- Single collection-wide progress bar ---
-        # Include all mods (skipped + to_download) so the bar reflects the full collection size.
         _to_download_fids = {getattr(m, "file_id", None) for m in to_download}
         _total_bytes = sum(getattr(m, "size_bytes", 0) or 0 for m in ordered_mods)
         _dl_bytes_done = sum(
@@ -1488,8 +1639,31 @@ class CollectionDetailDialog(tk.Frame):
         )  # pre-credit already-installed/skipped mods
         _per_mod_prev: dict[int, int] = {}  # file_id → last reported bytes (for delta tracking)
         _col_cancel: threading.Event | None = None
-        _dl_finished = threading.Event()  # set when executor completes
+        _dl_finished = threading.Event()   # set when all downloads are done
+        _pipeline_finished = threading.Event()  # set when downloads AND installs are done
 
+        # Archives >= 1 GB are extracted with limited concurrency to avoid
+        # excessive memory/I/O pressure, but allow 2 at a time since native
+        # tools (7z/bsdtar) are more memory-efficient than py7zr.
+        _LARGE_ARCHIVE_BYTES = 1 * 1024**3
+        _large_archive_semaphore = threading.Semaphore(2)
+
+        # Archive-use counting built incrementally as downloads complete.
+        # Two mods can reference the same cached archive (same file_id, or
+        # different file_ids whose cache lookup resolved to the same file).
+        _archive_use_count: dict[str, int] = {}
+
+        _install_lock = threading.Lock()
+        _install_counters = {"installed": 0, "skipped": 0, "done": 0}
+        _install_results: dict[int, str] = {}  # file_id → installed folder name
+
+        # Bounded queue: download producers → install consumers.
+        # Items are (mod, DownloadResult, effective_domain) or _DONE_SENTINEL.
+        _install_queue: _queue.Queue = _queue.Queue(maxsize=_PIPELINE_QUEUE_SIZE)
+
+        # ------------------------------------------------------------------
+        # Download worker (producer) — pushes each result onto the queue
+        # ------------------------------------------------------------------
         def _download_one(mod):
             nonlocal _dl_done, _dl_bytes_done
 
@@ -1501,9 +1675,7 @@ class CollectionDetailDialog(tk.Frame):
                     _per_mod_prev[_fid] = cur
                     _dl_bytes_done += delta
 
-            # --- Download ---
             # Enderal can use Skyrim mods; Enderal SE can use Skyrim SE mods.
-            # If we get 404, retry under the corresponding Skyrim game.
             _ENDERAL_FALLBACKS = {"enderal": "skyrim", "enderalspecialedition": "skyrimspecialedition"}
             result = None
             effective_domain = self._game_domain
@@ -1551,106 +1723,32 @@ class CollectionDetailDialog(tk.Frame):
                 _dl_done += 1
                 _dl_results[mod.file_id] = (result, effective_domain)
                 done = _dl_done
-            _set_status(f"Downloading: {done}/{_dl_total} complete\u2026")
 
-        if to_download:
-            _set_status(f"Downloading {_dl_total} mod(s) — up to {_DL_WORKERS} at a time\u2026")
-            _to_download_sorted = sorted(
-                to_download,
-                key=lambda m: getattr(m, "size_bytes", 0) or 0,
-                reverse=(_col_cfg["download_order"] == "largest"),
-            )
+            # Increment archive use count under _install_lock (same lock used
+            # by consumers to decrement) to prevent a race when two mods
+            # share the same cached archive path.
+            with _install_lock:
+                if result and result.success and result.file_path:
+                    _akey = str(result.file_path)
+                    _archive_use_count[_akey] = _archive_use_count.get(_akey, 0) + 1
+                _inst_done = _install_counters["done"]
+            _set_status(f"Downloaded {done}/{_dl_total}, installed {_inst_done}/{_dl_total}\u2026")
 
-            # --- Show single collection-wide progress popup ---
-            # Create popup on the main thread, then poll _dl_bytes_done from a
-            # main-thread timer (avoids any cross-thread Tk after() issues).
-            if mod_panel is not None and _total_bytes > 0:
-                _ce_holder: list = [None]
-                _ce_ready = threading.Event()
-                tot_gb = _total_bytes / (1024 ** 3)
-                lbl = f"Downloading {_dl_total} mod(s)  ({tot_gb:.1f} GB)"
-
-                def _make_col_popup():
-                    try:
-                        ce = mod_panel.get_download_cancel_event()
-                        mod_panel.show_download_progress(lbl, cancel=ce)
-                        # Show pre-credited progress from already-installed mods
-                        if _dl_bytes_done > 0:
-                            mod_panel.update_download_progress(
-                                _dl_bytes_done, _total_bytes, cancel=ce
-                            )
-                        _ce_holder[0] = ce
-
-                        # Start a polling timer that reads _dl_bytes_done every 200ms
-                        def _poll_progress():
-                            if _dl_finished.is_set():
-                                # Final update to 100%, then hide after brief pause
-                                mod_panel.update_download_progress(
-                                    _total_bytes, _total_bytes, cancel=ce
-                                )
-                                mod_panel.after(
-                                    500,
-                                    lambda: mod_panel.hide_download_progress(cancel=ce),
-                                )
-                                return
-                            with _dl_lock:
-                                agg = _dl_bytes_done
-                            mod_panel.update_download_progress(
-                                agg, _total_bytes, cancel=ce
-                            )
-                            mod_panel.after(200, _poll_progress)
-
-                        mod_panel.after(200, _poll_progress)
-                    except Exception:
-                        pass
-                    finally:
-                        _ce_ready.set()
-
-                try:
-                    self.after(0, _make_col_popup)
-                except Exception:
-                    _ce_ready.set()
-                _ce_ready.wait(timeout=5)
-                _col_cancel = _ce_holder[0]
-
-            with _cf.ThreadPoolExecutor(max_workers=_DL_WORKERS) as _pool:
-                list(_pool.map(_download_one, _to_download_sorted))
-
-            _dl_finished.set()
+            # Push onto the bounded install queue (blocks if queue is full,
+            # providing back-pressure so archives don't pile up on disk).
+            _install_queue.put((mod, result, effective_domain))
 
         # ------------------------------------------------------------------
-        # Step 2b: Install downloaded archives in parallel worker threads.
+        # Install worker (consumer) — pulls from queue until sentinel
         # ------------------------------------------------------------------
-        # headless=True suppresses all GUI dialogs and per-mod modlist writes;
-        # the collection manages modlist/plugins itself after all installs finish.
-        # _INSTALL_WORKERS parallel extractions run at once — this keeps all CPU
-        # cores and the NVMe busy without too much RAM pressure from py7zr.
-        _INSTALL_WORKERS = 4
+        def _install_one(mod, result, effective_domain):
+            """Install a single downloaded mod archive."""
+            if _col_cancel is not None and _col_cancel.is_set():
+                with _install_lock:
+                    _install_counters["skipped"] += 1
+                    _install_counters["done"] += 1
+                return
 
-        # Archives >= 1 GB are extracted one at a time to avoid CPU/I/O thrashing
-        # when multiple large extractions run in parallel.
-        _LARGE_ARCHIVE_BYTES = 1 * 1024**3
-        _large_archive_semaphore = threading.Semaphore(1)
-
-        # Count uses per physical archive path so we only delete it after the
-        # last consumer finishes.  Two separate collection entries can reference
-        # the same physical archive (same file_id, or different file_ids whose
-        # cached-archive lookup resolved to the same file on disk).
-        _archive_use_count: dict[str, int] = {}
-        for _m in to_download:
-            _entry = _dl_results.get(_m.file_id) if _m.file_id else None
-            _r = _entry[0] if isinstance(_entry, tuple) else _entry
-            if _r and _r.success and _r.file_path:
-                _key = str(_r.file_path)
-                _archive_use_count[_key] = _archive_use_count.get(_key, 0) + 1
-
-        _install_lock = threading.Lock()
-        _install_counters = {"installed": 0, "skipped": 0, "done": 0}
-        _install_results: dict[int, str] = {}  # file_id → installed folder name
-
-        def _install_one(mod):
-            _entry = _dl_results.get(mod.file_id)
-            result, effective_domain = _entry if isinstance(_entry, tuple) else (_entry, self._game_domain)
             if result is None or not result.success or not result.file_path:
                 self._log(f"Collection install: download failed for '{mod.mod_name}'")
                 with _install_lock:
@@ -1662,10 +1760,14 @@ class CollectionDetailDialog(tk.Frame):
             auto_fomod = fomod_by_file_id.get(mod.file_id)
 
             # Build prebuilt metadata so no extra API calls are needed.
+            # Prefer the mod_id from collection.json (source.modId) over the
+            # GraphQL API value, which can be wrong when Nexus associates a
+            # file with the wrong mod page.
             try:
+                _effective_mod_id = schema_file_id_to_mod_id.get(mod.file_id, 0) or mod.mod_id
                 _pmeta = build_meta_from_download(
                     game_domain=effective_domain,
-                    mod_id=mod.mod_id,
+                    mod_id=_effective_mod_id,
                     file_id=mod.file_id,
                     archive_name=mod.file_name or "",
                 )
@@ -1676,10 +1778,7 @@ class CollectionDetailDialog(tk.Frame):
                 _pmeta = None
 
             # Preferred folder name: logicalFilename from collection.json is
-            # the most specific (e.g. "Inventory Interface Information Injector
-            # - Alchemy Fix"), then schema name, then Nexus mod page name.
-            # This avoids two mods from the same page being stripped to the
-            # same folder name by _suggest_mod_names.
+            # the most specific, then schema name, then Nexus mod page name.
             _logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
             _schema_name = schema_pos_to_name.get(
                 schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
@@ -1731,7 +1830,9 @@ class CollectionDetailDialog(tk.Frame):
                             )
 
             # Update progress and mark row green — also write to registry for reconnect.
-            _set_status(f"Installing: {done_so_far}/{_dl_total} complete\u2026")
+            with _dl_lock:
+                dl_done_now = _dl_done
+            _set_status(f"Downloaded {dl_done_now}/{_dl_total}, installed {done_so_far}/{_dl_total}\u2026")
             _set_progress(done_so_far / _dl_total if _dl_total else 1.0)
             if mod.file_id and folder_name:
                 _install_state["installed_fids"].add(mod.file_id)
@@ -1740,18 +1841,107 @@ class CollectionDetailDialog(tk.Frame):
                 except Exception:
                     pass
 
+        def _install_consumer():
+            """Long-lived consumer thread: pull items from the queue and install."""
+            while True:
+                item = _install_queue.get()
+                if item is _DONE_SENTINEL:
+                    _install_queue.task_done()
+                    break
+                mod, result, effective_domain = item
+                try:
+                    _install_one(mod, result, effective_domain)
+                except Exception as exc:
+                    self._log(f"Collection install: unexpected error installing '{mod.mod_name}': {exc}")
+                    with _install_lock:
+                        _install_counters["skipped"] += 1
+                        _install_counters["done"] += 1
+                finally:
+                    _install_queue.task_done()
+
+        # ------------------------------------------------------------------
+        # Launch the pipeline: install consumers first, then download producers.
+        # ------------------------------------------------------------------
         if to_download:
-            _set_status(f"Installing {_dl_total} mod(s) — up to {_INSTALL_WORKERS} at a time\u2026")
+            _set_status(f"Downloading & installing {_dl_total} mod(s)\u2026")
             _set_progress(0.0)
-            # Sort smallest archives first so workers stay busy and large mods
-            # don't block the queue.  Any mod that needs a manual FOMOD dialog
-            # will still serialize correctly via the _interactive_dialog_lock — running
-            # small non-interactive mods first means the FOMOD prompts typically
-            # appear after the bulk of parallel work is already done.
-            _to_install = sorted(to_download, key=lambda m: getattr(m, "size_bytes", 0) or 0,
-                                 reverse=(_col_cfg["install_order"] == "largest"))
-            with _cf.ThreadPoolExecutor(max_workers=_INSTALL_WORKERS) as _install_pool:
-                list(_install_pool.map(_install_one, _to_install))
+            _to_download_sorted = sorted(
+                to_download,
+                key=lambda m: getattr(m, "size_bytes", 0) or 0,
+                reverse=(_col_cfg["download_order"] == "largest"),
+            )
+
+            # --- Show download progress inside the install overlay ---
+            if _total_bytes > 0:
+                tot_gb = _total_bytes / (1024 ** 3)
+                lbl = f"Downloading & installing {_dl_total} mod(s)  ({tot_gb:.1f} GB)"
+                _ol_ready = threading.Event()
+
+                def _init_overlay_dl():
+                    try:
+                        self._show_overlay_download(lbl)
+                    except Exception:
+                        pass
+                    finally:
+                        _ol_ready.set()
+
+                try:
+                    self.after(0, _init_overlay_dl)
+                except Exception:
+                    _ol_ready.set()
+                _ol_ready.wait(timeout=5)
+
+                import time as _time_mod
+                _speed_state = {"prev_bytes": 0, "prev_time": _time_mod.monotonic()}
+
+                def _poll_overlay_dl():
+                    if _dl_finished.is_set():
+                        self._update_overlay_download(_total_bytes, _total_bytes, 0.0)
+                        self.after(500, self._hide_overlay_download)
+                        return
+                    now = _time_mod.monotonic()
+                    with _dl_lock:
+                        agg = _dl_bytes_done
+                    dt = now - _speed_state["prev_time"]
+                    if dt >= 0.5:
+                        speed = (agg - _speed_state["prev_bytes"]) / dt
+                        _speed_state["prev_bytes"] = agg
+                        _speed_state["prev_time"] = now
+                        _speed_state["speed"] = speed
+                    speed_mbs = _speed_state.get("speed", 0.0) / (1024 * 1024)
+                    self._update_overlay_download(agg, _total_bytes, speed_mbs)
+                    self.after(200, _poll_overlay_dl)
+
+                try:
+                    self.after(200, _poll_overlay_dl)
+                except Exception:
+                    pass
+
+            # Start install consumer threads first so they're ready for work.
+            _consumer_threads: list[threading.Thread] = []
+            for _ci in range(_INSTALL_WORKERS):
+                t = threading.Thread(target=_install_consumer, daemon=True,
+                                     name=f"col-install-{_ci}")
+                t.start()
+                _consumer_threads.append(t)
+
+            # Run download producers — each pushes results onto the queue as
+            # they finish so install consumers start working immediately.
+            with _cf.ThreadPoolExecutor(max_workers=_DL_WORKERS) as _pool:
+                list(_pool.map(_download_one, _to_download_sorted))
+
+            # All downloads done — dismiss the download progress bar.
+            _dl_finished.set()
+
+            # Signal each install consumer to shut down after draining the queue.
+            for _ in range(_INSTALL_WORKERS):
+                _install_queue.put(_DONE_SENTINEL)
+
+            # Wait for all install consumers to finish.
+            for t in _consumer_threads:
+                t.join()
+
+            _pipeline_finished.set()
 
         installed += _install_counters["installed"]
         skipped  += _install_counters["skipped"]
@@ -1877,19 +2067,90 @@ class CollectionDetailDialog(tk.Frame):
                     self._log(f"Collection install: failed to write modlist.txt: {exc}")
 
         # ------------------------------------------------------------------
-        # Step 4: Write plugins.txt from collection.json if available
+        # Step 4: Write plugins.txt / loadorder.txt from collection.json.
         # Also skipped when appending — existing plugin order is preserved.
+        #
+        # Strategy:
+        #   1. Run LOOT over (vanilla + collection plugins) so libloot can
+        #      pin vanilla ESMs/ESPs to their correct positions.
+        #   2. Extract the vanilla prefix from LOOT's sorted result
+        #      (entries that are NOT in the collection's plugin list).
+        #   3. Apply the collection author's load order on top:
+        #      final = vanilla_prefix (LOOT-ordered) + author's mod order.
+        #   This mirrors exactly what "Reset Load Order" does at runtime.
         # ------------------------------------------------------------------
         schema_plugins: list[dict] = collection_schema.get("plugins", [])
         if schema_plugins and overwrite_existing is None:
             try:
-                lines = []
-                for plugin in schema_plugins:
-                    name = plugin.get("name", "")
-                    enabled = plugin.get("enabled", True)
-                    lines.append(("*" if enabled else "") + name)
-                plugins_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-                self._log(f"Collection install: wrote plugins.txt with {len(lines)} plugins")
+                # Author's original plugin order from collection.json
+                author_entries = [
+                    PluginEntry(name=p.get("name", ""), enabled=p.get("enabled", True))
+                    for p in schema_plugins if p.get("name", "")
+                ]
+                author_lower = {e.name.lower() for e in author_entries}
+
+                # Always fetch vanilla map — needed for exclusion from plugins.txt
+                vanilla_map = _vanilla_plugins_for_game(self._game)  # lower -> orig
+                plugins_include_vanilla = getattr(self._game, "plugins_include_vanilla", False)
+                vanilla_lower: set[str] = set() if plugins_include_vanilla else set(vanilla_map.keys())
+
+                # Step 4a: LOOT sort to establish correct vanilla positions
+                loot_vanilla_prefix: list[PluginEntry] = []
+                loot_enabled = getattr(self._game, "loot_sort_enabled", False)
+                if loot_enabled and _loot_available():
+                    try:
+                        _set_status("Running LOOT sort to order vanilla plugins…")
+                        _ext_order = {".esm": 0, ".esp": 1, ".esl": 2}
+                        vanilla_prepend = [
+                            PluginEntry(name=orig, enabled=True)
+                            for low, orig in sorted(
+                                vanilla_map.items(),
+                                key=lambda kv: (_ext_order.get(Path(kv[0]).suffix, 9), kv[0]),
+                            )
+                            if low not in author_lower
+                        ]
+                        all_entries = vanilla_prepend + author_entries
+                        name_to_enabled = {e.name: e.enabled for e in all_entries}
+                        loot_result = _loot_sort(
+                            plugin_names=[e.name for e in all_entries],
+                            enabled_set={e.name for e in all_entries if e.enabled},
+                            game_name=self._game.name,
+                            game_path=self._game.get_game_path(),
+                            staging_root=self._game.get_effective_mod_staging_path(),
+                            log_fn=self._log,
+                            game_type_attr=getattr(self._game, "loot_game_type", ""),
+                            game_id=getattr(self._game, "game_id", ""),
+                            masterlist_url=getattr(self._game, "loot_masterlist_url", ""),
+                            game_data_dir=(
+                                self._game.get_vanilla_plugins_path()
+                                if hasattr(self._game, "get_vanilla_plugins_path") else None
+                            ),
+                        )
+                        # Extract LOOT-ordered vanilla entries (not in author's list)
+                        loot_vanilla_prefix = [
+                            PluginEntry(name=n, enabled=name_to_enabled.get(n, True))
+                            for n in loot_result.sorted_names
+                            if n.lower() not in author_lower
+                        ]
+                        self._log(
+                            f"Collection install: LOOT sort placed {len(loot_vanilla_prefix)} vanilla plugin(s)."
+                        )
+                    except Exception as loot_exc:
+                        self._log(f"Collection install: LOOT sort skipped — {loot_exc}")
+
+                # Step 4b: Apply author's load order — vanilla prefix (LOOT) + author's mod order
+                final_entries = loot_vanilla_prefix + author_entries
+                star_prefix = getattr(self._game, "plugins_use_star_prefix", True)
+                write_plugins(
+                    plugins_path,
+                    [e for e in final_entries if e.name.lower() not in vanilla_lower],
+                    star_prefix=star_prefix,
+                )
+                write_loadorder(plugins_path.parent / "loadorder.txt", final_entries)
+                self._log(
+                    f"Collection install: wrote plugins.txt ({len(author_entries)} mod plugins, "
+                    f"{len(loot_vanilla_prefix)} vanilla prefix)."
+                )
             except Exception as exc:
                 self._log(f"Collection install: failed to write plugins.txt: {exc}")
 
@@ -1962,16 +2223,69 @@ class CollectionDetailDialog(tk.Frame):
             font=("Segoe UI", 11), anchor="w", bd=0, highlightthickness=0,
         ).pack(fill="x", padx=16, pady=(6, 2))
 
-        # Dedicated overlay progress bar
+        # Dedicated overlay progress bar (install progress)
         overlay_bar = ctk.CTkProgressBar(
             inner, height=8, progress_color=ACCENT,
             fg_color=BG_PANEL, corner_radius=4,
         )
         overlay_bar.set(0)
-        overlay_bar.pack(fill="x", padx=16, pady=(2, 16))
+        overlay_bar.pack(fill="x", padx=16, pady=(2, 4))
+
+        # Download progress section (hidden until downloads start)
+        dl_msg_lbl = tk.Label(
+            inner, text="", bg="#2b2b2b", fg="#aaaaaa",
+            font=("Segoe UI", 10), anchor="w", bd=0, highlightthickness=0,
+        )
+        dl_bar = ctk.CTkProgressBar(
+            inner, height=6, progress_color=ACCENT,
+            fg_color=BG_PANEL, corner_radius=4,
+        )
+        dl_bar.set(0)
+        # Not packed yet — shown when download starts via _show_overlay_download
 
         self._install_overlay = overlay
         self._install_overlay_bar = overlay_bar
+        self._install_overlay_dl_msg = dl_msg_lbl
+        self._install_overlay_dl_bar = dl_bar
+
+    def _show_overlay_download(self, label: str):
+        """Show the download progress section inside the install overlay."""
+        lbl = getattr(self, "_install_overlay_dl_msg", None)
+        bar = getattr(self, "_install_overlay_dl_bar", None)
+        if lbl is None or bar is None:
+            return
+        lbl.configure(text=label)
+        if not lbl.winfo_ismapped():
+            lbl.pack(fill="x", padx=16, pady=(4, 0))
+            bar.pack(fill="x", padx=16, pady=(2, 16))
+
+    def _update_overlay_download(self, current: int, total: int, speed_mbs: float = 0.0):
+        """Update the download progress bar and message in the overlay."""
+        bar = getattr(self, "_install_overlay_dl_bar", None)
+        lbl = getattr(self, "_install_overlay_dl_msg", None)
+        if bar is None or lbl is None:
+            return
+        if total > 0:
+            frac = min(current / total, 1.0)
+            pct = int(frac * 100)
+            _GB = 1024 * 1024 * 1024
+            if total >= _GB:
+                cur_u, tot_u, unit = current / _GB, total / _GB, "GB"
+            else:
+                cur_u, tot_u, unit = current / (1024 * 1024), total / (1024 * 1024), "MB"
+            bar.set(frac)
+            speed_str = f"  —  {speed_mbs:.1f} MB/s" if speed_mbs > 0.1 else ""
+            lbl.configure(text=f"{cur_u:.2f} / {tot_u:.2f} {unit}  ({pct}%){speed_str}")
+
+    def _hide_overlay_download(self):
+        """Hide the download progress section in the overlay."""
+        for w in (getattr(self, "_install_overlay_dl_msg", None),
+                  getattr(self, "_install_overlay_dl_bar", None)):
+            if w is not None:
+                try:
+                    w.pack_forget()
+                except Exception:
+                    pass
 
     def _dismiss_install_overlay(self):
         """Remove the install overlay."""
@@ -1984,6 +2298,8 @@ class CollectionDetailDialog(tk.Frame):
             pass
         self._install_overlay = None
         self._install_overlay_bar = None
+        self._install_overlay_dl_msg = None
+        self._install_overlay_dl_bar = None
 
     def _on_install_done(self, installed: int, skipped: int, total: int, profile_name: str):
         self._dismiss_install_overlay()
@@ -2311,6 +2627,17 @@ class CollectionDetailDialog(tk.Frame):
                 cj.get("mods", []), cj.get("modRules", [])
             )
 
+            # Build name-based fallback: logical_name → file_id (for mods missing meta.ini)
+            _name_to_fid: dict[str, int] = {}
+            for _sm in cj.get("mods", []):
+                _src = _sm.get("source") or {}
+                _sf = _src.get("fileId")
+                if _sf is not None:
+                    for _n in ((_src.get("logicalFilename") or "").strip(),
+                               (_sm.get("name") or "").strip()):
+                        if _n and _n.lower() not in _name_to_fid:
+                            _name_to_fid[_n.lower()] = int(_sf)
+
             # Staging dir for a profile-specific-mods profile is profile_dir/mods
             staging_path = profile_dir / "mods"
             if not staging_path.is_dir():
@@ -2339,20 +2666,22 @@ class CollectionDetailDialog(tk.Frame):
                             fid = int(raw_fid)
                     except Exception:
                         pass
+                # Fallback: match folder name against schema logical/mod names
+                if fid is None:
+                    fid = _name_to_fid.get(folder.name.lower())
                 if fid is not None and fid in fid_to_pos:
                     ordered.append((fid_to_pos[fid], folder.name))
                 else:
                     unordered.append(folder.name)
 
-            ordered.sort(key=lambda x: x[0])
-            # Position 0 = highest priority → first in modlist.txt
-            # Unmatched mods go at the top (highest priority)
+            ordered.sort(key=lambda x: x[0])  # position 0 = highest priority → top
+            # Unmatched mods (not in collection schema) go at the bottom
             modlist_entries = [
                 ModEntry(name=name, enabled=True, locked=False)
-                for name in unordered
+                for _, name in ordered
             ] + [
                 ModEntry(name=name, enabled=True, locked=False)
-                for _, name in ordered
+                for name in unordered
             ]
 
             modlist_path = profile_dir / "modlist.txt"
@@ -2800,12 +3129,34 @@ class CollectionsDialog(tk.Frame):
             c.card.destroy()
         self._cards.clear()
 
+    def _find_installed_profile_dir(self, slug: str) -> Path | None:
+        """Return the profile dir that has this collection's slug installed, or None."""
+        if not self._game or not slug:
+            return None
+        try:
+            profiles_root = self._game.get_profile_root() / "profiles"
+            if not profiles_root.is_dir():
+                return None
+            for profile_dir in profiles_root.iterdir():
+                if not profile_dir.is_dir():
+                    continue
+                url = get_collection_url_from_profile(profile_dir)
+                if not url:
+                    continue
+                installed_slug, _, _ = self._parse_collection_url(url)
+                if installed_slug and installed_slug.lower() == slug.lower():
+                    return profile_dir
+        except Exception:
+            pass
+        return None
+
     def _build_cards(self):
         self._clear_cards()
         for col in self._collections:
+            profile_dir = self._find_installed_profile_dir(col.slug)
             card = CollectionCard(
                 self._inner, col,
-                on_view=lambda c=col: self._open_detail(c),
+                on_view=lambda c=col, pd=profile_dir: self._open_detail(c, profile_dir=pd),
             )
             self._bind_scroll(card.card)
             self._cards.append(card)

@@ -159,6 +159,23 @@ def save_collection_url_to_profile(profile_dir: Path, collection_url: str) -> No
     merge_profile_settings(profile_dir, {"collection_url": collection_url})
 
 
+def find_profile_with_collection_url(game_name: str, collection_url: str) -> str | None:
+    """Return the profile name whose profile_state contains *collection_url*, or None."""
+    game = _GAMES.get(game_name)
+    if game is not None:
+        profiles_dir = game.get_profile_root() / "profiles"
+    else:
+        profiles_dir = get_profiles_dir() / game_name / "profiles"
+    if not profiles_dir.is_dir():
+        return None
+    for p in profiles_dir.iterdir():
+        if p.is_dir():
+            url = get_collection_url_from_profile(p)
+            if url and url == collection_url:
+                return p.name
+    return None
+
+
 def _create_profile(
     game_name: str,
     profile_name: str,

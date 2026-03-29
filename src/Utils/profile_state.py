@@ -411,3 +411,22 @@ def write_ignored_missing_requirements(profile_dir: Path, value: set[str]) -> No
         state = read_profile_state(profile_dir)
         state.pop("ignored_missing_requirements", None)
         write_profile_state(profile_dir, state)
+
+
+def read_collection_optional_skipped(profile_dir: Path) -> set[int]:
+    """Return the set of file_ids that were skipped (unchecked) in the optional mods panel
+    when this profile's collection was last installed. Returns empty set if not saved."""
+    raw = _read_key(profile_dir, None, "collection_optional_skipped_fids")
+    if isinstance(raw, list):
+        return {int(x) for x in raw if isinstance(x, (int, float))}
+    return set()
+
+
+def write_collection_optional_skipped(profile_dir: Path, skipped_fids: set[int]) -> None:
+    """Persist the set of skipped optional mod file_ids to profile_state.json."""
+    if skipped_fids:
+        _update_key(profile_dir, "collection_optional_skipped_fids", sorted(skipped_fids))
+    else:
+        state = read_profile_state(profile_dir)
+        state.pop("collection_optional_skipped_fids", None)
+        write_profile_state(profile_dir, state)
