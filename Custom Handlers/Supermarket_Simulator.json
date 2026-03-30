@@ -24,5 +24,39 @@
   "wine_dll_overrides": {
     "winhttp": "native,builtin"
   },
-  "custom_routing_rules": []
+  "custom_routing_rules": [
+    {
+      "dest": "",
+      "filenames": [
+        "winhttp.dll"
+      ]
+    },
+    {
+      "dest": "",
+      "filenames": [
+        "version.dll"
+      ]
+    },
+    {
+      "dest": "",
+      "filenames": [
+        "run_bepinex.sh"
+      ]
+    },
+    {
+      "dest": "",
+      "filenames": [
+        "libdoorstop.dylib"
+      ]
+    },
+    {
+      "dest": "",
+      "filenames": [
+        "doorstop_config.ini"
+      ]
+    }
+  ],
+  "custom_frameworks": {
+    "BepInEx": "winhttp.dll"
+  }
 }

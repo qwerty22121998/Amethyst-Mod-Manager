@@ -382,8 +382,11 @@ class ModListPanel(ctk.CTkFrame):
         self._drag_block:    list  = []     # snapshot of (entry, var) at mousedown
         self._drag_sel_indices: list[int] = []  # actual entry indices for sparse multi-select drag
         self._drag_slot:     int  = -1     # last computed insertion slot (in vis-without-drag space)
+
         self._drag_pending:  bool = False  # waiting for click-vs-drag disambiguation
         self._drag_after_id: str | None = None  # after() id for drag-start timer
+        self._drag_scroll_after: str | None = None  # after() id for auto-scroll repeat
+        self._drag_last_event_y: int = 0  # last widget-space Y from mouse drag
 
         # Separator lock state: sep_name → bool (True = locked, block drag disabled)
         self._sep_locks: dict[str, bool] = {}
@@ -2529,7 +2532,9 @@ class ModListPanel(ctk.CTkFrame):
                         else:
                             skip = True
                 elif skip:
-                    pass  # normal collapsed separator — hide all children
+                    # Keep the dragged entry visible even inside a collapsed block
+                    if self._drag_idx >= 0 and i == self._drag_idx:
+                        base.append(i)
                 elif _skip_bundle is not None and entry.bundle_name == _skip_bundle:
                     pass  # collapsed bundle separator — hide only its variants
                 else:
@@ -2881,6 +2886,39 @@ class ModListPanel(ctk.CTkFrame):
             self._drag_after_id = None
         self._drag_pending = False
 
+    _DRAG_SCROLL_ZONE = 40     # pixels from edge to trigger auto-scroll
+    _DRAG_SCROLL_INTERVAL = 50  # ms between scroll ticks
+
+    def _maybe_start_drag_autoscroll(self):
+        """Start or continue auto-scrolling if cursor is near the canvas edge."""
+        if self._drag_idx < 0:
+            self._cancel_drag_autoscroll()
+            return
+        h = self._canvas.winfo_height()
+        y = self._drag_last_event_y
+        zone = self._DRAG_SCROLL_ZONE
+        if y < zone:
+            speed = max(1, int(6 * (1.0 - y / zone)))
+            self._canvas.yview("scroll", -speed, "units")
+            self._redraw()
+            self._cancel_drag_autoscroll()
+            self._drag_scroll_after = self._canvas.after(
+                self._DRAG_SCROLL_INTERVAL, self._maybe_start_drag_autoscroll)
+        elif y > h - zone:
+            speed = max(1, int(6 * (1.0 - (h - y) / zone)))
+            self._canvas.yview("scroll", speed, "units")
+            self._redraw()
+            self._cancel_drag_autoscroll()
+            self._drag_scroll_after = self._canvas.after(
+                self._DRAG_SCROLL_INTERVAL, self._maybe_start_drag_autoscroll)
+        else:
+            self._cancel_drag_autoscroll()
+
+    def _cancel_drag_autoscroll(self):
+        if self._drag_scroll_after is not None:
+            self._canvas.after_cancel(self._drag_scroll_after)
+            self._drag_scroll_after = None
+
     def _on_mouse_press(self, event):
         if not self._entries:
             return
@@ -3172,12 +3210,9 @@ class ModListPanel(ctk.CTkFrame):
         if self._drag_idx < 0 or not self._entries:
             return
 
-        # Auto-scroll near edges
-        h = self._canvas.winfo_height()
-        if event.y < 40:
-            self._canvas.yview("scroll", -1, "units")
-        elif event.y > h - 40:
-            self._canvas.yview("scroll",  1, "units")
+        # Auto-scroll near edges (with repeating timer)
+        self._drag_last_event_y = event.y
+        self._maybe_start_drag_autoscroll()
 
         cy = self._event_canvas_y(event)
         blk_size = len(self._drag_block) if self._drag_is_block else 1
@@ -3306,6 +3341,7 @@ class ModListPanel(ctk.CTkFrame):
 
     def _on_mouse_release(self, event):
         self._cancel_drag_timer()
+        self._cancel_drag_autoscroll()
         had_multi = len(self._sel_set) > 1
         if self._drag_idx >= 0 and self._drag_moved:
             # Real-time reorder already happened during drag — just persist.

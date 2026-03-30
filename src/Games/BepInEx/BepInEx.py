@@ -14,7 +14,7 @@ from pathlib import Path
 import stat
 
 from Games.base_game import BaseGame, WizardTool
-from Utils.deploy import LinkMode, apply_wine_dll_overrides, deploy_core, deploy_filemap, load_per_mod_strip_prefixes, load_separator_deploy_paths, expand_separator_deploy_paths, cleanup_custom_deploy_dirs, move_to_core, restore_data_core
+from Utils.deploy import LinkMode, apply_wine_dll_overrides, deploy_core, deploy_custom_rules, deploy_filemap, load_per_mod_strip_prefixes, load_separator_deploy_paths, expand_separator_deploy_paths, cleanup_custom_deploy_dirs, move_to_core, restore_custom_rules, restore_data_core
 from Utils.modlist import read_modlist
 from Utils.config_paths import get_profiles_dir
 from Utils.steam_finder import find_prefix
@@ -74,23 +74,25 @@ class Subnautica(BaseGame):
 
     @property
     def wine_dll_overrides(self) -> dict[str, str]:
-        return {"winhttp": "native,builtin"}
+        return {
+            "winhttp": "native,builtin",
+            "version": "native,builtin"
+            }
 
     @property
     def frameworks(self) -> dict[str, str]:
         return {"BepInEx": "winhttp.dll"}
 
     @property
-    def loot_sort_enabled(self) -> bool:
-        return False
-
-    @property
-    def loot_game_type(self) -> str:
-        return ""
-
-    @property
-    def loot_masterlist_url(self) -> str:
-        return ""
+    def custom_routing_rules(self) -> list:
+        from Utils.deploy import CustomRule
+        return [
+            CustomRule(dest="", filenames=["winhttp.dll"]),
+            CustomRule(dest="", filenames=["version.dll"]),
+            CustomRule(dest="", filenames=["run_bepinex.sh"]),
+            CustomRule(dest="", filenames=["libdoorstop.dylib"]),
+            CustomRule(dest="", filenames=["doorstop_config.ini"]),
+        ]
     
     @property
     def reshade_dll(self) -> str:
@@ -246,6 +248,19 @@ class Subnautica(BaseGame):
         moved = move_to_core(plugins_dir, log_fn=_log)
         _log(f"  Moved {moved} file(s) to {core}/.")
 
+        custom_rules = self.custom_routing_rules
+        custom_exclude: set[str] = set()
+        if custom_rules:
+            _log("Step 2a: Routing BepInEx root files via custom rules ...")
+            custom_exclude = deploy_custom_rules(
+                filemap, self._game_path, staging,
+                rules=custom_rules,
+                mode=mode,
+                strip_prefixes=self.mod_folder_strip_prefixes,
+                log_fn=_log,
+                progress_fn=progress_fn,
+            )
+
         _log(f"Step 2: Transferring mod files into {plugins_dir} ({mode.name}) ...")
         profile_dir = self.get_profile_root() / "profiles" / profile
         per_mod_strip = load_per_mod_strip_prefixes(profile_dir)
@@ -259,6 +274,7 @@ class Subnautica(BaseGame):
                                             per_mod_deploy_dirs=per_mod_deploy,
                                             log_fn=_log,
                                             progress_fn=progress_fn,
+                                            exclude=custom_exclude or None,
                                             core_dir=plugins_dir.parent / (plugins_dir.name + "_Core"))
         _log(f"  Transferred {linked_mod} mod file(s).")
 
@@ -290,6 +306,16 @@ class Subnautica(BaseGame):
         _profile_dir = self._active_profile_dir
         _entries = read_modlist(_profile_dir / "modlist.txt") if _profile_dir else []
         cleanup_custom_deploy_dirs(_profile_dir, _entries, log_fn=_log)
+
+        custom_rules = self.custom_routing_rules
+        if custom_rules and self._game_path:
+            _log("Restore: removing custom-routed BepInEx root files ...")
+            restore_custom_rules(
+                self.get_effective_filemap_path(),
+                self._game_path,
+                rules=custom_rules,
+                log_fn=_log,
+            )
 
         if core_dir.is_dir():
             _log(f"Restore: clearing {plugins_dir.name}/ and moving {core}/ back ...")

@@ -65,6 +65,10 @@ class Cyberpunk2077(BaseGame):
         return {".archive"}
 
     @property
+    def wine_dll_overrides(self) -> dict[str, str]:
+        return {"winmm": "native,builtin"}
+
+    @property
     def conflict_ignore_filenames(self) -> set[str]:
         return {"*.txt","*.png","*.jpg","*.jpeg"}
 

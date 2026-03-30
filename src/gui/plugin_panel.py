@@ -367,84 +367,7 @@ class PluginPanel(ctk.CTkFrame):
         "Nemesis Unlimited Behavior Engine.exe",
     })
 
-    # Exe names (lowercase) hidden from the dropdown by default.  These are
-    # helper / sub-process / redistributable executables that are commonly
-    # bundled inside mod tool archives but are never meant to be launched
-    # directly by the user.  Custom EXEs added via '+ Add custom EXE…'
-    # always bypass this filter.  Extend this list here in source when new
-    # noise exes are identified — the change ships with the application.
-    _EXE_FILTER_DEFAULTS: frozenset[str] = frozenset({
-        # DirectXTex utilities (ship with many texture tools / Creation Kit)
-        "texconv.exe",
-        "bc7.exe",
-        "bendr.exe",
-        "optimise.exe",
-        "loose.exe",
-        "layerprep.exe",
-        "filter.exe",
-        "extract.exe",
-        "exclude.exe",
-        "bsa.exe",
-        "prepparallax.exe",
-        "outputqc.exe",
-        "makeunpack.exe",
-        "loosecopy.exe",
-        "extractbsa.exe",
-        "exclusions.exe",
-        "convert.exe",
-        "bendrfilter.exe",
-        "alphanormalsql.exe",
-        "pgtools.exe",
-        "userguide.exe",
-        "lodgen.exe",
-        "lodgenx64.exe",
-        "ssedump.exe",
-        "ssedump64.exe",
-        "texconvx64.exe",
-        "merge.bat",
-        "re-uv.bat",
-        "treelod.exe",
-        "kdiff3.exe",
-        "quickbms.exe",
-        "quickbms_4gb_files.exe",
-        "wcc_lite.exe",
-        "fo4dump.exe",
-        "fo4dump64.exe",
-        "reimport.bat",
-        "reimport2.bat",
-        "reimport2_4gb_files.bat",
-        "reimport3_localizations.bat",
-        "reimport_4gb_files.bat",
-        "fnvdump.exe",
-        "fnvdump64.exe",
-        "fo3dump.exe",
-        "fo3dump64.exe",
-        "tes4dump.exe",
-        "tes4dump64.exe",
-        "tes5dump.exe",
-        "tes5dump64.exe",
-        "7z.exe",
-        "ffdec_orig.bat",
-        "xdelta.exe",
-        # Nemesis Unlimited Behavior Engine — sub-process / bundled utilities
-        "hkxcmd.exe",
-        "fetch_macholib.bat",
-        "wininst-10.0-amd64.exe",
-        "wininst-10.0.exe",
-        "wininst-14.0-amd64.exe",
-        "wininst-14.0.exe",
-        "wininst-6.0.exe",
-        "wininst-7.1.exe",
-        "wininst-8.0.exe",
-        "wininst-9.0-amd64.exe",
-        "wininst-9.0.exe",
-        "idle.bat",
-        "activate.bat",
-        "deactivate.bat",
-        "nemesis compiler version.bat",
-        "papyrusassembler.exe",
-        "papyruscompiler.exe",
-    })
+    from Utils.exe_args_builder import EXE_FILTER_DEFAULTS as _EXE_FILTER_DEFAULTS
 
     @property
     def _plugins_star_prefix(self) -> bool:
@@ -1331,6 +1254,19 @@ class PluginPanel(ctk.CTkFrame):
             xlodgen_flag = _XLODGEN_GAME_FLAGS.get(game_id, "") if game_id else ""
             if xlodgen_flag and xlodgen_flag not in extra_args:
                 extra_args.append(xlodgen_flag)
+
+        if exe_path.name == "PGPatcher.exe":
+            from Utils.exe_args_builder import _bootstrap_pgpatcher_settings
+            staging_path = game.get_effective_mod_staging_path() if hasattr(game, "get_effective_mod_staging_path") else None
+            # Resolve the user-selected output mod folder (saved separately as
+            # "PGPatcher.exe:output_mod" in exe_args.json). Falls back to
+            # staging_path/"PGPatcher" by default.
+            _pgp_output_mod: "Path | None" = None
+            if staging_path is not None:
+                _pgp_saved = self._load_exe_args("PGPatcher.exe:output_mod").strip()
+                if _pgp_saved:
+                    _pgp_output_mod = staging_path / _pgp_saved
+            _bootstrap_pgpatcher_settings(exe_path, game_path, staging_path, self._log, update=True, output_mod=_pgp_output_mod)
 
         if exe_path.name == "Wrye Bash.exe":
             game_path = game.get_game_path() if hasattr(game, "get_game_path") else None

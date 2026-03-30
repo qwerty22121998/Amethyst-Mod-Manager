@@ -1857,26 +1857,37 @@ class NexusAPI:
         import py7zr
         import requests as _requests
 
-        headers = dict(self._session.headers)
+        api_headers = dict(self._session.headers)
         try:
             # Step 1: resolve download-link path → CDN URI
             link_resp = _requests.get(
                 f"https://api.nexusmods.com{download_link_path}",
-                headers=headers,
+                headers=api_headers,
                 timeout=30,
             )
             link_resp.raise_for_status()
-            cdn_url = (link_resp.json().get("download_links") or [{}])[0].get("URI", "")
-            if not cdn_url:
+            cdn_urls = [e.get("URI", "") for e in (link_resp.json().get("download_links") or []) if e.get("URI")]
+            if not cdn_urls:
                 app_log("get_collection_archive_json: no CDN URI returned")
                 return {}
 
-            # Step 2: download the archive into a temp file
+            # Step 2: download the archive into a temp file.
+            # Try each mirror in turn — some CDN nodes geo-restrict collection
+            # archives and return 401 for certain regions.
             with tempfile.NamedTemporaryFile(suffix=".7z", delete=False) as tmp:
                 tmp_path = tmp.name
             try:
-                dl_resp = _requests.get(cdn_url, headers=headers, stream=True, timeout=120)
-                dl_resp.raise_for_status()
+                dl_resp = None
+                for cdn_url in cdn_urls:
+                    try:
+                        r = _requests.get(cdn_url, headers={}, stream=True, timeout=120)
+                        r.raise_for_status()
+                        dl_resp = r
+                        break
+                    except Exception as _mirror_exc:
+                        app_log(f"get_collection_archive_json: mirror {cdn_url!r} failed: {_mirror_exc}")
+                if dl_resp is None:
+                    raise RuntimeError("all CDN mirrors failed")
                 with open(tmp_path, "wb") as fh:
                     for chunk in dl_resp.iter_content(chunk_size=65536):
                         if chunk:
@@ -1943,24 +1954,33 @@ class NexusAPI:
         import py7zr
         import requests as _requests
 
-        headers = dict(self._session.headers)
+        api_headers = dict(self._session.headers)
         try:
             link_resp = _requests.get(
                 f"https://api.nexusmods.com{download_link_path}",
-                headers=headers,
+                headers=api_headers,
                 timeout=30,
             )
             link_resp.raise_for_status()
-            cdn_url = (link_resp.json().get("download_links") or [{}])[0].get("URI", "")
-            if not cdn_url:
+            cdn_urls = [e.get("URI", "") for e in (link_resp.json().get("download_links") or []) if e.get("URI")]
+            if not cdn_urls:
                 app_log("get_collection_archive_full: no CDN URI returned")
                 return {}
 
             with tempfile.NamedTemporaryFile(suffix=".7z", delete=False) as tmp:
                 tmp_path = tmp.name
             try:
-                dl_resp = _requests.get(cdn_url, headers=headers, stream=True, timeout=300)
-                dl_resp.raise_for_status()
+                dl_resp = None
+                for cdn_url in cdn_urls:
+                    try:
+                        r = _requests.get(cdn_url, headers={}, stream=True, timeout=300)
+                        r.raise_for_status()
+                        dl_resp = r
+                        break
+                    except Exception as _mirror_exc:
+                        app_log(f"get_collection_archive_full: mirror {cdn_url!r} failed: {_mirror_exc}")
+                if dl_resp is None:
+                    raise RuntimeError("all CDN mirrors failed")
                 with open(tmp_path, "wb") as fh:
                     for chunk in dl_resp.iter_content(chunk_size=65536):
                         if chunk:

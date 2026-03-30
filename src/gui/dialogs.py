@@ -3103,10 +3103,14 @@ class ExeConfigPanel(ctk.CTkFrame):
             mod_row = ctk.CTkFrame(sec2, fg_color="transparent")
             mod_row.grid(row=2, column=1, sticky="ew", padx=(0, 10), pady=(0, 8))
             mod_row.grid_columnconfigure(0, weight=1)
+            _mod_placeholder = (
+                "PGPatcher (default)" if self._exe_path.name.lower() == "pgpatcher.exe"
+                else "search mods..."
+            )
             self._mod_entry = ctk.CTkEntry(
                 mod_row, textvariable=self._mod_var, font=FONT_SMALL,
                 fg_color=BG_HEADER, text_color=TEXT_MAIN, border_color=BORDER,
-                placeholder_text="search mods...",
+                placeholder_text=_mod_placeholder,
             )
             self._mod_entry.grid(row=0, column=0, sticky="ew")
             self._mod_entry._entry.bind(
@@ -3359,7 +3363,7 @@ class ExeConfigPanel(ctk.CTkFrame):
             parts.append(f'{game_flag}"{wine}"')
 
         out_flag = self._output_flag_var.get().strip()
-        selected = self._mod_var.get()
+        selected = self._mod_var.get().strip()
         if out_flag and selected:
             path = next((p for n, p in self._mod_entries if n == selected), None)
             if path:
@@ -3409,6 +3413,15 @@ class ExeConfigPanel(ctk.CTkFrame):
                         self._mod_var.set(tail)
 
     def _load_saved(self):
+        if self._exe_path.name.lower() == "pgpatcher.exe":
+            # Output mod is stored separately; load it independently of saved_args.
+            try:
+                data = json.loads(self._EXE_ARGS_FILE.read_text(encoding="utf-8"))
+                saved_mod = data.get("PGPatcher.exe:output_mod", "")
+                if saved_mod:
+                    self._mod_var.set(saved_mod)
+            except (OSError, ValueError):
+                pass
         if self._saved_args:
             self._parse_saved_args(self._saved_args)
             # Re-assemble with current (profile-correct) paths if the output
@@ -3506,6 +3519,8 @@ class ExeConfigPanel(ctk.CTkFrame):
             except (OSError, ValueError):
                 data = {}
             data[self._exe_path.name] = final
+            if self._exe_path.name.lower() == "pgpatcher.exe":
+                data["PGPatcher.exe:output_mod"] = self._mod_var.get().strip()
             try:
                 self._EXE_ARGS_FILE.write_text(json.dumps(data, indent=2), encoding="utf-8")
             except OSError:

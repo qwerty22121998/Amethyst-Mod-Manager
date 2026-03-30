@@ -102,6 +102,89 @@ EXE_SKIP: frozenset[str] = frozenset({
     "NPC Plugin Chooser 2.exe",
 })
 
+# Exe names (lowercase) hidden from the dropdown by default.  These are
+# helper / sub-process / redistributable executables that are commonly
+# bundled inside mod tool archives but are never meant to be launched
+# directly by the user.  Custom EXEs added via '+ Add custom EXE…'
+# always bypass this filter.  Extend this list here in source when new
+# noise exes are identified — the change ships with the application.
+EXE_FILTER_DEFAULTS: frozenset[str] = frozenset({
+    # DirectXTex utilities (ship with many texture tools / Creation Kit)
+    "texconv.exe",
+    "bc7.exe",
+    "bendr.exe",
+    "optimise.exe",
+    "loose.exe",
+    "layerprep.exe",
+    "filter.exe",
+    "extract.exe",
+    "exclude.exe",
+    "bsa.exe",
+    "prepparallax.exe",
+    "outputqc.exe",
+    "makeunpack.exe",
+    "loosecopy.exe",
+    "extractbsa.exe",
+    "exclusions.exe",
+    "convert.exe",
+    "bendrfilter.exe",
+    "alphanormalsql.exe",
+    "pgtools.exe",
+    "userguide.exe",
+    "lodgen.exe",
+    "lodgenx64.exe",
+    "ssedump.exe",
+    "ssedump64.exe",
+    "texconvx64.exe",
+    "merge.bat",
+    "re-uv.bat",
+    "treelod.exe",
+    "kdiff3.exe",
+    "quickbms.exe",
+    "quickbms_4gb_files.exe",
+    "wcc_lite.exe",
+    "fo4dump.exe",
+    "fo4dump64.exe",
+    "reimport.bat",
+    "reimport2.bat",
+    "reimport2_4gb_files.bat",
+    "reimport3_localizations.bat",
+    "reimport_4gb_files.bat",
+    "fnvdump.exe",
+    "fnvdump64.exe",
+    "fo3dump.exe",
+    "fo3dump64.exe",
+    "tes4dump.exe",
+    "tes4dump64.exe",
+    "tes5dump.exe",
+    "tes5dump64.exe",
+    "7z.exe",
+    "ffdec_orig.bat",
+    "xdelta.exe",
+    "hkxcmd.exe",
+    "fetch_macholib.bat",
+    "wininst-10.0-amd64.exe",
+    "wininst-10.0.exe",
+    "wininst-14.0-amd64.exe",
+    "wininst-14.0.exe",
+    "wininst-6.0.exe",
+    "wininst-7.1.exe",
+    "wininst-8.0.exe",
+    "wininst-9.0-amd64.exe",
+    "wininst-9.0.exe",
+    "idle.bat",
+    "activate.bat",
+    "deactivate.bat",
+    "nemesis compiler version.bat",
+    "papyrusassembler.exe",
+    "papyruscompiler.exe",
+    "hybrid.bat",
+    "script.bat",
+    "lodgenx64win.exe",
+    "dip.exe",
+    
+})
+
 # ---------------------------------------------------------------------------
 # PGPatcher settings.json bootstrap
 # ---------------------------------------------------------------------------
@@ -187,39 +270,56 @@ def _bootstrap_pgpatcher_settings(
     game_path: "Path | None",
     staging_path: "Path | None",
     log_fn: "Callable[[str], None]",
+    *,
+    update: bool = False,
+    output_mod: "Path | None" = None,
 ) -> None:
     """
-    Generate cfg/settings.json next to PGPatcher.exe if it does not exist.
+    Write cfg/settings.json next to PGPatcher.exe.
+
+    When update=False (default): only seeds the file if it does not exist yet.
+    When update=True: always overwrites game.dir and output.dir, preserving all
+    other user-configured keys — used at launch time so profile switches are
+    reflected correctly (all profiles share the same PGPatcher config file).
 
     - exe_path   : full path to PGPatcher.exe
     - game_path  : game install root (Linux path)
     - staging_path : mods staging folder (Linux path)
+    - output_mod : explicit output folder path; defaults to staging_path / "PGPatcher"
     """
-    cfg_dir = exe_path.parent / "cfg"
-    settings_file = cfg_dir / "settings.json"
-
-    if settings_file.exists():
-        return  # already configured — never overwrite
-
     if game_path is None or staging_path is None:
         log_fn("PGPatcher: game path not configured; skipping settings.json generation")
         return
 
+    cfg_dir = exe_path.parent / "cfg"
+    settings_file = cfg_dir / "settings.json"
+
+    if settings_file.exists() and not update:
+        return  # already seeded — runtime launch will keep it up to date
+
     # Ensure the output mod folder exists so PGPatcher can write there
-    output_mod_dir = staging_path / "PGPatcher"
+    output_mod_dir = output_mod if output_mod is not None else staging_path / "PGPatcher"
     output_mod_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build the settings dict from the template
+    # Load existing settings (preserve user changes) or start from template
     import copy
-    settings = copy.deepcopy(_PGPATCHER_SETTINGS_TEMPLATE)
-    settings["params"]["game"]["dir"] = _to_wine_path(game_path)
-    settings["params"]["output"]["dir"] = _to_wine_path(output_mod_dir)
+    if settings_file.exists():
+        try:
+            settings = json.loads(settings_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            settings = copy.deepcopy(_PGPATCHER_SETTINGS_TEMPLATE)
+    else:
+        settings = copy.deepcopy(_PGPATCHER_SETTINGS_TEMPLATE)
+
+    # Update the two profile-dependent paths
+    settings.setdefault("params", {}).setdefault("game", {})["dir"] = _to_wine_path(game_path)
+    settings["params"].setdefault("output", {})["dir"] = _to_wine_path(output_mod_dir)
 
     # Write cfg/settings.json (create cfg/ if needed)
     try:
         cfg_dir.mkdir(parents=True, exist_ok=True)
         settings_file.write_text(json.dumps(settings, indent=2), encoding="utf-8")
-        log_fn(f"PGPatcher: generated {settings_file}")
+        log_fn(f"PGPatcher: {'updated' if update else 'generated'} {settings_file}")
     except OSError as exc:
         log_fn(f"PGPatcher: could not write settings.json: {exc}")
 

@@ -613,6 +613,19 @@ class CollectionDetailDialog(tk.Frame):
         self._file_id_to_tree_iid: dict[int, str] = {}  # populated by _populate; used to green rows live
         self._install_poll_id: str | None = None  # after() id for install-progress polling
 
+        # Pre-populate collection schema cache from disk if available
+        self._collection_schema_cache: dict = {}
+        pd = self._get_profile_dir()
+        if pd is not None:
+            _manifest = pd / "collection.json"
+            if _manifest.is_file():
+                try:
+                    import json as _json
+                    self._collection_schema_cache = _json.loads(_manifest.read_text(encoding="utf-8"))
+                    self._log("Loaded cached collection.json from profile")
+                except Exception:
+                    pass
+
         self._build_ui()
         self._fetch()
         self.after(100, lambda: (self._update_reset_btn_visibility(), self._update_open_missing_btn_visibility()))
@@ -2283,6 +2296,37 @@ class CollectionDetailDialog(tk.Frame):
             except Exception as exc:
                 self._log(f"Collection install: failed to write plugins.txt: {exc}")
 
+        # ------------------------------------------------------------------
+        # Final reconciliation: ensure every mod in modlist.txt is enabled
+        # and in collection-defined order.  This runs unconditionally so a
+        # crash-restart (any mode) always ends in a clean, ordered state.
+        # ------------------------------------------------------------------
+        if install_order and modlist_path.is_file():
+            try:
+                _folder_to_key: dict[str, int] = {
+                    folder: key for key, folder in install_order
+                }
+                _existing = read_modlist(modlist_path)
+                # Enable every entry and sort by collection position.
+                # Entries not in install_order (e.g. separators added by Step 3)
+                # keep their relative position at the end.
+                _known   = [e for e in _existing if e.name in _folder_to_key]
+                _unknown = [e for e in _existing if e.name not in _folder_to_key]
+                for e in _known:
+                    e.enabled = True
+                for e in _unknown:
+                    if not e.is_separator:
+                        e.enabled = True
+                _known.sort(key=lambda e: _folder_to_key[e.name])
+                _reconciled = _known + _unknown
+                write_modlist(modlist_path, _reconciled)
+                self._log(
+                    f"Collection install: reconciled modlist.txt "
+                    f"({len(_known)} ordered, {len(_unknown)} trailing)"
+                )
+            except Exception as exc:
+                self._log(f"Collection install: reconcile modlist failed: {exc}")
+
         # Restore the original profile dir
         self._game.set_active_profile_dir(old_profile)
 
@@ -2736,20 +2780,34 @@ class CollectionDetailDialog(tk.Frame):
         ).start()
 
     def _run_reset_load_order(self, profile_dir: Path):
-        """Background: re-fetch collection.json and rewrite modlist.txt + plugins.txt."""
+        """Re-apply collection.json load order to modlist.txt + plugins.txt."""
         import configparser
         try:
-            self.after(0, lambda: self._status_var.set("Downloading collection manifest…"))
-            cj = self._api.get_collection_archive_json(self._download_link_path)
+            # Use cached manifest if available; download only as fallback
+            cj = getattr(self, "_collection_schema_cache", None) or {}
+            if not cj:
+                manifest_path = profile_dir / "collection.json"
+                if manifest_path.is_file():
+                    try:
+                        import json as _json
+                        cj = _json.loads(manifest_path.read_text(encoding="utf-8"))
+                        self._log("Reset load order: using cached collection.json from profile")
+                    except Exception:
+                        pass
+            if not cj:
+                self.after(0, lambda: self._status_var.set("Downloading collection manifest…"))
+                cj = self._api.get_collection_archive_json(self._download_link_path)
+                self._collection_schema_cache = cj
 
             # Save manifest to profile dir for inspection
-            try:
-                import json as _json
-                manifest_path = profile_dir / "collection.json"
-                manifest_path.write_text(_json.dumps(cj, indent=2), encoding="utf-8")
-                self._log(f"Saved collection manifest to {manifest_path}")
-            except Exception as _exc:
-                self._log(f"Could not save manifest: {_exc}")
+            if cj:
+                try:
+                    import json as _json
+                    manifest_path = profile_dir / "collection.json"
+                    manifest_path.write_text(_json.dumps(cj, indent=2), encoding="utf-8")
+                    self._log(f"Saved collection manifest to {manifest_path}")
+                except Exception as _exc:
+                    self._log(f"Could not save manifest: {_exc}")
 
             # Build file_id → priority position map respecting modRules
             fid_to_pos: dict = _topo_sort_collection(
