@@ -99,7 +99,28 @@ class SkyrimSE(Fallout_3):
             CustomRule(dest="", filenames=["d3dx9_42.dll"]),
             CustomRule(dest="", filenames=["skse64_1_6_1170.dll"]),
             CustomRule(dest="", filenames=["skse64_loader.exe"]),
-            ]
+            # ENB Series files → game root
+            CustomRule(dest="", filenames=[
+                "d3d11.dll",
+                "d3dcompiler_46e.dll",
+                "enbadaptation.fx",
+                "enbbloom.fx",
+                "enbdepthoffield.fx",
+                "enbeffect.fx",
+                "enbeffectpostpass.fx",
+                "enbeffectprepass.fx",
+                "enblens.fx",
+                "enblocal.ini",
+                "enbpalette.bmp",
+                "enbraindrops.dds",
+                "enbseries.ini",
+                "enbsunsprite.bmp",
+                "enbsunsprite.fx",
+                "enbunderwater.fx",
+                "enbunderwaternoise.bmp",
+            ]),
+            CustomRule(dest="", folders=["enbseries"]),
+        ]
     
     @property
     def winetricks_components(self) -> list[str]:
