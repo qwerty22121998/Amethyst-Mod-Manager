@@ -10,6 +10,7 @@ by name, and Prev / Next page navigation.
 from __future__ import annotations
 
 import os
+import queue as _queue_mod
 import re
 import threading
 import tkinter as tk
@@ -88,6 +89,10 @@ PAGE_SIZE    = 20
 _ACTIVE_INSTALLS: dict[str, dict] = {}
 # Paused installs: slug → {"cancel": threading.Event, "pause": threading.Event}
 _PAUSED_INSTALLS: dict[str, dict] = {}
+
+# DEBUG: set to True to force the non-premium manual-download flow regardless of
+# the user's actual premium status. Remove or set to False before release.
+_DEBUG_FORCE_MANUAL_INSTALL: bool = False
 
 
 def _topo_sort_collection(schema_mods: list[dict], mod_rules: list[dict]) -> dict[int, int]:
@@ -615,6 +620,9 @@ class CollectionDetailDialog(tk.Frame):
         self._file_id_to_tree_iid: dict[int, str] = {}  # populated by _populate; used to green rows live
         self._install_poll_id: str | None = None  # after() id for install-progress polling
 
+        # Premium status — determined in _worker(); controls download flow.
+        self._nexus_is_premium: bool = False
+
         # Pre-populate collection schema cache from disk if available
         self._collection_schema_cache: dict = {}
         pd = self._get_profile_dir()
@@ -993,6 +1001,13 @@ class CollectionDetailDialog(tk.Frame):
             # Cache the full schema dict so _run_install can reuse it without
             # downloading the archive a second time.
             self._collection_schema_cache = cj
+
+            # Determine premium status so install can branch later.
+            try:
+                _user = self._api.validate()
+                self._nexus_is_premium = bool(_user.is_premium)
+            except Exception:
+                self._nexus_is_premium = False
 
             # Override the optional flag and mod name on each mod using
             # collection.json as the authoritative source — the GraphQL API
@@ -1413,28 +1428,38 @@ class CollectionDetailDialog(tk.Frame):
 
         self._status_var.set(f"Starting install of {len(mods)} mods into '{profile_name}'…")
 
-        # Show a blocking overlay so the user can't click anything during install
-        self._show_install_overlay(len(mods), profile_name)
-
         # Save the old profile dir so we can restore it after install
         old_profile = getattr(self._game, "_active_profile_dir", None)
 
-        threading.Thread(
-            target=self._run_install,
-            args=(
-                list(mods),
-                self._download_link_path,
-                profile_dir,
-                old_profile,
-                downloader,
-                app,
-                len(mods),
-                None if mode in ("new", "continue") else overwrite_existing,
-                skipped_fids,
-                skipped_mods or [],
-            ),
-            daemon=True,
-        ).start()
+        _install_args = (
+            list(mods),
+            self._download_link_path,
+            profile_dir,
+            old_profile,
+            downloader,
+            app,
+            len(mods),
+            None if mode in ("new", "continue") else overwrite_existing,
+            skipped_fids,
+            skipped_mods or [],
+        )
+
+        if self._nexus_is_premium and not _DEBUG_FORCE_MANUAL_INSTALL:
+            # Premium: automated CDN download + parallel install
+            self._show_install_overlay(len(mods), profile_name)
+            threading.Thread(
+                target=self._run_install,
+                args=_install_args,
+                daemon=True,
+            ).start()
+        else:
+            # Non-premium: sequential manual-download overlay
+            self._show_manual_install_overlay(len(mods), profile_name)
+            threading.Thread(
+                target=self._run_manual_install,
+                args=_install_args,
+                daemon=True,
+            ).start()
 
     def _run_install(self, mods, download_link_path, profile_dir, old_profile, downloader, app, total, overwrite_existing: "bool | None" = None, skipped_fids: "set[int] | None" = None, skipped_mods: "list | None" = None):
         """Background thread: download then install each mod in collection-defined order.
@@ -2548,6 +2573,783 @@ class CollectionDetailDialog(tk.Frame):
         self._install_overlay_dl_bar = None
         self._install_overlay_pause_btn = None
         self._install_overlay_btn_row = None
+
+    # ------------------------------------------------------------------
+    # Manual (non-premium) install overlay + flow
+    # ------------------------------------------------------------------
+
+    def _show_manual_install_overlay(self, mod_count: int, profile_name: str):
+        """Show a blocking overlay for sequential manual-download collection install."""
+        overlay = tk.Frame(self, bg="#1a1a1a")
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+        overlay.bind("<Button-1>", lambda e: "break")
+        overlay.bind("<ButtonRelease-1>", lambda e: "break")
+
+        inner = tk.Frame(overlay, bg="#2b2b2b", width=540, bd=0, highlightthickness=0)
+        inner.place(relx=0.5, rely=0.5, anchor="center", width=540)
+
+        tk.Label(
+            inner, text="Manual Download Required",
+            font=("Segoe UI", 16, "bold"), fg="#ffffff", bg="#2b2b2b",
+        ).pack(pady=(20, 2))
+        tk.Label(
+            inner, text=f"Non-premium users must download each mod manually.",
+            font=("Segoe UI", 10), fg="#aaaaaa", bg="#2b2b2b",
+        ).pack(pady=(0, 2))
+        if profile_name:
+            tk.Label(
+                inner, text=f"Profile: {profile_name}",
+                font=("Segoe UI", 11), fg="#aaaaaa", bg="#2b2b2b",
+            ).pack(pady=(0, 6))
+
+        # --- Mod info card ---
+        card = tk.Frame(inner, bg="#333333", bd=0, highlightthickness=1, highlightbackground="#555555")
+        card.pack(fill="x", padx=20, pady=(6, 4))
+
+        self._manual_mod_name_lbl = tk.Label(
+            card, text="", font=("Segoe UI", 13, "bold"), fg="#ffffff", bg="#333333",
+            anchor="w", wraplength=480,
+        )
+        self._manual_mod_name_lbl.pack(fill="x", padx=12, pady=(10, 2))
+
+        info_row = tk.Frame(card, bg="#333333")
+        info_row.pack(fill="x", padx=12, pady=(0, 2))
+        self._manual_mod_size_lbl = tk.Label(
+            info_row, text="", font=("Segoe UI", 10), fg="#aaaaaa", bg="#333333", anchor="w",
+        )
+        self._manual_mod_size_lbl.pack(side="left")
+        self._manual_mod_badge_lbl = tk.Label(
+            info_row, text="", font=("Segoe UI", 9, "bold"), fg="#ffffff", bg="#2d7a2d",
+            padx=6, pady=1,
+        )
+        self._manual_mod_badge_lbl.pack(side="left", padx=(8, 0))
+
+        self._manual_mod_file_hint_lbl = tk.Label(
+            card, text="", font=("Consolas", 9), fg="#777777", bg="#333333",
+            anchor="w", wraplength=480,
+        )
+        self._manual_mod_file_hint_lbl.pack(fill="x", padx=12, pady=(0, 10))
+
+        # --- Status ---
+        self._manual_status_var = tk.StringVar(value="Preparing\u2026")
+        tk.Label(
+            inner, textvariable=self._manual_status_var,
+            bg="#2b2b2b", fg="#aaaaaa", font=("Segoe UI", 10), anchor="w",
+        ).pack(fill="x", padx=20, pady=(6, 2))
+
+        # --- Buttons ---
+        btn_row = tk.Frame(inner, bg="#2b2b2b")
+        btn_row.pack(pady=(8, 4))
+
+        self._manual_open_url_btn = ctk.CTkButton(
+            btn_row, text="Open Download Page",
+            height=scaled(32), width=scaled(200),
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            text_color="#ffffff", font=font_sized("Segoe UI", 11),
+            border_width=0,
+            command=lambda: None,  # replaced per-mod
+        )
+        self._manual_open_url_btn.pack(side="left", padx=(0, 8))
+
+        self._manual_open_next_btn = ctk.CTkButton(
+            btn_row, text="Open next 5",
+            height=scaled(32), width=scaled(110),
+            fg_color="#1a5a8a", hover_color="#2070a8",
+            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            border_width=0,
+            command=lambda: None,  # replaced per-mod
+        )
+        self._manual_open_next_btn.pack(side="left", padx=(0, 8))
+        self._manual_open_next_btn.pack_forget()  # hidden until there are upcoming mods
+
+        self._manual_select_btn = ctk.CTkButton(
+            btn_row, text="Select File\u2026",
+            height=scaled(32), width=scaled(120),
+            fg_color="#444444", hover_color="#555555",
+            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            border_width=0,
+            command=self._on_manual_select_file,
+        )
+        self._manual_select_btn.pack(side="left", padx=(0, 8))
+
+        self._manual_skip_btn = ctk.CTkButton(
+            btn_row, text="Skip",
+            height=scaled(32), width=scaled(80),
+            fg_color="#7a5a00", hover_color="#a07800",
+            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            border_width=0,
+            command=self._on_manual_skip,
+        )
+        self._manual_skip_btn.pack(side="left", padx=(0, 8))
+        self._manual_skip_btn.pack_forget()  # hidden by default
+
+        # --- Bottom row: progress + cancel ---
+        bottom = tk.Frame(inner, bg="#2b2b2b")
+        bottom.pack(fill="x", padx=20, pady=(6, 16))
+
+        self._manual_progress_lbl = tk.Label(
+            bottom, text=f"0 of {mod_count} mods installed",
+            font=("Segoe UI", 10), fg="#aaaaaa", bg="#2b2b2b", anchor="w",
+        )
+        self._manual_progress_lbl.pack(side="left")
+
+        cancel_btn = ctk.CTkButton(
+            bottom, text="Cancel",
+            height=scaled(28), width=scaled(100),
+            fg_color="#7a1a1a", hover_color="#a02020",
+            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            border_width=0,
+            command=self._on_manual_cancel,
+        )
+        cancel_btn.pack(side="right")
+
+        self._manual_overlay = overlay
+        self._manual_cancel_event = threading.Event()
+        self._manual_file_queue: _queue_mod.Queue = _queue_mod.Queue()
+
+    def _update_manual_overlay(self, mod, idx: int, total: int, installed_so_far: int,
+                               upcoming_mods: "list | None" = None):
+        """Update the manual overlay to show the current mod being requested."""
+        game_domain = getattr(self._game, "nexus_game_domain", None) or self._game_domain
+        nexus_url = f"https://www.nexusmods.com/{game_domain}/mods/{mod.mod_id}?tab=files&file_id={mod.file_id}"
+
+        self._manual_mod_name_lbl.configure(text=mod.mod_name or f"Mod {mod.mod_id}")
+        size_str = _fmt_size(getattr(mod, "size_bytes", 0) or 0)
+        self._manual_mod_size_lbl.configure(text=size_str)
+
+        if getattr(mod, "optional", False):
+            self._manual_mod_badge_lbl.configure(text="Optional", bg="#c37800")
+            self._manual_skip_btn.pack(side="left", padx=(0, 8))
+        else:
+            self._manual_mod_badge_lbl.configure(text="Required", bg="#2d7a2d")
+            self._manual_skip_btn.pack_forget()
+
+        hint = mod.file_name or ""
+        self._manual_mod_file_hint_lbl.configure(
+            text=f"Expected file: {hint}" if hint else ""
+        )
+        self._manual_status_var.set(
+            f"Mod {idx}/{total} — download this file, then it will be auto-detected\u2026"
+        )
+        self._manual_progress_lbl.configure(
+            text=f"{installed_so_far} of {total} mods installed"
+        )
+        self._manual_open_url_btn.configure(command=lambda u=nexus_url: open_url(u, log_fn=self._log))
+
+        # "Open next 5" button — current mod + up to 4 upcoming
+        batch = [mod] + (upcoming_mods or [])[:4]
+        # Always show "Open next 5" (current + upcoming), hide only if it would just duplicate "Open Download Page"
+        if upcoming_mods:
+            def _open_next(_mods=batch):
+                _gd = getattr(self._game, "nexus_game_domain", None) or self._game_domain
+                for _m in _mods:
+                    _u = f"https://www.nexusmods.com/{_gd}/mods/{_m.mod_id}?tab=files&file_id={_m.file_id}"
+                    open_url(_u, log_fn=self._log)
+            count = len(batch)
+            self._manual_open_next_btn.configure(
+                text=f"Open next {count}",
+                command=_open_next,
+            )
+            self._manual_open_next_btn.pack(side="left", padx=(0, 8))
+        else:
+            self._manual_open_next_btn.pack_forget()
+
+    def _on_manual_skip(self):
+        """Skip the current mod (only for optional mods)."""
+        try:
+            self._manual_file_queue.put_nowait(None)
+        except Exception:
+            pass
+
+    def _on_manual_select_file(self):
+        """Open a file picker as fallback for manual download detection."""
+        from Utils.portal_filechooser import pick_file
+
+        def _on_picked(path):
+            if path is not None:
+                try:
+                    self._manual_file_queue.put_nowait(str(path))
+                except Exception:
+                    pass
+
+        pick_file("Select downloaded mod archive", _on_picked)
+
+    def _on_manual_cancel(self):
+        """Cancel the manual install flow."""
+        self._manual_cancel_event.set()
+
+    def _dismiss_manual_overlay(self):
+        """Remove the manual-download overlay."""
+        overlay = getattr(self, "_manual_overlay", None)
+        if overlay is None:
+            return
+        try:
+            overlay.destroy()
+        except Exception:
+            pass
+        self._manual_overlay = None
+
+    # ------------------------------------------------------------------
+    # _run_manual_install — sequential download+install for non-premium
+    # ------------------------------------------------------------------
+
+    def _run_manual_install(self, mods, download_link_path, profile_dir, old_profile,
+                            downloader, app, total,
+                            overwrite_existing: "bool | None" = None,
+                            skipped_fids: "set[int] | None" = None,
+                            skipped_mods: "list | None" = None):
+        """Background thread: guide user through manual download of each mod, then install."""
+        import time as _time_mod
+        from Nexus.nexus_download import _find_cached_archive, _get_downloads_dir
+        from gui.download_locations_overlay import load_extra_download_locations
+
+        _slug = self._collection.slug or ""
+        _install_state: dict = {"status": "", "installed_fids": set(), "done": False, "profile_dir": profile_dir}
+        if _slug:
+            _ACTIVE_INSTALLS[_slug] = _install_state
+
+        def _set_status(msg: str):
+            _install_state["status"] = msg
+            try:
+                self.after(0, lambda m=msg: self._manual_status_var.set(m))
+            except Exception:
+                pass
+
+        self._game.set_active_profile_dir(profile_dir)
+        modlist_path = profile_dir / "modlist.txt"
+        staging_path = self._game.get_effective_mod_staging_path()
+        installed = 0
+        skipped = 0
+
+        # ------------------------------------------------------------------
+        # Step 1: Parse collection.json (same as _run_install)
+        # ------------------------------------------------------------------
+        collection_schema: dict = {}
+        cached_schema = getattr(self, "_collection_schema_cache", None)
+        if cached_schema:
+            collection_schema = cached_schema
+            self._log("Manual install: reusing cached collection.json")
+        elif download_link_path:
+            _set_status("Downloading collection manifest\u2026")
+            try:
+                collection_schema = self._api.get_collection_archive_json(download_link_path)
+            except Exception as exc:
+                self._log(f"Manual install: could not download collection.json: {exc}")
+
+        if collection_schema:
+            try:
+                import json as _json
+                (profile_dir / "collection.json").write_text(
+                    _json.dumps(collection_schema, indent=2), encoding="utf-8",
+                )
+            except Exception:
+                pass
+
+        schema_mods: list[dict] = collection_schema.get("mods", [])
+        mod_rules: list[dict] = collection_schema.get("modRules", [])
+        schema_file_id_to_pos = _topo_sort_collection(schema_mods, mod_rules)
+        schema_pos_to_name: dict[int, str] = {}
+        schema_file_id_to_logical: dict[int, str] = {}
+        schema_file_id_to_mod_id: dict[int, int] = {}
+        fomod_by_file_id: dict[int, dict] = {}
+
+        _raw_logical: dict[int, str] = {}
+        _raw_name: dict[int, str] = {}
+        for sm in schema_mods:
+            src = sm.get("source") or {}
+            fid = src.get("fileId")
+            if fid is not None:
+                fid = int(fid)
+                _raw_logical[fid] = src.get("logicalFilename") or ""
+                _raw_name[fid] = sm.get("name") or ""
+        _logical_counts: dict[str, int] = {}
+        for raw in _raw_logical.values():
+            if raw:
+                _logical_counts[raw] = _logical_counts.get(raw, 0) + 1
+
+        for pos, sm in enumerate(schema_mods):
+            src = sm.get("source") or {}
+            fid = src.get("fileId")
+            if fid is not None:
+                fid = int(fid)
+                topo_pos = schema_file_id_to_pos.get(fid, pos)
+                schema_pos_to_name[topo_pos] = sm.get("name") or ""
+                raw_logical = _raw_logical.get(fid, "")
+                schema_name = _raw_name.get(fid, "")
+                if raw_logical and _logical_counts.get(raw_logical, 0) > 1:
+                    logical = schema_name or raw_logical
+                else:
+                    logical = raw_logical or schema_name
+                schema_file_id_to_logical[fid] = logical
+                mid = src.get("modId")
+                if mid:
+                    schema_file_id_to_mod_id[fid] = int(mid)
+                choices = sm.get("choices") or {}
+                if choices.get("type") == "fomod":
+                    fomod_by_file_id[fid] = _fomod_choices_from_collection(choices)
+
+        def _sort_key(m):
+            return schema_file_id_to_pos.get(m.file_id, len(schema_mods))
+
+        ordered_mods = sorted(mods, key=_sort_key)
+
+        # ------------------------------------------------------------------
+        # Step 2: Classify already-installed mods (same as _run_install)
+        # ------------------------------------------------------------------
+        already_installed_by_fid: dict[int, str] = {}
+        staging_lower_map: dict[str, str] = {}
+        _profile_mod_names: set[str] = set()
+        if modlist_path.is_file():
+            try:
+                for entry in read_modlist(modlist_path):
+                    _profile_mod_names.add(entry.name.lower())
+            except Exception:
+                pass
+
+        import configparser as _cp
+        if staging_path.exists():
+            for mod_dir in staging_path.iterdir():
+                if not mod_dir.is_dir():
+                    continue
+                if mod_dir.name.lower() in _profile_mod_names:
+                    staging_lower_map[mod_dir.name.lower()] = mod_dir.name
+                meta_ini = mod_dir / "meta.ini"
+                if not meta_ini.is_file():
+                    continue
+                try:
+                    _parser = _cp.ConfigParser()
+                    _parser.read(str(meta_ini), encoding="utf-8")
+                    fid_str = _parser.get("General", "fileid", fallback="").strip()
+                    if fid_str and fid_str != "0":
+                        already_installed_by_fid[int(fid_str)] = mod_dir.name
+                except Exception:
+                    pass
+
+        # Remove staging folders for unticked optional mods
+        if skipped_fids and skipped_mods:
+            import shutil as _shutil_skip
+            _removed: list[str] = []
+            for mod in skipped_mods:
+                if not mod.file_id or mod.file_id not in skipped_fids:
+                    continue
+                folder_name = already_installed_by_fid.get(mod.file_id, "")
+                if not folder_name:
+                    logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
+                    schema_name = schema_pos_to_name.get(
+                        schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
+                    candidates: list[str] = []
+                    name_sources = (logical, schema_name) if (logical or schema_name) else (mod.mod_name or "",)
+                    for raw in name_sources:
+                        if raw:
+                            for s in _suggest_mod_names(raw):
+                                if s and s not in candidates:
+                                    candidates.append(s)
+                    for candidate in candidates:
+                        if candidate.lower() in staging_lower_map:
+                            folder_name = staging_lower_map[candidate.lower()]
+                            break
+                if folder_name:
+                    skip_dir = staging_path / folder_name
+                    if skip_dir.is_dir():
+                        self._log(f"Manual install: removing unticked '{folder_name}'")
+                        try:
+                            _shutil_skip.rmtree(skip_dir)
+                            _removed.append(folder_name)
+                        except Exception:
+                            pass
+            if _removed and modlist_path.is_file():
+                try:
+                    _rem_set = set(_removed)
+                    entries = read_modlist(modlist_path)
+                    entries = [e for e in entries if e.name not in _rem_set]
+                    write_modlist(modlist_path, entries)
+                except Exception:
+                    pass
+
+        install_order: list[tuple[int, str]] = []
+        to_download: list = []
+        for mod in ordered_mods:
+            if not mod.file_id:
+                skipped += 1
+                continue
+            existing_folder = ""
+            if mod.file_id in already_installed_by_fid:
+                existing_folder = already_installed_by_fid[mod.file_id]
+            else:
+                logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
+                schema_name = schema_pos_to_name.get(schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
+                candidates = []
+                name_sources = (logical, schema_name) if (logical or schema_name) else (mod.mod_name or "",)
+                for raw in name_sources:
+                    if raw:
+                        for s in _suggest_mod_names(raw):
+                            if s and s not in candidates:
+                                candidates.append(s)
+                for candidate in candidates:
+                    if candidate.lower() in staging_lower_map:
+                        existing_folder = staging_lower_map[candidate.lower()]
+                        break
+            if existing_folder:
+                self._log(f"Manual install: '{mod.mod_name}' already installed as '{existing_folder}' \u2014 skipping")
+                install_order.append((_sort_key(mod), existing_folder))
+                installed += 1
+            else:
+                to_download.append(mod)
+
+        # Sort by size per collection settings (mirrors _run_install)
+        from Utils.ui_config import load_collection_settings as _load_col_cfg
+        _col_cfg = _load_col_cfg()
+        to_download.sort(
+            key=lambda m: getattr(m, "size_bytes", 0) or 0,
+            reverse=(_col_cfg["download_order"] == "largest"),
+        )
+
+        # ------------------------------------------------------------------
+        # Step 3: Sequential manual download + install
+        # ------------------------------------------------------------------
+        def _get_scan_dirs() -> list[Path]:
+            dirs: list[Path] = [_get_downloads_dir()]
+            seen = {dirs[0].resolve()}
+            for p in load_extra_download_locations():
+                path = Path(p).expanduser().resolve()
+                if path.is_dir() and path not in seen:
+                    dirs.append(path)
+                    seen.add(path)
+            return dirs
+
+        def _wait_for_file(mod) -> "Path | None":
+            """Poll downloads folders until the mod archive appears, or user skips/selects."""
+            scan_dirs = _get_scan_dirs()
+            while not self._manual_cancel_event.is_set():
+                # Check user actions (select file / skip)
+                try:
+                    item = self._manual_file_queue.get_nowait()
+                    if item is None:
+                        return None  # skip
+                    p = Path(item)
+                    if p.is_file():
+                        return p
+                except _queue_mod.Empty:
+                    pass
+                # Poll downloads folders
+                for folder in scan_dirs:
+                    if not folder.is_dir():
+                        continue
+                    found, is_complete = _find_cached_archive(
+                        folder,
+                        mod.file_name or mod.mod_name or "",
+                        getattr(mod, "size_bytes", 0) or 0,
+                        mod.mod_id,
+                        mod.file_id,
+                    )
+                    if found and is_complete:
+                        return found
+                _time_mod.sleep(2.0)
+            return None  # cancelled
+
+        dl_total = len(to_download)
+        for idx_0, mod in enumerate(to_download):
+            if self._manual_cancel_event.is_set():
+                break
+
+            idx = idx_0 + 1
+            # Update overlay on main thread and wait for it to complete
+            _ready = threading.Event()
+            def _do_update(_m=mod, _i=idx, _t=dl_total, _inst=installed, _up=to_download[idx_0+1:]):
+                try:
+                    self._update_manual_overlay(_m, _i, _t, _inst, upcoming_mods=_up)
+                except Exception:
+                    pass
+                finally:
+                    _ready.set()
+            try:
+                self.after(0, _do_update)
+            except Exception:
+                _ready.set()
+            _ready.wait(timeout=5)
+
+            # Wait for the file to appear
+            archive_path = _wait_for_file(mod)
+
+            if self._manual_cancel_event.is_set():
+                break
+            if archive_path is None:
+                self._log(f"Manual install: skipped '{mod.mod_name}'")
+                skipped += 1
+                continue
+
+            _set_status(f"Installing {mod.mod_name}\u2026")
+
+            # Build prebuilt metadata
+            try:
+                _effective_mod_id = schema_file_id_to_mod_id.get(mod.file_id, 0) or mod.mod_id
+                _pmeta = build_meta_from_download(
+                    game_domain=self._game_domain,
+                    mod_id=_effective_mod_id,
+                    file_id=mod.file_id,
+                    archive_name=mod.file_name or "",
+                )
+                _pmeta.nexus_name = mod.mod_name or ""
+                _pmeta.author = mod.mod_author or ""
+                _pmeta.version = mod.version or ""
+            except Exception:
+                _pmeta = None
+
+            _logical = schema_file_id_to_logical.get(mod.file_id, "") or ""
+            _schema_name = schema_pos_to_name.get(
+                schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
+            _preferred = _logical or _schema_name or mod.mod_name or ""
+
+            try:
+                folder_name = install_mod_from_archive(
+                    str(archive_path), self, self._log, self._game,
+                    fomod_auto_selections=fomod_by_file_id.get(mod.file_id),
+                    prebuilt_meta=_pmeta,
+                    profile_dir=profile_dir,
+                    headless=True,
+                    preferred_name=_preferred,
+                    skip_index_update=True,
+                    overwrite_existing=overwrite_existing,
+                )
+            except Exception as exc:
+                self._log(f"Manual install: failed to install '{mod.mod_name}': {exc}")
+                folder_name = None
+
+            if folder_name:
+                installed += 1
+                install_order.append((_sort_key(mod), folder_name))
+                _install_state["installed_fids"].add(mod.file_id)
+                try:
+                    self.after(0, lambda fid=mod.file_id: self._mark_row_installed(fid))
+                except Exception:
+                    pass
+                # Delete the archive after a successful install
+                try:
+                    archive_path.unlink(missing_ok=True)
+                    self._log(f"Manual install: deleted archive '{archive_path.name}'")
+                except Exception as _del_exc:
+                    self._log(f"Manual install: could not delete archive '{archive_path.name}': {_del_exc}")
+            else:
+                skipped += 1
+
+        # ------------------------------------------------------------------
+        # Step 4: Bundled assets from collection archive (same as _run_install)
+        # ------------------------------------------------------------------
+        bundle_schema_mods = [
+            m for m in schema_mods
+            if (m.get("source") or {}).get("type", "").lower() == "bundle"
+        ]
+        if bundle_schema_mods and download_link_path:
+            import tempfile as _tf
+            _set_status(f"Installing {len(bundle_schema_mods)} bundled mod(s)\u2026")
+            bundle_extract_dir = _tf.mkdtemp(prefix="amethyst_bundle_")
+            try:
+                cj_full = self._api.get_collection_archive_full(
+                    download_link_path, bundle_extract_dir,
+                )
+                if cj_full:
+                    import shutil as _shutil2
+                    import configparser as _cpi
+                    for bm in bundle_schema_mods:
+                        bm_name = bm.get("name") or ""
+                        src = bm.get("source") or {}
+                        file_expr = src.get("fileExpression") or bm_name
+                        bundle_subdir = Path(bundle_extract_dir) / "bundled" / file_expr
+                        if not bundle_subdir.is_dir():
+                            bundle_subdir = Path(bundle_extract_dir) / "bundled" / bm_name
+                        if not bundle_subdir.is_dir():
+                            skipped += 1
+                            continue
+                        mod_name_clean = re.sub(r"[^\w\s\-]", "", bm_name).strip().replace(" ", "_") or file_expr
+                        if mod_name_clean.lower() in {k.lower() for k in staging_lower_map}:
+                            existing = staging_lower_map.get(mod_name_clean.lower(), mod_name_clean)
+                            install_order.append((-1, existing))
+                            installed += 1
+                            continue
+                        dest = staging_path / mod_name_clean
+                        if dest.exists():
+                            _shutil2.rmtree(dest)
+                        _shutil2.copytree(str(bundle_subdir), str(dest))
+                        meta = dest / "meta.ini"
+                        cp = _cpi.ConfigParser()
+                        cp["General"] = {"modname": bm_name, "installationfile": file_expr}
+                        with open(meta, "w", encoding="utf-8") as mf:
+                            cp.write(mf)
+                        install_order.append((-1, mod_name_clean))
+                        installed += 1
+            except Exception as exc:
+                self._log(f"Manual install: bundled assets error: {exc}")
+            finally:
+                import shutil as _shutil
+                _shutil.rmtree(bundle_extract_dir, ignore_errors=True)
+
+        # ------------------------------------------------------------------
+        # Step 5: Rebuild mod index
+        # ------------------------------------------------------------------
+        if installed > 0:
+            try:
+                _idx_path = profile_dir / "modindex.bin"
+                rebuild_mod_index(
+                    _idx_path,
+                    self._game.get_effective_mod_staging_path(),
+                    strip_prefixes=set(getattr(self._game, "strip_prefixes", None) or []),
+                    allowed_extensions=set(getattr(self._game, "install_extensions", None) or []),
+                    root_deploy_folders=set(getattr(self._game, "root_deploy_folders", None) or []),
+                    normalize_folder_case=getattr(self._game, "normalize_folder_case", True),
+                )
+            except Exception:
+                pass
+
+        # Build install_order for downloaded mods
+        for mod in to_download:
+            if mod.file_id in _install_state["installed_fids"]:
+                # already appended in the loop above
+                pass
+
+        # ------------------------------------------------------------------
+        # Step 6: Write modlist.txt in collection-defined order
+        # ------------------------------------------------------------------
+        if overwrite_existing is None:
+            install_order.sort(key=lambda x: x[0])
+            modlist_entries = [
+                ModEntry(name=folder, enabled=True, locked=False)
+                for _, folder in install_order
+            ]
+            if modlist_entries:
+                try:
+                    _bundle_map: dict[str, list[ModEntry]] = {}
+                    _non_bundle: list[ModEntry] = []
+                    for me in modlist_entries:
+                        if "__" in me.name:
+                            bname = me.name.split("__", 1)[0]
+                            _bundle_map.setdefault(bname, []).append(me)
+                        else:
+                            _non_bundle.append(me)
+                    final_entries: list[ModEntry] = list(_non_bundle)
+                    for bname, variants in _bundle_map.items():
+                        sep_name = f"{bname}_separator"
+                        final_entries.append(
+                            ModEntry(name=sep_name, enabled=True, locked=True, is_separator=True))
+                        for v in variants:
+                            v.locked = False
+                            v.enabled = True
+                            final_entries.append(v)
+                    write_modlist(modlist_path, final_entries)
+                    if _bundle_map:
+                        from Utils.profile_state import read_separator_locks, write_separator_locks
+                        _locks = read_separator_locks(profile_dir)
+                        for bname in _bundle_map:
+                            _locks[f"{bname}_separator"] = True
+                        write_separator_locks(profile_dir, _locks)
+                except Exception as exc:
+                    self._log(f"Manual install: failed to write modlist.txt: {exc}")
+
+        # ------------------------------------------------------------------
+        # Step 7: Write plugins.txt / loadorder.txt from collection.json
+        # ------------------------------------------------------------------
+        schema_plugins: list[dict] = collection_schema.get("plugins", [])
+        if schema_plugins and overwrite_existing is None:
+            try:
+                author_entries = [
+                    PluginEntry(name=p.get("name", ""), enabled=p.get("enabled", True))
+                    for p in schema_plugins if p.get("name", "")
+                ]
+                author_lower = {e.name.lower() for e in author_entries}
+                vanilla_map = _vanilla_plugins_for_game(self._game)
+                plugins_include_vanilla = getattr(self._game, "plugins_include_vanilla", False)
+                vanilla_lower: set[str] = set() if plugins_include_vanilla else set(vanilla_map.keys())
+
+                loot_vanilla_prefix: list[PluginEntry] = []
+                loot_enabled = getattr(self._game, "loot_sort_enabled", False)
+                if loot_enabled and _loot_available():
+                    try:
+                        _ext_order = {".esm": 0, ".esp": 1, ".esl": 2}
+                        vanilla_prepend = [
+                            PluginEntry(name=orig, enabled=True)
+                            for low, orig in sorted(
+                                vanilla_map.items(),
+                                key=lambda kv: (_ext_order.get(Path(kv[0]).suffix, 9), kv[0]),
+                            )
+                            if low not in author_lower
+                        ]
+                        all_entries = vanilla_prepend + author_entries
+                        name_to_enabled = {e.name: e.enabled for e in all_entries}
+                        loot_result = _loot_sort(
+                            plugin_names=[e.name for e in all_entries],
+                            enabled_set={e.name for e in all_entries if e.enabled},
+                            game_name=self._game.name,
+                            game_path=self._game.get_game_path(),
+                            staging_root=self._game.get_effective_mod_staging_path(),
+                            log_fn=self._log,
+                            game_type_attr=getattr(self._game, "loot_game_type", ""),
+                            game_id=getattr(self._game, "game_id", ""),
+                            masterlist_url=getattr(self._game, "loot_masterlist_url", ""),
+                            game_data_dir=(
+                                self._game.get_vanilla_plugins_path()
+                                if hasattr(self._game, "get_vanilla_plugins_path") else None
+                            ),
+                        )
+                        loot_vanilla_prefix = [
+                            PluginEntry(name=n, enabled=name_to_enabled.get(n, True))
+                            for n in loot_result.sorted_names
+                            if n.lower() not in author_lower
+                        ]
+                    except Exception as exc:
+                        self._log(f"Manual install: LOOT sort failed: {exc}")
+
+                final_entries = loot_vanilla_prefix + author_entries
+                star_prefix = getattr(self._game, "plugins_star_prefix", False)
+                write_plugins(
+                    profile_dir / "plugins.txt",
+                    [e for e in final_entries if e.name.lower() not in vanilla_lower],
+                    star_prefix=star_prefix,
+                )
+                write_loadorder(profile_dir / "loadorder.txt", final_entries)
+            except Exception as exc:
+                self._log(f"Manual install: failed to write plugins.txt: {exc}")
+
+        # ------------------------------------------------------------------
+        # Step 8: Final reconciliation
+        # ------------------------------------------------------------------
+        if install_order and modlist_path.is_file():
+            try:
+                _folder_to_key = {folder: key for key, folder in install_order}
+                _existing = read_modlist(modlist_path)
+                _known = [e for e in _existing if e.name in _folder_to_key]
+                _unknown = [e for e in _existing if e.name not in _folder_to_key]
+                for e in _known:
+                    e.enabled = True
+                for e in _unknown:
+                    if not e.is_separator:
+                        e.enabled = True
+                _known.sort(key=lambda e: _folder_to_key[e.name])
+                write_modlist(modlist_path, _known + _unknown)
+            except Exception:
+                pass
+
+        self._game.set_active_profile_dir(old_profile)
+
+        # Handle cancel
+        if self._manual_cancel_event.is_set():
+            _install_state["done"] = True
+            _ACTIVE_INSTALLS.pop(_slug, None)
+            try:
+                self.after(0, lambda: (self._dismiss_manual_overlay(), self._status_var.set("Install cancelled.")))
+            except Exception:
+                pass
+            return
+
+        _install_state["done"] = True
+        _ACTIVE_INSTALLS.pop(_slug, None)
+
+        try:
+            self.after(0, lambda: (
+                self._dismiss_manual_overlay(),
+                self._on_install_done(installed, skipped, total, str(profile_dir.name)),
+            ))
+        except Exception:
+            pass
 
     def _on_install_done(self, installed: int, skipped: int, total: int, profile_name: str):
         self._dismiss_install_overlay()

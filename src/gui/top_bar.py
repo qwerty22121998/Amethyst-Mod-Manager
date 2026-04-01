@@ -321,7 +321,7 @@ class TopBar(ctk.CTkFrame):
                 # Re-check game flag in case it changed while the thread ran.
                 _game = _gh._GAMES.get(self._game_var.get())
                 _disabled = _game is not None and getattr(_game, "collections_disabled", False)
-                if premium and not _disabled:
+                if not _disabled:
                     self._collections_btn.pack(side="left", padx=(0, 4))
                 else:
                     self._collections_btn.pack_forget()

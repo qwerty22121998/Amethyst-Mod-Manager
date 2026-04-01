@@ -724,7 +724,8 @@ class PluginPanel(ctk.CTkFrame):
         p.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def _is_game_exe(self, exe_path: "Path") -> bool:
-        """Return True if exe_path is this game's own launcher exe (or preferred launch exe)."""
+        """Return True if exe_path is this game's own launcher exe, preferred launch exe,
+        or a framework executable (e.g. script extender) that should launch via Steam."""
         if self._game is None:
             return False
         game_exe_name = getattr(self._game, "exe_name", None)
@@ -735,6 +736,13 @@ class PluginPanel(ctk.CTkFrame):
         preferred_rel = getattr(self._game, "preferred_launch_exe", "")
         if preferred_rel and exe_path.name.lower() == Path(preferred_rel).name.lower():
             return True
+        # Framework exes (e.g. skse64_loader.exe) should also launch via Steam/Heroic
+        # rather than being run directly via Proton, since the game must initialise
+        # properly through the platform's runtime for the framework to work.
+        frameworks: dict = getattr(self._game, "frameworks", None) or {}
+        for fw_exe in frameworks.values():
+            if exe_path.name.lower() == Path(fw_exe).name.lower():
+                return True
         return False
 
     def _open_applications_folder(self) -> None:
