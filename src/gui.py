@@ -302,6 +302,8 @@ class App(ctk.CTk):
         self._handle_nxm_argv()
         # Check for app update after a short delay (non-blocking)
         self.after(2000, self._check_for_app_update)
+        # Silently sync all custom handlers from GitHub on startup
+        self.after(3000, self._sync_custom_handlers)
         icon_path = Path(__file__).parent / "icons" / "title-bar.png"
         if icon_path.is_file():
             icon_img = tk.PhotoImage(file=str(icon_path))
@@ -1778,6 +1780,64 @@ class App(ctk.CTk):
 
     def hide_settings_panel(self):
         self._hide_plugin_overlay("_settings_panel")
+
+    def _sync_custom_handlers(self):
+        """Background-download every custom handler from GitHub, overwriting stale copies."""
+        import json as _json
+        import urllib.request as _urllib
+        from gui.dialogs import _CUSTOM_HANDLERS_API_URL
+        from Utils.config_paths import get_custom_games_dir as _gcgd
+
+        def _do():
+            try:
+                req = _urllib.Request(
+                    _CUSTOM_HANDLERS_API_URL,
+                    headers={"Accept": "application/vnd.github.v3+json"},
+                )
+                with _urllib.urlopen(req, timeout=15) as resp:
+                    data = _json.loads(resp.read().decode("utf-8", errors="replace"))
+                handlers = [
+                    e for e in data
+                    if isinstance(e, dict) and e.get("name", "").endswith(".json")
+                ]
+                changed = False
+                for h in handlers:
+                    filename = h.get("name", "")
+                    download_url = h.get("download_url")
+                    if not download_url:
+                        continue
+                    try:
+                        r = _urllib.Request(
+                            download_url,
+                            headers={"User-Agent": "Amethyst-Mod-Manager"},
+                        )
+                        with _urllib.urlopen(r, timeout=10) as resp:
+                            raw = resp.read().decode("utf-8", errors="replace")
+                        _json.loads(raw)  # validate
+                        dest = _gcgd() / filename
+                        # Only write if content changed (avoids unnecessary disk I/O)
+                        if not dest.is_file() or dest.read_text(encoding="utf-8") != raw:
+                            dest.write_text(raw, encoding="utf-8")
+                            changed = True
+                    except Exception:
+                        pass
+                if changed:
+                    self.call_threadsafe(self._reload_games_after_handler_sync)
+            except Exception:
+                pass
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _reload_games_after_handler_sync(self):
+        """Refresh the game registry after a background handler sync."""
+        from gui.game_helpers import _load_games
+        _load_games()
+        panel = getattr(self, "_game_picker_panel", None)
+        if panel is not None:
+            try:
+                panel.refresh()
+            except Exception:
+                pass
 
     def _startup_log(self):
         from Utils.ui_config import get_ui_scale, get_screen_info
