@@ -272,6 +272,22 @@ class Witcher3(BaseGame):
         self.save_paths()
 
     # -----------------------------------------------------------------------
+    # Wizard tools
+    # -----------------------------------------------------------------------
+
+    @property
+    def wizard_tools(self):
+        from Games.base_game import WizardTool
+        return self._base_wizard_tools() + [
+            WizardTool(
+                id="run_script_merger",
+                label="Run Script Merger",
+                description="Deploy mods, install Script Merger, and run WitcherScriptMerger.exe.",
+                dialog_class_path="wizards.script_merger_tw3.ScriptMergerWizard",
+            ),
+        ]
+
+    # -----------------------------------------------------------------------
     # Deployment
     # -----------------------------------------------------------------------
 
