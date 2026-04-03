@@ -572,7 +572,7 @@ class ScriptMergerWizard(ctk.CTkFrame):
             self._log("Script Merger Wizard: launching .NET 8 installer in game prefix \u2026")
 
             proc = subprocess.run(
-                ["python3", str(proton_script), "run", str(cache_path)],
+                ["python3", str(proton_script), "run", str(cache_path), "/quiet", "/norestart"],
                 env=env,
                 cwd=str(cache_path.parent),
             )
