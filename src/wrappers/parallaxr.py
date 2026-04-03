@@ -19,6 +19,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from Utils.config_paths import get_download_cache_dir
 from Utils.steam_finder import find_any_installed_proton
 from wrappers.bendr import _linux_to_wine, _ensure_utf8_prefix
 
@@ -58,7 +59,7 @@ def _build_wine_overlay(proton_files_dir: Path, patched_ucrtbase: Path) -> Path:
 
     Returns the overlay root directory (caller must clean up).
     """
-    overlay = Path(os.path.expanduser("~/parallaxr_wine_overlay"))
+    overlay = get_download_cache_dir() / "wine_prefixes" / "parallaxr_overlay"
     if overlay.exists():
         shutil.rmtree(overlay)
 
@@ -272,7 +273,8 @@ def run_parallaxr(
     # Discover Wine
     _log("ParallaxR: Locating Proton/Wine...")
     _, proton_files_dir = _find_wine()
-    prefix = os.path.expanduser("~/parallaxr_wine_prefix")
+    prefix = str(get_download_cache_dir() / "wine_prefixes" / "parallaxr")
+    Path(prefix).mkdir(parents=True, exist_ok=True)
 
     # Build Wine overlay with patched ucrtbase.dll (shipped alongside this script)
     patched_ucrtbase = Path(__file__).with_name("ucrtbase.dll")
@@ -410,8 +412,7 @@ def run_parallaxr(
     if work_output.exists():
         shutil.rmtree(work_output, ignore_errors=True)
 
-    # Remove the Wine prefix and overlay — only needed during the run
-    shutil.rmtree(prefix, ignore_errors=True)
+    # Remove overlay — only needed during the run
     shutil.rmtree(str(overlay), ignore_errors=True)
 
     # Clean up env override

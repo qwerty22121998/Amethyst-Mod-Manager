@@ -25,6 +25,7 @@ from typing import Callable
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|\x1b\[[?][0-9;]*[A-Za-z]|\x1b[A-Za-z]|\r")
 
+from Utils.config_paths import get_download_cache_dir
 from Utils.steam_finder import find_any_installed_proton
 from wrappers.vramr import _ensure_compressonator, _optimise_one_texture
 
@@ -214,7 +215,8 @@ def _run_native_bc7(
         for f in dds_files
     ]
 
-    workers = min(2, total)
+    cpu_count = os.cpu_count() or 4
+    workers = min(max(1, cpu_count // 2), total)
     done = 0
     errors = 0
 
@@ -280,7 +282,8 @@ def run_bendr(
     # Discover Wine
     _log("BENDr: Locating Proton/Wine...")
     wine = _find_wine()
-    prefix = os.path.expanduser("~/bendr_wine_prefix")
+    prefix = str(get_download_cache_dir() / "wine_prefixes" / "bendr")
+    Path(prefix).mkdir(parents=True, exist_ok=True)
     _log(f"  Wine: {wine}")
     _ensure_utf8_prefix(wine, prefix)
     comp_cli = _ensure_compressonator(_log)
@@ -433,9 +436,6 @@ def run_bendr(
 
     if work_output.exists():
         shutil.rmtree(work_output, ignore_errors=True)
-
-    # Remove the Wine prefix — it's only needed during the run
-    shutil.rmtree(prefix, ignore_errors=True)
 
     _file_log("BENDr Complete")
     _log("BENDr: Complete! Output is ready as a mod.")
