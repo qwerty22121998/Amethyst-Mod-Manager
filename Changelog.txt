@@ -1,3 +1,10 @@
+- v1.1.7
+- Added Darktide
+- Witcher 3's script merger can now be setup and run via the Wizard tool window.
+- Most of Skyrim SE's external modding tools can also now be setup and run via the wizard tools menu.
+- The profile dropdown is now highlighted green if the profile is currently deployed, (Profiles deployed before this change won't see this)
+- Capped the width of the profile drop down menu to stop the collections button getting squashed.
+
 - v1.1.6
 - Free users can now install collections. Each mod will open in the browser, you have to manually download these but the manager will auto detect the archive file and install it. There is also an auto open next mod option so you can just click download as they appear in the browser.
 - Searching for a mod in the modlist now keeps it's separator shown

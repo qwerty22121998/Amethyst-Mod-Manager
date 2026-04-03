@@ -97,6 +97,8 @@ The manager has the ability to add Nexus collections straight into the manager. 
 
 The manager supports many supporting applications used to mod games. Place the applications in the games applications folder (**In the staging folder**) and they will be auto detected. The arguments/config used to run them will be auto-generated to make setup easier.
 
+**As of update 1.1.7 you can now run most of these tools from the wizard menu, the dependancies will auto install. The only manual step is downloading the application itself**
+
 | Status | Application | Notes |
 |--------|-------------|-------|
 | Working | **Pandora Behaviour Engine** | `--tesv:` and `--output:` args applied at runtime|
@@ -106,11 +108,11 @@ The manager supports many supporting applications used to mod games. Place the a
 | Working | **TexGen** | `-d` and `-o` args applied at runtime|
 | Working | **xLodGen** | `-d` and `-o` args. Game argument appended at runtime |
 | Working | **Bethini Pie** | Just works |
-| Experimental | **Vramr** | Experimental python wrapper See below for instructions|
-| Experimental | **Bendr** | Experimental python wrapper See below for instructions|
-| Experimental | **ParallaxR** | Experimental python wrapper See below for instructions|
+| Experimental | **Vramr** | Experimental python wrapper See wiki for instructions|
+| Experimental | **Bendr** | Experimental python wrapper See wiki for instructions|
+| Experimental | **ParallaxR** | Experimental python wrapper See wiki for instructions|
 | Working | **Wrye Bash** | `-o` Auto generated for selected game at runtime |
-| Working | **Synthesis** | Requires .net10 sdk and .net5 runtime installed into the prefix (Use the proton tools window to do this) |
+| Broken | **Synthesis** | Needs looking into |
 | Working | **Bodyslide and Outfits Studio** | Add as a mod > Deploy > refresh the exe list > Run the exe and it should work |
 | Working | **Witcher 3 Script merger** | Game path added to config automatically |
 | Working | **Witcher 3 Script merger Fresh and Automated Edition** | Game path added to config automatically. Requires .net 8 Runtime installed into the prefix |
