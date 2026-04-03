@@ -687,16 +687,53 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
     # 512 MB safety margin.  A module-level lock + reservation counter prevents
     # parallel workers from all racing to claim the same free space before any
     # of them has started writing.
-    # We compare the *estimated extracted* size (compressed × 6) rather than
-    # the raw archive size, because extraction can expand a file many times over.
-    # Using the compressed size alone was causing EDQUOT (errno 122) on tmpfs
-    # mounts (e.g. Arch Linux /tmp) when installing large mods.
+    # We query the real uncompressed size from archive metadata so that archives
+    # with extreme compression ratios (e.g. 700 MB → 8 GB texture mods) don't
+    # overflow /tmp.  A fallback multiplier is used only when metadata is
+    # unavailable (e.g. solid .7z archives where 7z listing is slow/unavailable).
     global _tmp_space_reserved
     try:
         _archive_size = os.path.getsize(archive_path)
     except OSError:
         _archive_size = 0
-    _extract_size_estimate = _archive_size * 6  # conservative expansion factor
+
+    def _get_uncompressed_size(path: str, compressed_size: int) -> int:
+        """Return best-effort total uncompressed size of the archive in bytes."""
+        _ext = path.lower()
+        # ZIP: fast metadata read via zipfile
+        if _ext.endswith(".zip"):
+            try:
+                with zipfile.ZipFile(path, "r") as _zf:
+                    _total = sum(m.file_size for m in _zf.infolist())
+                if _total > 0:
+                    return _total
+            except Exception:
+                pass
+        # 7z/rar/zip fallback: use `7z l -slt` which prints Size: per entry
+        _7z_bin = shutil.which("7zzs") or shutil.which("7z") or shutil.which("7za")
+        if _7z_bin:
+            try:
+                import subprocess
+                _res = subprocess.run(
+                    [_7z_bin, "l", "-slt", path],
+                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                    text=True, timeout=30,
+                )
+                _total = 0
+                for _line in _res.stdout.splitlines():
+                    if _line.startswith("Size = "):
+                        try:
+                            _total += int(_line.split("=", 1)[1].strip())
+                        except ValueError:
+                            pass
+                if _total > 0:
+                    return _total
+            except Exception:
+                pass
+        # Fallback: assume a generous 15× expansion (handles extreme texture packs)
+        return compressed_size * 15
+
+    _extract_size_estimate = _get_uncompressed_size(archive_path, _archive_size)
     _staging = game.get_effective_mod_staging_path()
     _tmp_claimed = False
     with _tmp_space_lock:
