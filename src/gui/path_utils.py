@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from Utils.portal_filechooser import pick_file
+from Utils.portal_filechooser import pick_file, pick_files
 
 
 def _to_wine_path(linux_path: Path | str) -> str:
@@ -27,3 +27,16 @@ def pick_file_mod_archive(title: str, callback: Callable[[str], None]) -> None:
         callback(str(p) if p else "")
 
     pick_file(title, _cb)
+
+
+def pick_files_mod_archive(title: str, callback: Callable[[list[str]], None]) -> None:
+    """
+    Open a native multi-file picker (XDG portal or zenity) for mod archives.
+    Runs async; callback(paths: list[str]) is invoked with the chosen paths (empty on cancel).
+    Caller should schedule callback on main thread for Tkinter, e.g.:
+        pick_files_mod_archive(title, lambda ps: self.after(0, lambda: self._on_picked(ps)))
+    """
+    def _cb(ps: list) -> None:
+        callback([str(p) for p in ps])
+
+    pick_files(title, _cb)

@@ -67,8 +67,9 @@ def _run_portal_impl_jeepney(
     parent_window: str,
     *,
     directory: bool = False,
+    multiple: bool = False,
     filters: "list[tuple[str, list[str]]] | None" = None,
-) -> "Path | object | None":
+) -> "list[Path] | Path | object | None":
     """
     XDG portal file/folder picker using jeepney (pure-Python D-Bus).
     No gi/GLib dependency — works inside AppImage and on any system with
@@ -113,6 +114,8 @@ def _run_portal_impl_jeepney(
         ]
         if directory:
             options.append(("directory", ("b", True)))
+        if multiple:
+            options.append(("multiple", ("b", True)))
         if filters:
             # a(sa(us)) — list of (name, [(0, "*.zip"), ...])
             filter_array = [(label, [(0, p) for p in pats]) for label, pats in filters]
@@ -178,11 +181,16 @@ def _run_portal_impl_jeepney(
                 # jeepney deserialises a{sv} values as (type_str, value) tuples
                 uri_list = uris[1] if isinstance(uris, tuple) else uris
                 if uri_list:
-                    uri = uri_list[0]
-                    _debug_log(f"uri={uri!r}")
-                    p = _uri_to_path(uri)
-                    if p is not None:
-                        return p
+                    if multiple:
+                        paths = [p for uri in uri_list if (p := _uri_to_path(uri)) is not None]
+                        if paths:
+                            return paths
+                    else:
+                        uri = uri_list[0]
+                        _debug_log(f"uri={uri!r}")
+                        p = _uri_to_path(uri)
+                        if p is not None:
+                            return p
         return _CANCELLED
 
     except Exception as e:
@@ -202,8 +210,9 @@ def _run_portal_impl_gi(
     parent_window: str,
     *,
     directory: bool = False,
+    multiple: bool = False,
     filters: "list[tuple[str, list[str]]] | None" = None,
-) -> "Path | object | None":
+) -> "list[Path] | Path | object | None":
     """
     XDG portal file/folder picker using gi (GLib/Gio). Requires python-gobject.
     Falls back to jeepney implementation is preferred; this is kept for
@@ -231,9 +240,17 @@ def _run_portal_impl_gi(
         if response == 0:
             uris = results.lookup_value("uris", None)
             if uris is not None and uris.n_children() > 0:
-                uri = uris.get_child_value(0).get_string()
-                if uri:
-                    result_holder.append(_uri_to_path(uri))
+                if multiple:
+                    paths = [
+                        p for i in range(uris.n_children())
+                        if (p := _uri_to_path(uris.get_child_value(i).get_string())) is not None
+                    ]
+                    if paths:
+                        result_holder.append(paths)
+                else:
+                    uri = uris.get_child_value(0).get_string()
+                    if uri:
+                        result_holder.append(_uri_to_path(uri))
         if not result_holder:
             result_holder.append(_CANCELLED)
         loop.quit()
@@ -252,6 +269,8 @@ def _run_portal_impl_gi(
         options: dict = {"handle_token": GLib.Variant("s", token)}
         if directory:
             options["directory"] = GLib.Variant("b", True)
+        if multiple:
+            options["multiple"] = GLib.Variant("b", True)
         if filters:
             filter_array = [(label, [(0, p) for p in pats]) for label, pats in filters]
             options["filters"] = GLib.Variant("a(sa(us))", filter_array)
@@ -295,21 +314,26 @@ def _run_portal_impl(
     parent_window: str,
     *,
     directory: bool = False,
+    multiple: bool = False,
     filters: "list[tuple[str, list[str]]] | None" = None,
-) -> "Path | object | None":
+) -> "list[Path] | Path | object | None":
     """Try jeepney first (pure-Python, works in AppImage), fall back to gi."""
-    result = _run_portal_impl_jeepney(title, parent_window, directory=directory, filters=filters)
+    result = _run_portal_impl_jeepney(title, parent_window, directory=directory, multiple=multiple, filters=filters)
     if result is None:
-        result = _run_portal_impl_gi(title, parent_window, directory=directory, filters=filters)
+        result = _run_portal_impl_gi(title, parent_window, directory=directory, multiple=multiple, filters=filters)
     return result
 
 
 def _run_portal_folder_impl(title: str, parent_window: str) -> "Path | object | None":
-    return _run_portal_impl(title, parent_window, directory=True)
+    return _run_portal_impl(title, parent_window, directory=True)  # type: ignore[return-value]
 
 
 def _run_portal_file_impl(title: str, parent_window: str, filters: "list[tuple[str, list[str]]]") -> "Path | object | None":
-    return _run_portal_impl(title, parent_window, filters=filters)
+    return _run_portal_impl(title, parent_window, filters=filters)  # type: ignore[return-value]
+
+
+def _run_portal_file_impl_multi(title: str, parent_window: str, filters: "list[tuple[str, list[str]]]") -> "list[Path] | object | None":
+    return _run_portal_impl(title, parent_window, multiple=True, filters=filters)  # type: ignore[return-value]
 
 
 def _is_flatpak() -> bool:
@@ -585,6 +609,137 @@ def pick_file(title: str, callback: Callable[[Path | None], None]) -> None:
     filters = _MOD_ARCHIVE_FILTERS
     threading.Thread(
         target=_run_file_picker_worker,
+        args=(title, filters, callback),
+        daemon=True,
+    ).start()
+
+
+def _zenity_files(title: str) -> "list[Path] | object | None":
+    """Multi-file picker via zenity. Returns list of Paths, _CANCELLED, or None."""
+    result = _run_zenity([
+        "--file-selection",
+        "--multiple",
+        "--separator=\n",
+        f"--title={title}",
+        "--file-filter=Mod Archives (*.zip, *.7z, *.rar, *.tar.gz, *.tar) | *.zip *.7z *.rar *.tar.gz *.tar",
+        "--file-filter=All files | *",
+    ])
+    if result is None:
+        return None
+    if result.returncode == 0:
+        paths = [Path(s) for s in result.stdout.strip().splitlines() if s]
+        paths = [p for p in paths if p.is_file()]
+        if paths:
+            return paths
+    if result.returncode == 1:
+        return _CANCELLED
+    _debug_log(f"zenity exited with code {result.returncode}: {result.stderr.strip()!r} — falling through to next picker")
+    return None
+
+
+def _kdialog_files(title: str) -> "list[Path] | object | None":
+    """Multi-file picker via kdialog. Returns list of Paths, _CANCELLED, or None."""
+    try:
+        result = subprocess.run(
+            [
+                "kdialog", "--getopenfilenames", str(Path.home()),
+                "*.zip *.7z *.rar *.tar.gz *.tar|Mod Archives (*.zip, *.7z, *.rar, *.tar.gz, *.tar)",
+                "--title", title,
+            ],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            # kdialog --getopenfilenames separates paths by newlines
+            paths = [Path(s) for s in result.stdout.strip().splitlines() if s]
+            paths = [p for p in paths if p.is_file()]
+            if paths:
+                return paths
+        return _CANCELLED
+    except FileNotFoundError:
+        pass
+    return None
+
+
+def _tkinter_files(title: str) -> "list[Path]":
+    """Multi-file picker using tkinter.filedialog.askopenfilenames."""
+    import tkinter.filedialog as fd
+
+    result_holder: list[list[Path]] = [[]]
+    done = threading.Event()
+
+    def _run() -> None:
+        try:
+            chosen = fd.askopenfilenames(
+                title=title,
+                filetypes=[
+                    ("Mod Archives", "*.zip *.7z *.rar *.tar.gz *.tar"),
+                    ("All files", "*"),
+                ],
+            )
+            if chosen:
+                result_holder[0] = [Path(s) for s in chosen if Path(s).is_file()]
+        except Exception as e:
+            _debug_log(f"tkinter multi-file picker failed: {e}")
+        finally:
+            done.set()
+
+    dispatcher = _main_thread_dispatcher
+    if dispatcher is not None:
+        dispatcher(_run)
+        done.wait()
+    else:
+        _run()
+    return result_holder[0]
+
+
+def _run_file_picker_worker_multi(title: str, filters: list[tuple[str, list[str]]], cb: "Callable[[list[Path]], None]") -> None:
+    """Worker for multi-file picker; runs in background thread."""
+    result = None
+    try:
+        _debug_log("Trying XDG portal (jeepney/gi) for multi-file pick...")
+        result = _run_portal_file_impl_multi(title, "", filters)
+    except Exception as e:
+        _debug_log(f"Portal raised unexpected exception: {e}")
+    if result is _CANCELLED:
+        _debug_log("Portal: user cancelled")
+        cb([])
+        return
+    chosen: list[Path] | None = result if isinstance(result, list) else None
+    if not chosen:
+        _debug_log("Portal unavailable, trying zenity multi-file...")
+        zenity_result = _zenity_files(title)
+        if zenity_result is _CANCELLED:
+            _debug_log("zenity: user cancelled")
+            cb([])
+            return
+        chosen = zenity_result if isinstance(zenity_result, list) else None
+    if not chosen:
+        _debug_log("zenity unavailable, trying kdialog multi-file...")
+        kdialog_result = _kdialog_files(title)
+        if kdialog_result is _CANCELLED:
+            _debug_log("kdialog: user cancelled")
+            cb([])
+            return
+        chosen = kdialog_result if isinstance(kdialog_result, list) else None
+    if not chosen:
+        _debug_log("kdialog unavailable, falling back to tkinter multi-file picker")
+        chosen = _tkinter_files(title)
+    if chosen:
+        _debug_log(f"Files selected: {[str(p) for p in chosen]}")
+    cb(chosen or [])
+
+
+def pick_files(title: str, callback: "Callable[[list[Path]], None]") -> None:
+    """
+    Open a native multi-file picker via XDG portal (or zenity/kdialog/tkinter fallback).
+    Runs in a background thread; callback is invoked with a list of selected Paths
+    (empty list if the user cancelled or nothing was selected).
+    Caller should schedule callback on main thread if doing Tkinter operations, e.g.:
+        pick_files(title, lambda ps: self.after(0, lambda: self._on_files_picked(ps)))
+    """
+    filters = _MOD_ARCHIVE_FILTERS
+    threading.Thread(
+        target=_run_file_picker_worker_multi,
         args=(title, filters, callback),
         daemon=True,
     ).start()

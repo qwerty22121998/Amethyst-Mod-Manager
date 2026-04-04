@@ -42,7 +42,7 @@ from gui.dialogs import (
     ask_yes_no,
 )
 from gui.ctk_components import CTkAlert
-from gui.path_utils import pick_file_mod_archive
+from gui.path_utils import pick_file_mod_archive, pick_files_mod_archive
 from gui.install_mod import install_mod_from_archive, _show_mod_notification
 from gui.add_game_dialog import AddGameDialog
 from gui.wizard_dialog import WizardDialog
@@ -1075,35 +1075,43 @@ class TopBar(ctk.CTkFrame):
         self.after_idle(self._init_threshold)
 
     def _on_install_mod(self):
-        def _on_file_picked(path: str) -> None:
-            if not path:
+        def _on_files_picked(paths: list[str]) -> None:
+            if not paths:
                 return
             game = _gh._GAMES.get(self._game_var.get())
             if game is None or not game.is_configured():
                 self._log("No configured game selected — use + to set the game path first.")
                 return
-            self._log(f"Installing: {os.path.basename(path)}")
             app = self.winfo_toplevel()
             mod_panel = getattr(app, "_mod_panel", None)
             status_bar = getattr(app, "_status", None)
+
+            if len(paths) == 1:
+                self._log(f"Installing: {os.path.basename(paths[0])}")
+            else:
+                self._log(f"Queuing {len(paths)} mods for installation: {', '.join(os.path.basename(p) for p in paths)}")
 
             def _extract_progress(done: int, total: int, phase: str | None = None):
                 if status_bar is not None:
                     app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
 
             def _worker():
-                try:
-                    install_mod_from_archive(path, app, self._log, game, mod_panel,
-                                             disable_extract=self._disable_extract,
-                                             progress_fn=_extract_progress,
-                                             clear_progress_fn=lambda: app.after(0, status_bar.clear_progress) if status_bar is not None else None)
-                finally:
-                    if status_bar is not None:
-                        app.after(0, status_bar.clear_progress)
+                for i, path in enumerate(paths):
+                    if len(paths) > 1:
+                        app.after(0, lambda name=os.path.basename(path), idx=i + 1, total=len(paths):
+                                  self._log(f"Installing ({idx}/{total}): {name}"))
+                    try:
+                        install_mod_from_archive(path, app, self._log, game, mod_panel,
+                                                 disable_extract=self._disable_extract,
+                                                 progress_fn=_extract_progress,
+                                                 clear_progress_fn=lambda: app.after(0, status_bar.clear_progress) if status_bar is not None else None)
+                    finally:
+                        if status_bar is not None:
+                            app.after(0, status_bar.clear_progress)
 
             threading.Thread(target=_worker, daemon=True).start()
 
-        pick_file_mod_archive("Select Mod Archive", lambda p: self.after(0, lambda: _on_file_picked(p)))
+        pick_files_mod_archive("Select Mod Archive(s)", lambda ps: self.after(0, lambda: _on_files_picked(ps)))
 
 
 # ---------------------------------------------------------------------------
