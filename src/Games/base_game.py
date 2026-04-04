@@ -443,6 +443,19 @@ class BaseGame(ABC):
         """
         return {}
 
+    def get_launch_command(self) -> "list[str] | None":
+        """Return a native Linux command used to launch this game, bypassing Proton.
+
+        When non-None, the plugin panel will use this command for the Play
+        button instead of the normal exe-via-Proton path.  The command is a
+        list suitable for subprocess.Popen, e.g.::
+
+            ["flatpak", "run", "org.openmw.OpenMW"]
+
+        Return None (the default) to use the normal Proton launch path.
+        """
+        return None
+
     @property
     def preferred_launch_exe(self) -> str:
         """

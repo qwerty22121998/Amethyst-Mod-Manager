@@ -544,6 +544,17 @@ class PluginPanel(ctk.CTkFrame):
                 except Exception:
                     pass
 
+            # Native games (e.g. OpenMW) have no .exe in the game folder.
+            # If no game exe was found but the handler provides a native launch
+            # command, add a synthetic Path as the Play entry.
+            if game_exe_path is None and game is not None:
+                _native_cmd = getattr(game, "get_launch_command", lambda: None)()
+                if _native_cmd is not None:
+                    _exe_display_name = (getattr(game, "exe_name", "") or _native_cmd[-1])
+                    _synthetic = Path(_exe_display_name)
+                    exes.insert(0, _synthetic)
+                    game_exe_path = _synthetic
+
             self.after(0, lambda: self._apply_exe_list(exes, game_exe_path, _select_after))
 
         import threading
@@ -1040,13 +1051,24 @@ class PluginPanel(ctk.CTkFrame):
             return
 
         exe_path = self._exe_paths[idx]
-        if not exe_path.is_file():
-            self._log(f"Run EXE: file not found: {exe_path}")
-            return
-
         game = self._game
         if game is None:
             self._log("Run EXE: no game selected.")
+            return
+
+        # Native games (e.g. OpenMW) use a system command instead of a .exe path.
+        # Handle this before the is_file() guard so the synthetic Path entry works.
+        _native_cmd = getattr(game, "get_launch_command", lambda: None)()
+        if _native_cmd is not None and self._game_exe_path is not None and exe_path == self._game_exe_path:
+            if self._load_deploy_before_launch():
+                self._log("Run EXE: deploying mods before launch…")
+                self._run_deploy_then_launch(exe_path, game)
+                return
+            self._launch_exe(exe_path, game)
+            return
+
+        if not exe_path.is_file():
+            self._log(f"Run EXE: file not found: {exe_path}")
             return
 
         # Check for a native wrapper before falling through to Proton
@@ -1146,7 +1168,23 @@ class PluginPanel(ctk.CTkFrame):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _launch_exe(self, exe_path: "Path", game):
-        """Route to Steam/Heroic/Proton depending on launch mode (game exe) or always Proton."""
+        """Route to native command / Steam / Heroic / Proton."""
+        # Native launch hook: games that run natively (e.g. OpenMW via flatpak run).
+        _native_cmd = getattr(game, "get_launch_command", lambda: None)()
+        if _native_cmd is not None and self._game_exe_path is not None and exe_path == self._game_exe_path:
+            self._log(f"Run EXE: launching natively: {' '.join(_native_cmd)}")
+            def _native_worker():
+                try:
+                    subprocess.Popen(
+                        _native_cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception as e:
+                    self.after(0, lambda err=e: self._log(f"Run EXE error: {err}"))
+            threading.Thread(target=_native_worker, daemon=True).start()
+            return
+
         if self._is_game_exe(exe_path):
             mode = self._load_launch_mode(exe_path.name)  # 'auto'|'steam'|'heroic'|'none'
             steam_id = getattr(game, "steam_id", "")
