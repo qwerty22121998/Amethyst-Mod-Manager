@@ -218,7 +218,14 @@ class ReconfigureGamePanel(ctk.CTkFrame):
             font=FONT_SMALL, fg_color=BG_HEADER, hover_color=BG_HOVER,
             text_color=TEXT_MAIN, command=self._on_open_path, state="disabled"
         )
-        self._open_btn.pack(side="left")
+        self._open_btn.pack(side="left", padx=(0, 6))
+
+        self._scan_btn = ctk.CTkButton(
+            _path_btn_frame, text="Scan", width=scaled(70), height=scaled(26),
+            font=FONT_SMALL, fg_color=BG_HEADER, hover_color=BG_HOVER,
+            text_color=TEXT_MAIN, command=self._on_scan_drives
+        )
+        self._scan_btn.pack(side="left")
 
         # Divider
         ctk.CTkFrame(body, fg_color=BORDER, height=1, corner_radius=0).grid(
@@ -726,6 +733,108 @@ class ReconfigureGamePanel(ctk.CTkFrame):
         self._run_folder_picker(
             f"Select {self._game.name} installation folder", _apply
         )
+
+    def _on_scan_drives(self):
+        """Scan all mounted drives for the game exe, stopping at first match."""
+        exe_names = [getattr(self._game, "exe_name", None)]
+        exe_names += list(getattr(self._game, "exe_name_alts", []))
+        exe_names = [e for e in exe_names if e]
+        if not exe_names:
+            self._status_label.configure(
+                text="No executable name configured for this game.", text_color=TEXT_ERR
+            )
+            return
+
+        self._status_label.configure(text="Scanning all drives…", text_color=TEXT_WARN)
+        self._scan_btn.configure(state="disabled")
+        self._browse_btn.configure(state="disabled")
+
+        def _worker():
+            import concurrent.futures
+
+            # Collect mount points from /proc/mounts, skip pseudo/system filesystems
+            skip_types = {"sysfs", "proc", "devtmpfs", "devpts", "tmpfs", "cgroup",
+                          "cgroup2", "pstore", "bpf", "tracefs", "debugfs",
+                          "securityfs", "fusectl", "hugetlbfs", "mqueue", "configfs",
+                          "efivarfs", "overlay", "squashfs"}
+            skip_dirs = {"proc", "sys", "dev", "run", "snap"}
+            roots: list[Path] = []
+            try:
+                with open("/proc/mounts", "r") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) < 3:
+                            continue
+                        fstype = parts[2]
+                        mountpoint = parts[1]
+                        if fstype in skip_types:
+                            continue
+                        p = Path(mountpoint)
+                        if p == Path("/"):
+                            roots.insert(0, p)  # scan root first
+                        else:
+                            roots.append(p)
+            except OSError:
+                roots = [Path("/")]
+
+            # Build list of top-level subdirs to scan in parallel
+            exe_set = set(exe_names)
+            stop_event = threading.Event()
+
+            def _scan_subtree(start: Path) -> Optional[Path]:
+                for dirpath, dirnames, filenames in os.walk(start, followlinks=False):
+                    if stop_event.is_set():
+                        return None
+                    dirnames[:] = [d for d in dirnames if d not in skip_dirs]
+                    if exe_set & set(filenames):
+                        return Path(dirpath)
+                return None
+
+            # Collect scan roots: for each mount, use its immediate subdirs so
+            # we can fan out across many workers instead of one serial walk.
+            scan_roots: list[Path] = []
+            for root in roots:
+                try:
+                    children = [p for p in root.iterdir() if p.is_dir() and p.name not in skip_dirs]
+                    scan_roots.extend(children)
+                except PermissionError:
+                    pass
+
+            found: Optional[Path] = None
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                futures = {pool.submit(_scan_subtree, sr): sr for sr in scan_roots}
+                for future in concurrent.futures.as_completed(futures):
+                    result = future.result()
+                    if result is not None:
+                        found = result
+                        stop_event.set()
+                        break
+
+            try:
+                if self.winfo_exists():
+                    self.after(0, lambda f=found: _done(f))
+            except Exception:
+                pass
+
+        def _done(found: Optional[Path]):
+            try:
+                self._scan_btn.configure(state="normal")
+                self._browse_btn.configure(state="normal")
+                if not self._status_label.winfo_exists():
+                    return
+                if found:
+                    self._set_path(found, status="found")
+                    self._status_label.configure(
+                        text="Found via drive scan.", text_color=TEXT_OK
+                    )
+                else:
+                    self._status_label.configure(
+                        text="Game executable not found on any drive.", text_color=TEXT_ERR
+                    )
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _on_browse_prefix(self):
         def _apply(chosen: Optional[Path]):
