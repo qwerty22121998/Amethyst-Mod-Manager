@@ -29,6 +29,7 @@ class Fallout_3(BaseGame):
         self._deploy_mode: LinkMode = LinkMode.HARDLINK
         self._staging_path: Path | None = None
         self._symlink_plugins: bool = False
+        self._profile_ini_files: bool = False
         self.load_paths()
 
     # -----------------------------------------------------------------------
@@ -222,6 +223,7 @@ class Fallout_3(BaseGame):
             if raw_staging:
                 self._staging_path = Path(raw_staging)
             self._symlink_plugins = data.get("symlink_plugins", False)
+            self._profile_ini_files = data.get("profile_ini_files", False)
             self._validate_staging()
             # If prefix is missing or no longer valid, scan for it and persist
             if not self._prefix_path or not self._prefix_path.is_dir():
@@ -248,6 +250,7 @@ class Fallout_3(BaseGame):
             "deploy_mode":     mode_str,
             "staging_path":    str(self._staging_path) if self._staging_path else "",
             "symlink_plugins": self._symlink_plugins,
+            "profile_ini_files": self._profile_ini_files,
         }
         self._paths_file.write_text(
             json.dumps(data, indent=2), encoding="utf-8"
@@ -277,6 +280,14 @@ class Fallout_3(BaseGame):
 
     def set_symlink_plugins(self, value: bool) -> None:
         self._symlink_plugins = value
+        self.save_paths()
+
+    @property
+    def profile_ini_files(self) -> bool:
+        return self._profile_ini_files
+
+    def set_profile_ini_files(self, value: bool) -> None:
+        self._profile_ini_files = value
         self.save_paths()
 
     def set_prefix_path(self, path: Path | str | None) -> None:
@@ -353,6 +364,62 @@ class Fallout_3(BaseGame):
             / self._MYGAMES_SUBPATH
             / self._ARCHIVE_INI_FILENAME
         )
+
+    def _mygames_path(self) -> "Path | None":
+        """Return the My Games folder for this game inside the Proton prefix."""
+        if self._prefix_path is None:
+            return None
+        return self._prefix_path / self._MYGAMES_DOCS / self._MYGAMES_SUBPATH
+
+    def _symlink_profile_ini_files(self, profile: str, log_fn) -> None:
+        """Symlink *.ini files from the profile folder into the My Games directory.
+
+        Any existing file at the target is backed up as <name>.bak before being
+        replaced.  Existing symlinks pointing to our profile dir are silently
+        replaced without a backup (they are already managed by us).
+        """
+        _log = log_fn
+        if not self._profile_ini_files:
+            return
+        mygames = self._mygames_path()
+        if mygames is None:
+            _log("  WARN: Prefix path not set — skipping profile INI symlinks.")
+            return
+        profile_dir = self.get_profile_root() / "profiles" / profile
+        ini_files = list(profile_dir.glob("*.ini"))
+        if not ini_files:
+            _log("  No *.ini files found in profile folder — skipping.")
+            return
+        mygames.mkdir(parents=True, exist_ok=True)
+        for src in ini_files:
+            target = mygames / src.name
+            if target.is_symlink():
+                target.unlink()
+            elif target.exists():
+                backup = target.with_suffix(".bak")
+                target.rename(backup)
+                _log(f"  Backed up {target.name} → {backup.name}")
+            target.symlink_to(src)
+            _log(f"  Linked {src.name} → {target}")
+
+    def _remove_profile_ini_symlinks(self, profile: str, log_fn) -> None:
+        """Remove profile INI symlinks from My Games and restore any backups."""
+        _log = log_fn
+        if not self._profile_ini_files:
+            return
+        mygames = self._mygames_path()
+        if mygames is None or not mygames.is_dir():
+            return
+        profile_dir = self.get_profile_root() / "profiles" / profile
+        for src in profile_dir.glob("*.ini"):
+            target = mygames / src.name
+            if target.is_symlink() and Path(target.resolve()).parent == profile_dir:
+                target.unlink()
+                _log(f"  Removed profile INI symlink: {target.name}")
+                backup = target.with_suffix(".bak")
+                if backup.exists():
+                    backup.rename(target)
+                    _log(f"  Restored {target.name} from .bak")
 
     def apply_archive_invalidation(self, log_fn) -> None:
         """Set bInvalidateOlderFiles=1 in the game INI so loose files win."""
@@ -504,7 +571,10 @@ class Fallout_3(BaseGame):
         _log("Step 4: Symlinking plugins.txt into Proton prefix ...")
         self._symlink_plugins_txt(profile, _log)
 
-        _log("Step 5: Applying archive invalidation ...")
+        _log("Step 5: Symlinking profile INI files ...")
+        self._symlink_profile_ini_files(profile, _log)
+
+        _log("Step 6: Applying archive invalidation ...")
         self.apply_archive_invalidation(_log)
 
         _log(
@@ -551,6 +621,11 @@ class Fallout_3(BaseGame):
 
         self._remove_plugins_txt_symlink(_log)
         self._restore_launcher(_log)
+
+        _active = self._active_profile_dir
+        if _active is not None:
+            _log("Restore: removing profile INI symlinks ...")
+            self._remove_profile_ini_symlinks(_active.name, _log)
 
         _log("Restore complete.")
 
