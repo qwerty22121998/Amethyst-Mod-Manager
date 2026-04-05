@@ -1,11 +1,14 @@
 - v1.1.8
 - Added OpenMW
+- Added Stalker 2
 - Fixed separators not being movable when priority column is reversed
 - Added a Steam command button in profile settings, Adding this command to a non-steam game will deploy the profile and launch the game.
 - Fixed fomod mods that used lower case moduleconfig.xml causing the fomod to skipped
 - Multiple archives can now be selected when installing a mod via the install mod button
-- The fomod window now overlays with the modlist panels
-
+- The fomod window now overlays with the modlist panel.
+- Better runtime generated file detection for ue5 games
+- Added a scan for game folder location in game config menu
+- Added a profile specfic ini files option for bethesda games, Ini files placed in the profile folder will be symlinked on deploy if enabled
 
 - v1.1.7
 - Added Darktide
