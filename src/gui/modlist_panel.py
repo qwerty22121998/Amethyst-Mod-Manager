@@ -123,6 +123,7 @@ from Utils.profile_state import (
 )
 from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
 from gui.collections_dialog import CollectionsDialog
+from gui.workshop_dialog import WorkshopDialog
 from gui.nexus_browser_overlay import NexusBrowserOverlay
 from gui.changelog_overlay import ChangelogOverlay
 from gui.mod_files_overlay import ModFilesOverlay
@@ -6033,6 +6034,7 @@ class ModListPanel(ctk.CTkFrame):
             log_fn=self._log,
             app_root=app,
             on_close=self._close_collections,
+            on_open_workshop=self._on_workshop,
             initial_slug=initial_slug,
             initial_game_domain=initial_game_domain,
             initial_revision=initial_revision,
@@ -6049,6 +6051,32 @@ class ModListPanel(ctk.CTkFrame):
             except Exception:
                 pass
             self._collections_panel = None
+
+    def _on_workshop(self, entries: list):
+        """Open the Workshop overlay over the modlist panel."""
+        app = self.winfo_toplevel()
+        api = getattr(app, "_nexus_api", None)
+        game = self._game
+        domain = (game.nexus_game_domain if game and game.nexus_game_domain else "") or ""
+        overlay_parent = getattr(app, "_plugin_panel_container", None)
+        self._close_workshop()
+        panel = WorkshopDialog(
+            self, entries=entries, game=game, api=api,
+            game_domain=domain, on_close=self._close_workshop,
+            overlay_parent=overlay_parent,
+        )
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._workshop_panel = panel
+
+    def _close_workshop(self):
+        """Destroy the Workshop overlay and restore the modlist."""
+        panel = getattr(self, "_workshop_panel", None)
+        if panel is not None:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+            self._workshop_panel = None
 
     def _on_nexus_browser(self):
         """Show the Nexus Browse/Tracked/Endorsed overlay over the modlist panel."""

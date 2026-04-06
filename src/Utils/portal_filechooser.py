@@ -760,3 +760,226 @@ def pick_exe_file(title: str, callback: Callable[[Path | None], None]) -> None:
         args=(title, _EXE_FILTERS, callback),
         daemon=True,
     ).start()
+
+
+# ---------------------------------------------------------------------------
+# Save-file picker
+# ---------------------------------------------------------------------------
+
+def _run_portal_save_impl_jeepney(
+    title: str,
+    parent_window: str,
+    *,
+    current_name: str = "",
+    filters: "list[tuple[str, list[str]]] | None" = None,
+) -> "Path | object | None":
+    """
+    XDG portal SaveFile picker using jeepney.
+    Returns selected Path, _CANCELLED, or None (portal unavailable).
+    """
+    try:
+        from jeepney import DBusAddress, MatchRule, new_method_call
+        from jeepney.io.blocking import open_dbus_connection
+    except ImportError as e:
+        _debug_log(f"jeepney unavailable: {e}")
+        return None
+
+    try:
+        conn = open_dbus_connection("SESSION")
+    except Exception as e:
+        _debug_log(f"D-Bus session connection failed: {e}")
+        return None
+
+    try:
+        props_addr = DBusAddress(
+            _PORTAL_PATH,
+            bus_name=_PORTAL_BUS,
+            interface="org.freedesktop.DBus.Properties",
+        )
+        ver_msg = new_method_call(props_addr, "Get", "ss", (_FILE_CHOOSER_IFACE, "version"))
+        ver_reply = conn.send_and_get_reply(ver_msg)
+        if ver_reply.header.message_type.name == "error":
+            _debug_log("FileChooser interface not available on this portal")
+            return None
+
+        token = f"amethyst_{uuid.uuid4().hex[:16]}"
+        sender = conn.unique_name.lstrip(":").replace(".", "_")
+        predicted_handle = f"/org/freedesktop/portal/desktop/request/{sender}/{token}"
+
+        options: list[tuple[str, tuple[str, object]]] = [
+            ("handle_token", ("s", token)),
+        ]
+        if current_name:
+            options.append(("current_name", ("s", current_name)))
+        if filters:
+            filter_array = [(label, [(0, p) for p in pats]) for label, pats in filters]
+            options.append(("filters", ("a(sa(us))", filter_array)))
+
+        rule = MatchRule(
+            type="signal",
+            interface=_REQUEST_IFACE,
+            member="Response",
+            path=predicted_handle,
+        )
+        bus_addr = DBusAddress(
+            "/org/freedesktop/DBus",
+            bus_name="org.freedesktop.DBus",
+            interface="org.freedesktop.DBus",
+        )
+        add_match_msg = new_method_call(bus_addr, "AddMatch", "s", (rule.serialise(),))
+        conn.send_and_get_reply(add_match_msg)
+
+        portal_addr = DBusAddress(_PORTAL_PATH, bus_name=_PORTAL_BUS, interface=_FILE_CHOOSER_IFACE)
+        save_msg = new_method_call(
+            portal_addr, "SaveFile", "ssa{sv}", (parent_window, title, options)
+        )
+
+        with conn.filter(rule) as matches:
+            handle_reply = conn.send_and_get_reply(save_msg)
+            if handle_reply.header.message_type.name == "error":
+                _debug_log(f"SaveFile call failed: {handle_reply.body}")
+                return None
+
+            handle_path = handle_reply.body[0] if handle_reply.body else ""
+            if not handle_path:
+                return None
+
+            if handle_path != predicted_handle:
+                rule2 = MatchRule(
+                    type="signal",
+                    interface=_REQUEST_IFACE,
+                    member="Response",
+                    path=handle_path,
+                )
+                add_match2 = new_method_call(bus_addr, "AddMatch", "s", (rule2.serialise(),))
+                conn.send_and_get_reply(add_match2)
+                with conn.filter(rule2) as matches2:
+                    response_msg = conn.recv_until_filtered(matches2)
+            else:
+                response_msg = conn.recv_until_filtered(matches)
+
+        response_code, results = response_msg.body
+        if response_code == 0:
+            uris = results.get("uris")
+            if uris is not None:
+                uri_list = uris[1] if isinstance(uris, tuple) else uris
+                if uri_list:
+                    p = _uri_to_path(uri_list[0])
+                    if p is not None:
+                        return p
+        return _CANCELLED
+
+    except Exception as e:
+        _debug_log(f"jeepney save portal exception: {e}")
+        for line in traceback.format_exc().splitlines():
+            _debug_log(f"  {line}")
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def _zenity_save(title: str, current_name: str) -> "Path | object | None":
+    result = _run_zenity([
+        "--file-selection",
+        "--save",
+        "--confirm-overwrite",
+        f"--title={title}",
+        f"--filename={current_name}",
+        "--file-filter=JSON files (*.json) | *.json",
+        "--file-filter=All files | *",
+    ])
+    if result is None:
+        return None
+    if result.returncode == 0:
+        p = Path(result.stdout.strip())
+        return p
+    if result.returncode == 1:
+        return _CANCELLED
+    _debug_log(f"zenity save exited with code {result.returncode}: {result.stderr.strip()!r}")
+    return None
+
+
+def _tkinter_save(title: str, current_name: str, filters: list) -> "Path | None":
+    import tkinter.filedialog as fd
+
+    result_holder: list[Path | None] = [None]
+    done = threading.Event()
+
+    def _run() -> None:
+        try:
+            chosen = fd.asksaveasfilename(
+                title=title,
+                initialfile=current_name,
+                defaultextension=".json",
+                filetypes=filters or [("JSON files", "*.json"), ("All files", "*.*")],
+            )
+            if chosen:
+                result_holder[0] = Path(chosen)
+        except Exception as e:
+            _debug_log(f"tkinter save picker failed: {e}")
+        finally:
+            done.set()
+
+    dispatcher = _main_thread_dispatcher
+    if dispatcher is not None:
+        dispatcher(_run)
+        done.wait()
+    else:
+        _run()
+    return result_holder[0]
+
+
+def _run_save_worker(
+    title: str,
+    current_name: str,
+    filters: "list[tuple[str, list[str]]]",
+    cb: "Callable[[Path | None], None]",
+) -> None:
+    result = None
+    try:
+        _debug_log("Trying XDG portal SaveFile (jeepney)...")
+        result = _run_portal_save_impl_jeepney(title, "", current_name=current_name, filters=filters)
+    except Exception as e:
+        _debug_log(f"Portal save raised unexpected exception: {e}")
+    if result is _CANCELLED:
+        _debug_log("Portal save: user cancelled")
+        cb(None)
+        return
+    chosen: Path | None = result if isinstance(result, Path) else None
+    if chosen is None:
+        _debug_log("Portal unavailable, trying zenity save...")
+        zenity_result = _zenity_save(title, current_name)
+        if zenity_result is _CANCELLED:
+            cb(None)
+            return
+        chosen = zenity_result if isinstance(zenity_result, Path) else None
+    if chosen is None:
+        _debug_log("zenity unavailable, falling back to tkinter save picker")
+        tk_filters = [(label, " ".join(pats)) for label, pats in filters]
+        chosen = _tkinter_save(title, current_name, tk_filters)
+    if chosen:
+        _debug_log(f"Save path selected: {chosen}")
+    cb(chosen)
+
+
+def pick_save_file(
+    title: str,
+    callback: "Callable[[Path | None], None]",
+    *,
+    current_name: str = "manifest.json",
+    filters: "list[tuple[str, list[str]]] | None" = None,
+) -> None:
+    """
+    Open a native save-file dialog via XDG portal (or zenity/tkinter fallback).
+    Runs in a background thread; callback is invoked with the selected Path or None.
+    """
+    if filters is None:
+        filters = [("JSON files (*.json)", ["*.json"]), ("All files", ["*"])]
+    threading.Thread(
+        target=_run_save_worker,
+        args=(title, current_name, filters, callback),
+        daemon=True,
+    ).start()

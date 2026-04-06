@@ -14,6 +14,7 @@ import queue as _queue_mod
 import re
 import threading
 import tkinter as tk
+import tkinter.messagebox
 import tkinter.ttk as ttk
 import webbrowser
 from pathlib import Path
@@ -4037,6 +4038,7 @@ class CollectionsDialog(tk.Frame):
         log_fn: Optional[Callable] = None,
         app_root: Optional[tk.Widget] = None,
         on_close: Optional[Callable] = None,
+        on_open_workshop: Optional[Callable] = None,
         initial_slug: Optional[str] = None,
         initial_game_domain: Optional[str] = None,
         initial_revision: Optional[int] = None,
@@ -4048,6 +4050,7 @@ class CollectionsDialog(tk.Frame):
         self._app_root = app_root or parent.winfo_toplevel()
         self._log = log_fn or (lambda msg: None)
         self._on_close = on_close
+        self._on_open_workshop = on_open_workshop
         self._initial_slug = initial_slug
         self._initial_game_domain = (initial_game_domain or game_domain).lower()
         self._initial_revision = initial_revision
@@ -4158,6 +4161,13 @@ class CollectionsDialog(tk.Frame):
             font=FONT_HEADER, command=self._toggle_url_bar,
         )
         self._url_toggle_btn.pack(side="left", padx=4, pady=2)
+
+        self._workshop_btn = ctk.CTkButton(
+            toolbar, text="Workshop", width=scaled(90), height=scaled(26),
+            fg_color="#7b2fa8", hover_color="#9b3fd0", text_color="white",
+            font=FONT_HEADER, command=self._open_workshop,
+        )
+        self._workshop_btn.pack(side="left", padx=4, pady=2)
 
         self._status_label = ctk.CTkLabel(
             toolbar, text="Loading collections…", anchor="w",
@@ -4671,3 +4681,28 @@ class CollectionsDialog(tk.Frame):
         self._next_btn.configure(state="disabled")
         self._status_label.configure(text="Loading collections…")
         self._load_page()
+
+    # ------------------------------------------------------------------
+    # Workshop
+    # ------------------------------------------------------------------
+
+    def _open_workshop(self):
+        if not self._game:
+            tk.messagebox.showerror("Workshop", "No game selected.", parent=self)
+            return
+        profile_dir = getattr(self._game, "_active_profile_dir", None)
+        if not profile_dir:
+            tk.messagebox.showerror("Workshop", "No active profile.", parent=self)
+            return
+        modlist_path = Path(profile_dir) / "modlist.txt"
+        if not modlist_path.is_file():
+            tk.messagebox.showerror("Workshop", f"modlist.txt not found:\n{modlist_path}", parent=self)
+            return
+
+        entries = [
+            e for e in reversed(read_modlist(modlist_path))
+            if e.enabled and not e.is_separator
+        ]
+
+        if self._on_open_workshop:
+            self._on_open_workshop(entries)
