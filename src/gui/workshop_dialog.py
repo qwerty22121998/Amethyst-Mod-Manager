@@ -43,9 +43,28 @@ from gui.theme import (
 )
 
 _ROW_H   = scaled(26)
-_HEADERS = ("Mod Name", "Mod ID", "Preferred Version", "Optional", "Fomod")
-_CW = (380, 90, 240, 70, 60)
-_CX = (0, _CW[0], _CW[0]+_CW[1], _CW[0]+_CW[1]+_CW[2], _CW[0]+_CW[1]+_CW[2]+_CW[3])
+_HEADERS = ("Mod Name", "Mod ID", "Preferred Version", "Optional", "Fomod", "Source")
+
+# Fixed widths for the smaller columns.
+# Name gets whatever is left over.
+_CW_MODID   = scaled(90)
+_CW_VER     = scaled(160)
+_CW_OPT     = scaled(90)
+_CW_FOMOD   = scaled(70)
+_CW_SRC     = scaled(90)
+_CW_FIXED   = _CW_MODID + _CW_VER + _CW_OPT + _CW_FOMOD + _CW_SRC
+
+def _compute_col_layout(canvas_w: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Return (col_widths, col_x) for the 6 columns given canvas_w."""
+    cw_name = max(canvas_w - _CW_FIXED, scaled(150))
+    cw = (cw_name, _CW_MODID, _CW_VER, _CW_OPT, _CW_FOMOD, _CW_SRC)
+    cx: tuple[int, ...] = (0,)
+    for w in cw[:-1]:
+        cx = cx + (cx[-1] + w,)
+    return cw, cx
+
+# Module-level fallback (used until first canvas configure)
+_CW, _CX = _compute_col_layout(scaled(840))
 
 _CB_SIZE = scaled(14)
 _CB_PAD  = (_ROW_H - _CB_SIZE) // 2
@@ -286,6 +305,104 @@ class VersionPickerOverlay(tk.Frame):
 
 
 # ---------------------------------------------------------------------------
+# SourcePickerOverlay
+# ---------------------------------------------------------------------------
+
+def _source_btn_style(source: str) -> tuple[str, str]:
+    """Return (bg_colour, label_text) for the source column button."""
+    if source == "direct":
+        return "#5a7a5a", "Direct"
+    if source == "bundle":
+        return "#7a5a7a", "Bundle"
+    return BG_SEP, "Nexus"
+
+
+class SourcePickerOverlay(tk.Frame):
+    """
+    Small overlay for selecting the download source of a mod.
+    Options: Nexus (default), Direct URL, or Bundle (included in archive).
+    """
+
+    def __init__(
+        self,
+        parent: tk.Widget,
+        mod_name: str,
+        current_source: str,
+        current_url: str,
+        on_pick: Callable[[str, str], None],   # (source, url)
+        on_close: Callable,
+    ):
+        super().__init__(parent, bg=BG_DEEP)
+        self._on_pick  = on_pick
+        self._on_close = on_close
+        self._source_var = tk.StringVar(value=current_source)
+        self._url_var    = tk.StringVar(value=current_url)
+        self._build_ui(mod_name)
+
+    def _build_ui(self, mod_name: str):
+        toolbar = tk.Frame(self, bg=BG_HEADER, height=scaled(28))
+        toolbar.pack(side="top", fill="x")
+        toolbar.pack_propagate(False)
+
+        ctk.CTkButton(
+            toolbar, text="✕ Close", width=scaled(72), height=scaled(26),
+            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            font=FONT_HEADER, command=self._on_close,
+        ).pack(side="right", padx=(4, 8), pady=2)
+
+        ctk.CTkButton(
+            toolbar, text="Apply", width=scaled(72), height=scaled(26),
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._apply,
+        ).pack(side="right", padx=(0, 4), pady=2)
+
+        tk.Label(
+            toolbar, text=f"Source — {mod_name}",
+            bg=BG_HEADER, fg=TEXT_MAIN, font=FONT_BOLD,
+        ).pack(side="left", padx=8)
+
+        body = tk.Frame(self, bg=BG_DEEP)
+        body.pack(side="top", fill="both", expand=True, padx=scaled(16), pady=scaled(16))
+
+        for value, label in (("nexus", "Nexus Mods"), ("direct", "Direct URL"), ("bundle", "Bundle")):
+            row = tk.Frame(body, bg=BG_DEEP)
+            row.pack(fill="x", pady=(0, scaled(8)))
+            ctk.CTkRadioButton(
+                row, text=label, variable=self._source_var, value=value,
+                font=FONT_BOLD, fg_color=ACCENT, hover_color=ACCENT_HOV,
+                command=self._on_source_change,
+            ).pack(side="left")
+
+        # URL entry (shown only when Direct is selected)
+        self._url_frame = tk.Frame(body, bg=BG_DEEP)
+
+        tk.Label(
+            self._url_frame, text="Download URL:", bg=BG_DEEP, fg=TEXT_DIM, font=FONT_SMALL,
+        ).pack(side="left", padx=(scaled(24), scaled(6)))
+
+        self._url_entry = ctk.CTkEntry(
+            self._url_frame, textvariable=self._url_var,
+            width=scaled(340), height=scaled(26),
+            font=FONT_SMALL, placeholder_text="https://…",
+        )
+        self._url_entry.pack(side="left")
+
+        self._on_source_change()
+
+    def _on_source_change(self):
+        if self._source_var.get() == "direct":
+            self._url_frame.pack(fill="x", pady=(0, scaled(4)))
+        else:
+            self._url_frame.pack_forget()
+
+    def _apply(self):
+        source = self._source_var.get()
+        url    = self._url_var.get().strip() if source == "direct" else ""
+        self._on_pick(source, url)
+        self._on_close()
+
+
+# ---------------------------------------------------------------------------
 # WorkshopDialog
 # ---------------------------------------------------------------------------
 
@@ -325,9 +442,14 @@ class WorkshopDialog(tk.Frame):
         self._pool_cb_mark:    list[int] = []
         self._pool_fomod_rect: list[int] = []
         self._pool_fomod_mark: list[int] = []
+        self._pool_src_btn:    list[int] = []
+        self._pool_src_lbl:    list[int] = []
         self._pool_slot:       list[int] = []
 
-        self._canvas_w  = 780
+        self._source_overlay: Optional[SourcePickerOverlay] = None
+
+        self._canvas_w  = scaled(840)
+        self._col_cw, self._col_cx = _compute_col_layout(self._canvas_w)
         self._font_main = font_sized("Segoe UI", 10)
         self._font_small = font_sized("Segoe UI", 9)
 
@@ -372,14 +494,17 @@ class WorkshopDialog(tk.Frame):
             font=FONT_BOLD,
         ).pack(side="left", padx=8)
 
-        hdr = tk.Frame(self, bg=BG_HEADER, height=scaled(22))
-        hdr.grid(row=1, column=0, sticky="ew")
-        hdr.grid_propagate(False)
-        for text, cx, cw in zip(_HEADERS, _CX, _CW):
-            tk.Label(
-                hdr, text=text, bg=BG_HEADER, fg=TEXT_MAIN,
+        self._hdr_frame = tk.Frame(self, bg=BG_HEADER, height=scaled(22))
+        self._hdr_frame.grid(row=1, column=0, sticky="ew")
+        self._hdr_frame.grid_propagate(False)
+        self._hdr_labels: list[tk.Label] = []
+        for text in _HEADERS:
+            lbl = tk.Label(
+                self._hdr_frame, text=text, bg=BG_HEADER, fg=TEXT_MAIN,
                 font=FONT_BOLD, anchor="w",
-            ).place(x=cx + scaled(4), y=scaled(2), width=cw - scaled(4), height=scaled(18))
+            )
+            self._hdr_labels.append(lbl)
+        self._update_header()
 
         body = tk.Frame(self, bg=BG_DEEP)
         body.grid(row=2, column=0, sticky="nsew")
@@ -406,6 +531,7 @@ class WorkshopDialog(tk.Frame):
 
     def _do_close(self):
         self._close_version_overlay()
+        self._close_source_overlay()
         if self._on_close:
             self._on_close()
         else:
@@ -488,12 +614,18 @@ class WorkshopDialog(tk.Frame):
                 except ValueError:
                     pass
 
-            source: dict = {
-                "modId":  row["mod_id"],
-                "fileId": file_id,
-            }
-            if row.get("size_bytes"):
-                source["fileSize"] = row["size_bytes"]
+            row_source = row.get("source", "nexus")
+            if row_source == "direct":
+                source: dict = {"directUrl": row.get("direct_url", "")}
+            elif row_source == "bundle":
+                source = {"bundle": True}
+            else:
+                source = {
+                    "modId":  row["mod_id"],
+                    "fileId": file_id,
+                }
+                if row.get("size_bytes"):
+                    source["fileSize"] = row["size_bytes"]
 
             mod_entry: dict = {
                 "name":     row["name"],
@@ -565,6 +697,8 @@ class WorkshopDialog(tk.Frame):
             cbm  = c.create_text(0, OFF, text="✓", anchor="center", fill=ACCENT, font=FN, state="hidden")
             fmr  = c.create_rectangle(0, OFF, 0, OFF, outline=BORDER, fill="", state="hidden")
             fmm  = c.create_text(0, OFF, text="✓", anchor="center", fill=ACCENT, font=FN, state="hidden")
+            sbtn = c.create_rectangle(0, OFF, 0, OFF, fill=BG_SEP, outline="", state="hidden")
+            slbl = c.create_text(0, OFF, text="", anchor="w", fill=TEXT_MAIN, font=FS, state="hidden")
 
             self._pool_bg.append(bg)
             self._pool_name.append(name)
@@ -575,6 +709,8 @@ class WorkshopDialog(tk.Frame):
             self._pool_cb_mark.append(cbm)
             self._pool_fomod_rect.append(fmr)
             self._pool_fomod_mark.append(fmm)
+            self._pool_src_btn.append(sbtn)
+            self._pool_src_lbl.append(slbl)
             self._pool_slot.append(-1)
 
     # ------------------------------------------------------------------
@@ -621,6 +757,8 @@ class WorkshopDialog(tk.Frame):
                 "has_fomod":        has_fomod,
                 "versions_fetched": False,
                 "size_bytes":       0,
+                "source":           "nexus",
+                "direct_url":       "",
             })
 
         n = len(self._rows)
@@ -669,13 +807,16 @@ class WorkshopDialog(tk.Frame):
         for lst in (self._pool_bg, self._pool_name, self._pool_modid,
                     self._pool_ver_btn, self._pool_ver,
                     self._pool_cb_rect, self._pool_cb_mark,
-                    self._pool_fomod_rect, self._pool_fomod_mark):
+                    self._pool_fomod_rect, self._pool_fomod_mark,
+                    self._pool_src_btn, self._pool_src_lbl):
             c.itemconfigure(lst[s], state="hidden")
         self._pool_slot[s] = -1
 
     def _fill_slot(self, s: int, data_idx: int):
         row = self._rows[data_idx]
         c   = self._canvas
+        CW  = self._col_cw
+        CX  = self._col_cx
         y0  = data_idx * _ROW_H
         y1  = y0 + _ROW_H
         yc  = y0 + _ROW_H // 2
@@ -685,19 +826,19 @@ class WorkshopDialog(tk.Frame):
         c.coords(self._pool_bg[s], 0, y0, W, y1)
         c.itemconfigure(self._pool_bg[s], fill=bg, state="normal")
 
-        c.coords(self._pool_name[s], _CX[0] + scaled(4), yc)
-        name_max_px = _CW[0] - scaled(12)
+        c.coords(self._pool_name[s], CX[0] + scaled(4), yc)
+        name_max_px = CW[0] - scaled(12)
         name_text = _truncate(row["name"], name_max_px, _tk_font_cache) if _tk_font_cache else row["name"]
         c.itemconfigure(self._pool_name[s], text=name_text, state="normal")
 
-        c.coords(self._pool_modid[s], _CX[1] + scaled(4), yc)
+        c.coords(self._pool_modid[s], CX[1] + scaled(4), yc)
         c.itemconfigure(self._pool_modid[s],
                         text=str(row["mod_id"]) if row["mod_id"] else "—",
                         state="normal")
 
         # Version button (filled accent rectangle)
-        vx0 = _CX[2] + scaled(4)
-        vx1 = _CX[2] + _CW[2] - scaled(4)
+        vx0 = CX[2] + scaled(4)
+        vx1 = CX[2] + CW[2] - scaled(4)
         vy0 = y0 + scaled(3)
         vy1 = y1 - scaled(3)
         c.coords(self._pool_ver_btn[s], vx0, vy0, vx1, vy1)
@@ -707,7 +848,7 @@ class WorkshopDialog(tk.Frame):
         c.itemconfigure(self._pool_ver[s], text=row["ver_label"], state="normal")
 
         # Optional checkbox
-        cbx0 = _CX[3] + (_CW[3] - _CB_SIZE) // 2
+        cbx0 = CX[3] + (CW[3] - _CB_SIZE) // 2
         cbx1 = cbx0 + _CB_SIZE
         cby0 = y0 + _CB_PAD
         cby1 = cby0 + _CB_SIZE
@@ -718,7 +859,7 @@ class WorkshopDialog(tk.Frame):
                         state="normal" if row["optional"] else "hidden")
 
         # Fomod checkbox (read-only indicator)
-        fmx0 = _CX[4] + (_CW[4] - _CB_SIZE) // 2
+        fmx0 = CX[4] + (CW[4] - _CB_SIZE) // 2
         fmx1 = fmx0 + _CB_SIZE
         fmy0 = y0 + _CB_PAD
         fmy1 = fmy0 + _CB_SIZE
@@ -728,6 +869,18 @@ class WorkshopDialog(tk.Frame):
         c.coords(self._pool_fomod_mark[s], (fmx0 + fmx1) // 2, (fmy0 + fmy1) // 2)
         c.itemconfigure(self._pool_fomod_mark[s],
                         state="normal" if row["has_fomod"] else "hidden")
+
+        # Source button
+        src_color, src_text = _source_btn_style(row["source"])
+        src_fg = "white"
+        sx0 = CX[5] + scaled(4)
+        sx1 = CX[5] + CW[5] - scaled(4)
+        sy0 = y0 + scaled(3)
+        sy1 = y1 - scaled(3)
+        c.coords(self._pool_src_btn[s], sx0, sy0, sx1, sy1)
+        c.itemconfigure(self._pool_src_btn[s], fill=src_color, state="normal")
+        c.coords(self._pool_src_lbl[s], sx0 + scaled(4), yc)
+        c.itemconfigure(self._pool_src_lbl[s], text=src_text, fill=src_fg, state="normal")
 
         self._pool_slot[s] = data_idx
 
@@ -743,8 +896,20 @@ class WorkshopDialog(tk.Frame):
         self._sb.set(*args)
         self.after_idle(self._redraw)
 
+    def _update_header(self):
+        cw, cx = self._col_cw, self._col_cx
+        for i, lbl in enumerate(self._hdr_labels):
+            lbl.place(x=cx[i] + scaled(4), y=scaled(2),
+                      width=cw[i] - scaled(4), height=scaled(18))
+
     def _on_canvas_configure(self, event):
         self._canvas_w = event.width
+        self._col_cw, self._col_cx = _compute_col_layout(event.width)
+        self._update_header()
+        # Reposition all visible slots at new column positions without hiding
+        for s in range(self._POOL):
+            if self._pool_slot[s] != -1:
+                self._fill_slot(s, self._pool_slot[s])
         n = len(self._rows)
         if n:
             self._canvas.configure(scrollregion=(0, 0, event.width, n * _ROW_H))
@@ -761,8 +926,11 @@ class WorkshopDialog(tk.Frame):
         if data_idx < 0 or data_idx >= len(self._rows):
             return
 
+        CW = self._col_cw
+        CX = self._col_cx
+
         # Optional checkbox
-        if _CX[3] <= cx < _CX[3] + _CW[3]:
+        if CX[3] <= cx < CX[3] + CW[3]:
             row = self._rows[data_idx]
             row["optional"] = not row["optional"]
             for s in range(self._POOL):
@@ -775,8 +943,13 @@ class WorkshopDialog(tk.Frame):
             return
 
         # Version button
-        if _CX[2] <= cx < _CX[2] + _CW[2]:
+        if CX[2] <= cx < CX[2] + CW[2]:
             self._open_version_overlay(data_idx)
+            return
+
+        # Source button
+        if CX[5] <= cx < CX[5] + CW[5]:
+            self._open_source_overlay(data_idx)
 
     # ------------------------------------------------------------------
     # Version picker overlay
@@ -828,6 +1001,45 @@ class WorkshopDialog(tk.Frame):
         for s in range(self._POOL):
             if self._pool_slot[s] == data_idx:
                 self._canvas.itemconfigure(self._pool_ver[s], text=label)
+                break
+
+    # ------------------------------------------------------------------
+    # Source overlay
+    # ------------------------------------------------------------------
+
+    def _open_source_overlay(self, data_idx: int):
+        self._close_source_overlay()
+        self._close_version_overlay()
+        row    = self._rows[data_idx]
+        parent = self._overlay_parent if self._overlay_parent else self
+        overlay = SourcePickerOverlay(
+            parent,
+            mod_name=row["name"],
+            current_source=row["source"],
+            current_url=row["direct_url"],
+            on_pick=lambda src, url, di=data_idx: self._set_source(di, src, url),
+            on_close=self._close_source_overlay,
+        )
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._source_overlay = overlay
+
+    def _close_source_overlay(self):
+        if self._source_overlay is not None:
+            try:
+                self._source_overlay.destroy()
+            except Exception:
+                pass
+            self._source_overlay = None
+
+    def _set_source(self, data_idx: int, source: str, url: str):
+        row = self._rows[data_idx]
+        row["source"]     = source
+        row["direct_url"] = url
+        src_color, src_text = _source_btn_style(source)
+        for s in range(self._POOL):
+            if self._pool_slot[s] == data_idx:
+                self._canvas.itemconfigure(self._pool_src_btn[s], fill=src_color)
+                self._canvas.itemconfigure(self._pool_src_lbl[s], text=src_text)
                 break
 
     # ------------------------------------------------------------------
