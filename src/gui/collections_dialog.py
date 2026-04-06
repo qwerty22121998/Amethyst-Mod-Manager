@@ -4585,6 +4585,11 @@ class CollectionsDialog(tk.Frame):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_loaded(self, cols: list, page: int, search: bool):
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
         self._collections = cols
         self._loading = False
         self._prev_btn.configure(state="normal" if page > 0 else "disabled")
@@ -4600,6 +4605,11 @@ class CollectionsDialog(tk.Frame):
         self._log(f"Collections: {label}.")
 
     def _on_error(self, exc: Exception):
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
         self._hide_loader()
         self._loading = False
         self._prev_btn.configure(state="normal" if self._page > 0 else "disabled")
