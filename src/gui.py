@@ -754,31 +754,26 @@ class App(ctk.CTk):
             nonlocal _installed
             _installed = True
 
-        install_mod_from_archive(str(_archive_path), self, log, game, mod_panel,
-                                 on_installed=_on_installed)
+        installed_name = install_mod_from_archive(str(_archive_path), self, log, game, mod_panel,
+                                                  on_installed=_on_installed)
 
         # Write Nexus metadata to the installed mod's meta.ini
-        try:
-            meta = build_meta_from_download(
-                game_domain=result.game_domain,
-                mod_id=result.mod_id,
-                file_id=result.file_id,
-                archive_name=result.file_name,
-                mod_info=mod_info,
-                file_info=file_info,
-            )
-            # Determine the mod folder name (same logic as install_mod_from_archive)
-            raw_stem = os.path.splitext(os.path.basename(str(_archive_path)))[0]
-            if raw_stem.endswith(".tar"):
-                raw_stem = os.path.splitext(raw_stem)[0]
-            suggestions = _suggest_mod_names(raw_stem)
-            folder_name = suggestions[0] if suggestions else raw_stem
-            meta_path = game.get_effective_mod_staging_path() / folder_name / "meta.ini"
-            if meta_path.parent.is_dir():
-                write_meta(meta_path, meta)
-                log(f"Nexus: Saved metadata (mod {meta.mod_id}, v{meta.version})")
-        except Exception as exc:
-            log(f"Nexus: Warning — could not save metadata: {exc}")
+        if installed_name:
+            try:
+                meta = build_meta_from_download(
+                    game_domain=result.game_domain,
+                    mod_id=result.mod_id,
+                    file_id=result.file_id,
+                    archive_name=result.file_name,
+                    mod_info=mod_info,
+                    file_info=file_info,
+                )
+                meta_path = game.get_effective_mod_staging_path() / installed_name / "meta.ini"
+                if meta_path.parent.is_dir():
+                    write_meta(meta_path, meta)
+                    log(f"Nexus: Saved metadata (mod {meta.mod_id}, v{meta.version})")
+            except Exception as exc:
+                log(f"Nexus: Warning — could not save metadata: {exc}")
 
         if _installed and _archive_path:
             try:

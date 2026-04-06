@@ -1578,12 +1578,23 @@ class PluginPanel(ctk.CTkFrame):
         toolbar.grid(row=0, column=0, columnspan=2, sticky="ew")
         toolbar.grid_propagate(False)
 
+        self._mf_tree_expanded: bool = False
+        self._mf_expand_btn = tk.Button(
+            toolbar, text="⊞ Expand All",
+            bg=BG_PANEL, fg=TEXT_MAIN, activebackground=BG_HOVER,
+            relief="flat", font=("Segoe UI", _theme.FS10),
+            bd=0, cursor="hand2", highlightthickness=0,
+            command=self._toggle_mf_tree_expand,
+        )
+        self._mf_expand_btn.pack(side="right", padx=(0, 8), pady=2)
+
         self._mod_files_label = tk.Label(
             toolbar, text="(no mod selected)",
             bg=BG_HEADER, fg=TEXT_DIM,
             font=("Segoe UI", _theme.FS10),
+            anchor="w",
         )
-        self._mod_files_label.pack(side="left", padx=8, pady=4)
+        self._mod_files_label.pack(side="left", padx=8, pady=4, fill="x", expand=True)
 
         # Treeview — styled to match CTkTreeview / Data tab.
         # Flatpak: use default Treeitem.indicator (custom has broken state handling).
@@ -2122,6 +2133,8 @@ class PluginPanel(ctk.CTkFrame):
             return
 
         self._mod_files_label.configure(text=mod_name)
+        self._mf_tree_expanded = False
+        self._mf_expand_btn.configure(text="⊞ Expand All")
 
         # Load current exclusions for this mod
         excluded_keys: set[str] = set()
@@ -2130,11 +2143,12 @@ class PluginPanel(ctk.CTkFrame):
 
         # Load file list from mod index
         files: dict[str, str] = {}   # rel_key → rel_str
+        full_index = None
         if self._mod_files_index_path is not None:
             from Utils.filemap import read_mod_index
-            index = read_mod_index(self._mod_files_index_path)
-            if index and mod_name in index:
-                normal, root = index[mod_name]
+            full_index = read_mod_index(self._mod_files_index_path)
+            if full_index and mod_name in full_index:
+                normal, root = full_index[mod_name]
                 files.update(normal)
                 files.update(root)
 
@@ -2142,6 +2156,35 @@ class PluginPanel(ctk.CTkFrame):
             self._mf_tree.insert("", "end", text="  (no files found — try refreshing)", tags=("dim",))
             self._mf_tree.tag_configure("dim", foreground=TEXT_DIM)
             return
+
+        # Build conflict lookup sets from filemap.txt and full mod index.
+        # filemap_winner: rel_key_lower → winning mod name
+        # contested_keys: rel_keys provided by 2+ mods
+        filemap_winner: dict[str, str] = {}
+        contested_keys: set[str] = set()
+        if self._mod_files_index_path is not None:
+            _fm_path = self._mod_files_index_path.parent / "filemap.txt"
+            if _fm_path.is_file():
+                try:
+                    for _line in _fm_path.read_text(encoding="utf-8").splitlines():
+                        if "\t" in _line:
+                            _rk, _mn = _line.split("\t", 1)
+                            filemap_winner[_rk.lower()] = _mn
+                except Exception:
+                    pass
+        if full_index is not None:
+            _key_count: dict[str, int] = {}
+            for _mn, (_norm, _root) in full_index.items():
+                for _k in _norm:
+                    _key_count[_k] = _key_count.get(_k, 0) + 1
+                for _k in _root:
+                    _key_count[_k] = _key_count.get(_k, 0) + 1
+            contested_keys = {_k for _k, _c in _key_count.items() if _c > 1}
+
+        # Configure conflict highlight tags
+        self._mf_tree.tag_configure("dim", foreground=TEXT_DIM)
+        self._mf_tree.tag_configure("conflict_win",  foreground="#4caf50")
+        self._mf_tree.tag_configure("conflict_lose", foreground="#f44336")
 
         # Build tree structure
         tree_dict: dict = {}
@@ -2151,6 +2194,14 @@ class PluginPanel(ctk.CTkFrame):
             for part in parts[:-1]:
                 node = node.setdefault(part, {})
             node.setdefault("__files__", []).append((parts[-1], rel_key))
+
+        def _conflict_tag(rel_key: str) -> str | None:
+            if rel_key not in contested_keys:
+                return None
+            winner = filemap_winner.get(rel_key.lower())
+            if winner is None:
+                return None
+            return "conflict_win" if winner == mod_name else "conflict_lose"
 
         def insert_node(parent_id, name, subtree, depth=0):
             iid = self._mf_tree.insert(
@@ -2165,10 +2216,12 @@ class PluginPanel(ctk.CTkFrame):
                 insert_node(iid, child, subtree[child], depth + 1)
             for fname, rel_key in sorted(subtree.get("__files__", [])):
                 checked = rel_key not in excluded_keys
+                tag = _conflict_tag(rel_key)
                 leaf_iid = self._mf_tree.insert(
                     iid, "end",
                     text=fname,
                     values=(self._MF_CHECK if checked else self._MF_UNCHECK,),
+                    tags=(tag,) if tag else (),
                 )
                 self._mf_checked[leaf_iid] = checked
                 self._mf_iid_to_key[leaf_iid] = rel_key
@@ -2180,9 +2233,11 @@ class PluginPanel(ctk.CTkFrame):
         # Root-level files (unlikely but handle anyway)
         for fname, rel_key in sorted(tree_dict.get("__files__", [])):
             checked = rel_key not in excluded_keys
+            tag = _conflict_tag(rel_key)
             leaf_iid = self._mf_tree.insert(
                 "", "end", text=fname,
                 values=(self._MF_CHECK if checked else self._MF_UNCHECK,),
+                tags=(tag,) if tag else (),
             )
             self._mf_checked[leaf_iid] = checked
             self._mf_iid_to_key[leaf_iid] = rel_key
@@ -2291,7 +2346,26 @@ class PluginPanel(ctk.CTkFrame):
         if custom_deploy_mods:
             raw_entries = [(p, m) for p, m in raw_entries if m not in custom_deploy_mods]
         self._data_filemap_entries = self._resolve_data_entries(raw_entries)
-        self._build_data_tree_from_entries(self._data_filemap_entries)
+
+        # Build contested_keys: rel_keys that appear in 2+ mods
+        contested_keys: set[str] = set()
+        if self._mod_files_index_path is not None:
+            try:
+                from Utils.filemap import read_mod_index
+                full_index = read_mod_index(self._mod_files_index_path)
+                if full_index:
+                    _key_count: dict[str, int] = {}
+                    for _mn, (_norm, _root) in full_index.items():
+                        for _k in _norm:
+                            _key_count[_k] = _key_count.get(_k, 0) + 1
+                        for _k in _root:
+                            _key_count[_k] = _key_count.get(_k, 0) + 1
+                    contested_keys = {_k for _k, _c in _key_count.items() if _c > 1}
+            except Exception:
+                pass
+
+        self._data_contested_keys = contested_keys
+        self._build_data_tree_from_entries(self._data_filemap_entries, contested_keys)
 
     def _resolve_data_entries(self, entries):
         """Prefix each entry's path with its resolved deploy destination so the
@@ -2370,11 +2444,12 @@ class PluginPanel(ctk.CTkFrame):
                 entries.append((rel_path, mod_name))
         return entries
 
-    def _build_data_tree_from_entries(self, entries):
+    def _build_data_tree_from_entries(self, entries, contested_keys: "set[str] | None" = None):
         """Build the tree hierarchy from a list of (rel_path, mod_name) entries."""
         self._data_tree_expanded = False
         self._data_expand_btn.configure(text="⊞ Expand All")
         self._data_tree.delete(*self._data_tree.get_children())
+        contested_keys = contested_keys or set()
 
         tree_dict: dict = {}
         for rel_path, mod_name in entries:
@@ -2382,10 +2457,13 @@ class PluginPanel(ctk.CTkFrame):
             node = tree_dict
             for part in parts[:-1]:
                 node = node.setdefault(part, {})
-            node.setdefault("__files__", []).append((parts[-1], mod_name))
+            # Store (fname, mod_name, rel_key_lower) so leaf nodes can be tagged
+            rel_key_lower = rel_path.replace("\\", "/").lower()
+            node.setdefault("__files__", []).append((parts[-1], mod_name, rel_key_lower))
 
-        self._data_tree.tag_configure("folder", foreground="#56b6c2")
-        self._data_tree.tag_configure("file",   foreground=TEXT_MAIN)
+        self._data_tree.tag_configure("folder",       foreground="#56b6c2")
+        self._data_tree.tag_configure("file",         foreground=TEXT_MAIN)
+        self._data_tree.tag_configure("conflict_win", foreground="#4caf50")
 
         def insert_node(parent_id, name, subtree):
             node_id = self._data_tree.insert(
@@ -2395,17 +2473,19 @@ class PluginPanel(ctk.CTkFrame):
             )
             for child in sorted(k for k in subtree if k != "__files__"):
                 insert_node(node_id, child, subtree[child])
-            for fname, mod in sorted(subtree.get("__files__", [])):
+            for fname, mod, rel_key_lower in sorted(subtree.get("__files__", [])):
+                tag = "conflict_win" if rel_key_lower in contested_keys else "file"
                 self._data_tree.insert(
                     node_id, "end",
-                    text=fname, values=(mod,), tags=("file",),
+                    text=fname, values=(mod,), tags=(tag,),
                 )
 
         for top in sorted(k for k in tree_dict if k != "__files__"):
             insert_node("", top, tree_dict[top])
-        for fname, mod in sorted(tree_dict.get("__files__", [])):
+        for fname, mod, rel_key_lower in sorted(tree_dict.get("__files__", [])):
+            tag = "conflict_win" if rel_key_lower in contested_keys else "file"
             self._data_tree.insert("", "end",
-                text=fname, values=(mod,), tags=("file",))
+                text=fname, values=(mod,), tags=(tag,))
 
     def _toggle_data_tree_expand(self):
         """Expand all folders in the Data tree, or collapse them if already expanded."""
@@ -2424,6 +2504,25 @@ class PluginPanel(ctk.CTkFrame):
 
         self._data_expand_btn.configure(
             text="⊟ Collapse All" if self._data_tree_expanded else "⊞ Expand All"
+        )
+
+    def _toggle_mf_tree_expand(self):
+        """Expand all folders in the Mod Files tree, or collapse them if already expanded."""
+        self._mf_tree_expanded = not self._mf_tree_expanded
+        open_state = self._mf_tree_expanded
+
+        def _set_all(item):
+            children = self._mf_tree.get_children(item)
+            if children:
+                self._mf_tree.item(item, open=open_state)
+                for child in children:
+                    _set_all(child)
+
+        for top in self._mf_tree.get_children(""):
+            _set_all(top)
+
+        self._mf_expand_btn.configure(
+            text="⊟ Collapse All" if self._mf_tree_expanded else "⊞ Expand All"
         )
 
     def _on_data_file_selected(self, _event=None):
@@ -2449,15 +2548,16 @@ class PluginPanel(ctk.CTkFrame):
         query = self._data_search_var.get().casefold()
         if not hasattr(self, "_data_filemap_entries") or not self._data_filemap_entries:
             return
+        _ck = getattr(self, "_data_contested_keys", None)
         if not query:
-            self._build_data_tree_from_entries(self._data_filemap_entries)
+            self._build_data_tree_from_entries(self._data_filemap_entries, _ck)
             return
         filtered = [
             (rel_path, mod_name)
             for rel_path, mod_name in self._data_filemap_entries
             if query in rel_path.casefold() or query in mod_name.casefold()
         ]
-        self._build_data_tree_from_entries(filtered)
+        self._build_data_tree_from_entries(filtered, _ck)
         # Expand all nodes so filtered results are visible
         for item in self._data_tree.get_children():
             self._expand_all(item)

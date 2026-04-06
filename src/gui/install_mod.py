@@ -674,6 +674,40 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             _stamp_meta_install_date(dest_root / "meta.ini",
                                      installation_file=archive_filename)
 
+            _ne_meta_path = dest_root / "meta.ini"
+            _ne_archive = Path(archive_path)
+            _ne_game_domain = getattr(game, "nexus_game_domain", "")
+            if prebuilt_meta is not None:
+                try:
+                    write_meta(_ne_meta_path, prebuilt_meta)
+                except OSError:
+                    pass
+            elif _ne_game_domain and _ne_archive.is_file():
+                def _detect_meta_no_extract():
+                    try:
+                        app = None
+                        try:
+                            app = parent_window.winfo_toplevel()
+                        except Exception:
+                            pass
+                        api = getattr(app, "_nexus_api", None) if app else None
+                        meta = resolve_nexus_meta_for_archive(
+                            _ne_archive, _ne_game_domain,
+                            api=api,
+                            log_fn=lambda m: (
+                                app.after(0, lambda msg=m: log_fn(msg))
+                                if app else None
+                            ),
+                        )
+                        if meta:
+                            write_meta(_ne_meta_path, meta)
+                            msg = f"Nexus: Saved metadata for '{mod_name}' (mod {meta.mod_id})"
+                            if app:
+                                app.after(0, lambda: log_fn(msg))
+                    except Exception:
+                        pass
+                threading.Thread(target=_detect_meta_no_extract, daemon=True).start()
+
             if mod_panel is not None and mod_panel._modlist_path is not None:
                 modlist_path = mod_panel._modlist_path
             else:
@@ -696,11 +730,12 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
 
             if mod_panel is not None:
                 mod_panel.after(0, mod_panel.reload_after_install)
+            return mod_name
         except Exception as e:
             import traceback
             log_fn(f"Install error: {e}")
             log_fn(traceback.format_exc())
-        return
+        return None
 
     # Use /tmp (tmpfs) only when it has enough headroom for this archive plus a
     # 512 MB safety margin.  A module-level lock + reservation counter prevents
