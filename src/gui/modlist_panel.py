@@ -4834,7 +4834,7 @@ class ModListPanel(ctk.CTkFrame):
             return
         src_folder = self._staging_root / mod_name
         if not src_folder.is_dir():
-            show_error(self.winfo_toplevel(), f"Mod folder not found:\n{src_folder}")
+            show_error("Error", f"Mod folder not found:\n{src_folder}", parent=self.winfo_toplevel())
             return
 
         # Determine the target staging root
@@ -4872,7 +4872,7 @@ class ModListPanel(ctk.CTkFrame):
                     f"Copied '{mod_name}' → profile '{target_profile}'"))
             except Exception as exc:
                 self.after(0, lambda e=exc: show_error(
-                    self.winfo_toplevel(), f"Failed to copy mod:\n{e}"))
+                    "Copy Failed", f"Failed to copy mod:\n{e}", parent=self.winfo_toplevel()))
 
         threading.Thread(target=_do_copy, daemon=True).start()
 
@@ -4899,6 +4899,19 @@ class ModListPanel(ctk.CTkFrame):
         else:
             target_staging = game.get_mod_staging_path()
 
+        # Pre-check which destinations already exist and confirm once.
+        existing = [m for m in mod_names if (target_staging / m).exists()]
+        replace_existing = False
+        if existing:
+            replace_existing = ask_yes_no(
+                self.winfo_toplevel(),
+                f"{len(existing)} mod(s) already exist in profile '{target_profile}':\n\n"
+                + "\n".join(existing[:10])
+                + ("\n…" if len(existing) > 10 else "")
+                + "\n\nReplace them? (No = skip existing)",
+                title="Mods Exist",
+            )
+
         def _do_copy():
             copied, skipped = 0, 0
             for mod_name in mod_names:
@@ -4909,6 +4922,9 @@ class ModListPanel(ctk.CTkFrame):
                 dest_folder = target_staging / mod_name
                 try:
                     if dest_folder.exists():
+                        if not replace_existing:
+                            skipped += 1
+                            continue
                         def _force_remove(func, path, _exc):
                             os.chmod(path, 0o700)
                             func(path)
@@ -4917,11 +4933,11 @@ class ModListPanel(ctk.CTkFrame):
                     copied += 1
                 except Exception as exc:
                     self.after(0, lambda e=exc, n=mod_name: show_error(
-                        self.winfo_toplevel(), f"Failed to copy '{n}':\n{e}"))
+                        "Copy Failed", f"Failed to copy '{n}':\n{e}", parent=self.winfo_toplevel()))
                     return
             self.after(0, lambda c=copied, s=skipped: self._log(
                 f"Copied {c} mod(s) → profile '{target_profile}'"
-                + (f" ({s} skipped — folder not found)" if s else "")))
+                + (f" ({s} skipped)" if s else "")))
 
         threading.Thread(target=_do_copy, daemon=True).start()
 

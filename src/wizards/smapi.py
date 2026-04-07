@@ -61,9 +61,19 @@ def _fetch_latest_smapi_asset() -> tuple[str, str]:
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = _json.loads(resp.read().decode())
     tag = data.get("tag_name", "unknown")
-    for asset in data.get("assets", []):
+    assets = data.get("assets", [])
+    # Prefer the plain installer zip (e.g. SMAPI-x.x.x-installer.zip),
+    # explicitly excluding double-zipped variants.
+    for asset in assets:
         name: str = asset.get("name", "")
-        if name.lower().endswith(".zip") and "smapi" in name.lower():
+        nl = name.lower()
+        if nl.endswith(".zip") and "smapi" in nl and "installer" in nl and "double" not in nl:
+            return tag, asset["browser_download_url"]
+    # Fallback: any SMAPI zip that isn't double-zipped
+    for asset in assets:
+        name = asset.get("name", "")
+        nl = name.lower()
+        if nl.endswith(".zip") and "smapi" in nl and "double" not in nl:
             return tag, asset["browser_download_url"]
     raise RuntimeError("No SMAPI zip asset found in the latest GitHub release.")
 

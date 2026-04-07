@@ -1283,7 +1283,7 @@ class CollectionDetailDialog(tk.Frame):
         _cj_auth: dict = getattr(self, "_collection_schema_cache", None) or {}
         if not _cj_auth:
             # Try the profile's saved collection.json as a fallback.
-            _mode, _pname, _ = mode_result
+            _mode, _pname, *_ = mode_result
             if _pname and self._game:
                 try:
                     import json as _json
@@ -1319,7 +1319,7 @@ class CollectionDetailDialog(tk.Frame):
             # Load previously saved skipped fids for existing profiles so the user
             # doesn't have to re-select after a crash or reinstall.
             pre_skipped_fids: "set[int]" = set()
-            mode, append_profile_name, _ = mode_result
+            mode, append_profile_name, *_ = mode_result
             if mode in ("append", "continue") and append_profile_name:
                 profile_root = self._game.get_profile_root()
                 existing_profile_dir = profile_root / "profiles" / append_profile_name
@@ -1355,7 +1355,8 @@ class CollectionDetailDialog(tk.Frame):
         if not self._game:
             return
 
-        mode, append_profile_name, overwrite_existing = mode_result
+        mode, append_profile_name, overwrite_existing, *_extra = mode_result
+        skip_existing: bool = bool(_extra[0]) if _extra else False
 
         if mode == "continue":
             # Continue install into the profile that already has this collection.
@@ -1442,6 +1443,7 @@ class CollectionDetailDialog(tk.Frame):
             None if mode in ("new", "continue") else overwrite_existing,
             skipped_fids,
             skipped_mods or [],
+            skip_existing if mode == "append" else False,
         )
 
         if self._nexus_is_premium and not _DEBUG_FORCE_MANUAL_INSTALL:
@@ -1461,7 +1463,7 @@ class CollectionDetailDialog(tk.Frame):
                 daemon=True,
             ).start()
 
-    def _run_install(self, mods, download_link_path, profile_dir, old_profile, downloader, app, total, overwrite_existing: "bool | None" = None, skipped_fids: "set[int] | None" = None, skipped_mods: "list | None" = None):
+    def _run_install(self, mods, download_link_path, profile_dir, old_profile, downloader, app, total, overwrite_existing: "bool | None" = None, skipped_fids: "set[int] | None" = None, skipped_mods: "list | None" = None, skip_existing: bool = False):
         """Background thread: download then install each mod in collection-defined order.
 
         Load order is driven by ``collection.json`` from the collection archive:
@@ -1651,6 +1653,11 @@ class CollectionDetailDialog(tk.Frame):
                     _parser.read(str(meta_ini), encoding="utf-8")
                     fid_str = _parser.get("General", "fileid", fallback="").strip()
                     if fid_str and fid_str != "0":
+                        # When skip_existing is set, only record mods that are
+                        # actually in this profile's modlist (avoids cross-profile
+                        # false positives).
+                        if skip_existing and mod_dir.name.lower() not in _profile_mod_names:
+                            continue
                         already_installed_by_fid[int(fid_str)] = mod_dir.name
                 except Exception:
                     pass
@@ -1747,7 +1754,11 @@ class CollectionDetailDialog(tk.Frame):
 
             if existing_folder:
                 self._log(f"Collection install: '{mod.mod_name}' already installed as '{existing_folder}' — skipping")
-                install_order.append((_sort_key(mod), existing_folder))
+                # When skip_existing is True the mod already belongs to this
+                # profile at its current position; don't add it to install_order
+                # so the final reconciliation step leaves it untouched.
+                if not skip_existing:
+                    install_order.append((_sort_key(mod), existing_folder))
                 installed += 1
             else:
                 to_download.append(mod)
@@ -2116,22 +2127,28 @@ class CollectionDetailDialog(tk.Frame):
             # so that fomod conditions can see plugins from already-installed mods.
             if _fomod_deferred:
                 try:
-                    _plugin_exts = {".esm", ".esl", ".esp"}
+                    import os as _os
+                    _plugin_exts = (".esm", ".esl", ".esp")
                     _pre_plugins: list = []
                     _seen_plugins: set = set()
                     _pre_staging = self._game.get_effective_mod_staging_path()
+                    # NOTE: collection installs run with skip_index_update=True,
+                    # so the mod index does not yet contain these mods. Walk the
+                    # staging dirs directly — os.walk is ~3-4× faster than
+                    # Path.rglob("*") because it avoids per-entry Path objects.
                     for _fid, _fname in _install_results.items():
                         _mod_dir = _pre_staging / _fname
                         if not _mod_dir.is_dir():
                             continue
-                        for _pf in _mod_dir.rglob("*"):
-                            if _pf.suffix.lower() in _plugin_exts:
-                                _pname_low = _pf.name.lower()
-                                if _pname_low not in _seen_plugins:
-                                    _seen_plugins.add(_pname_low)
-                                    _pre_plugins.append(
-                                        PluginEntry(name=_pf.name, enabled=True)
-                                    )
+                        for _root, _dirs, _files in _os.walk(str(_mod_dir)):
+                            for _fn in _files:
+                                if _fn.lower().endswith(_plugin_exts):
+                                    _pname_low = _fn.lower()
+                                    if _pname_low not in _seen_plugins:
+                                        _seen_plugins.add(_pname_low)
+                                        _pre_plugins.append(
+                                            PluginEntry(name=_fn, enabled=True)
+                                        )
                     if _pre_plugins:
                         _star_pre = getattr(self._game, "plugins_use_star_prefix", True)
                         write_plugins(profile_dir / "plugins.txt", _pre_plugins,
@@ -2913,7 +2930,8 @@ class CollectionDetailDialog(tk.Frame):
                             downloader, app, total,
                             overwrite_existing: "bool | None" = None,
                             skipped_fids: "set[int] | None" = None,
-                            skipped_mods: "list | None" = None):
+                            skipped_mods: "list | None" = None,
+                            skip_existing: bool = False):
         """Background thread: guide user through manual download of each mod, then install."""
         import time as _time_mod
         from Nexus.nexus_download import _find_cached_archive, _get_downloads_dir
@@ -3037,6 +3055,8 @@ class CollectionDetailDialog(tk.Frame):
                     _parser.read(str(meta_ini), encoding="utf-8")
                     fid_str = _parser.get("General", "fileid", fallback="").strip()
                     if fid_str and fid_str != "0":
+                        if skip_existing and mod_dir.name.lower() not in _profile_mod_names:
+                            continue
                         already_installed_by_fid[int(fid_str)] = mod_dir.name
                 except Exception:
                     pass
@@ -3107,7 +3127,8 @@ class CollectionDetailDialog(tk.Frame):
                         break
             if existing_folder:
                 self._log(f"Manual install: '{mod.mod_name}' already installed as '{existing_folder}' \u2014 skipping")
-                install_order.append((_sort_key(mod), existing_folder))
+                if not skip_existing:
+                    install_order.append((_sort_key(mod), existing_folder))
                 installed += 1
             else:
                 to_download.append(mod)

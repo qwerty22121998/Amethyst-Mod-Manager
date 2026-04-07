@@ -49,7 +49,7 @@ import gui.theme as _theme
 from gui.path_utils import _to_wine_path
 from Utils.config_paths import get_exe_args_path, get_profile_exe_args_path, get_custom_game_images_dir, get_vcredist_cache_path, get_dotnet_cache_dir, get_custom_games_dir
 from Utils.exe_args_builder import EXE_PROFILES
-from gui.ctk_components import CTkLoader
+from gui.ctk_components import CTkAlert, CTkLoader
 from Utils.xdg import xdg_open, open_url
 
 
@@ -76,14 +76,29 @@ def _resolve_exe_args_file(game) -> "Path":
 # Themed message helpers (replaces tk.messagebox which ignores dark theme)
 # ---------------------------------------------------------------------------
 
-def _center_dialog(dlg, parent, w: int, h: int):
-    """Position dlg centered over parent using a known fixed size."""
+def _center_dialog(dlg, parent, w: int, h: int | None = None):
+    """Position dlg centered over parent, on the same monitor.
+
+    Call *after* all widgets are packed so reqheight() is accurate when h=None.
+    The dialog is withdrawn before geometry is set and deiconified after, which
+    prevents it from briefly appearing on the wrong monitor.
+    """
+    dlg.withdraw()
     try:
-        x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
-        y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
+        dlg.geometry(f"{w}")       # fix width; let height float for layout flush
+        dlg.update_idletasks()
+        if h is None:
+            h = dlg.winfo_reqheight()
+        px = parent.winfo_rootx()
+        py = parent.winfo_rooty()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        x = px + (pw - w) // 2
+        y = py + (ph - h) // 2
         dlg.geometry(f"{w}x{h}+{x}+{y}")
     except Exception:
-        dlg.geometry(f"{w}x{h}")
+        dlg.geometry(f"{w}x{h}" if h else f"{w}")
+    dlg.deiconify()
 
 
 def _center_crop_to_square(img: "_PilImage.Image", size: int) -> "_PilImage.Image":
@@ -116,67 +131,32 @@ def _load_card_image_sync(img_path: Path, img_sq: int, px_size: int) -> "_PilIma
         return None
 
 
-def ask_yes_no(title: str, message: str, parent=None) -> bool:
-    """Dark-themed yes/no confirmation dialog. Returns True if Yes clicked."""
-    result = [False]
-
-    dlg = ctk.CTkToplevel(parent, fg_color=BG_DEEP)
-    dlg.title(title)
-    dlg.resizable(False, False)
-    if parent is not None:
-        dlg.transient(parent)
-    _center_dialog(dlg, parent, 400, 160)
-
-    # Icon + message
-    body = ctk.CTkFrame(dlg, fg_color="transparent")
-    body.pack(fill="x", padx=20, pady=(18, 4))
-    ctk.CTkLabel(body, text="?", font=("", 28, "bold"),
-                 text_color=ACCENT, width=36).pack(side="left", anchor="n", padx=(0, 12))
-    ctk.CTkLabel(body, text=message, font=FONT_NORMAL,
-                 text_color=TEXT_MAIN, wraplength=300, justify="left").pack(side="left")
-
-    # Buttons
-    btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
-    btn_row.pack(fill="x", padx=20, pady=(8, 16))
-    ctk.CTkButton(btn_row, text="No", width=80, font=FONT_BOLD,
-                  fg_color=BG_PANEL, hover_color=BG_HEADER, text_color=TEXT_MAIN,
-                  command=dlg.destroy).pack(side="right", padx=(4, 0))
-    def _yes():
-        result[0] = True
-        dlg.destroy()
-    ctk.CTkButton(btn_row, text="Yes", width=80, font=FONT_BOLD,
-                  fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-                  command=_yes).pack(side="right", padx=4)
-
-    dlg.after(50, dlg.grab_set)
-    dlg.wait_window()
-    return result[0]
+def ask_yes_no(parent, message: str, title: str = "Confirm") -> bool:
+    """Yes/No confirmation dialog using CTkAlert. Returns True if Yes clicked."""
+    alert = CTkAlert(
+        state="warning",
+        title=title,
+        body_text=message,
+        btn1="Yes",
+        btn2="No",
+        parent=parent,
+        width=520,
+    )
+    return alert.get() == "Yes"
 
 
 def show_error(title: str, message: str, parent=None) -> None:
-    """Dark-themed error dialog."""
-    dlg = ctk.CTkToplevel(parent, fg_color=BG_DEEP)
-    dlg.title(title)
-    dlg.resizable(False, False)
-    if parent is not None:
-        dlg.transient(parent)
-    _center_dialog(dlg, parent, 400, 140)
-
-    body = ctk.CTkFrame(dlg, fg_color="transparent")
-    body.pack(fill="x", padx=20, pady=(18, 4))
-    ctk.CTkLabel(body, text="✕", font=("", 24, "bold"),
-                 text_color="#e06c75", width=36).pack(side="left", anchor="n", padx=(0, 12))
-    ctk.CTkLabel(body, text=message, font=FONT_NORMAL,
-                 text_color=TEXT_MAIN, wraplength=300, justify="left").pack(side="left")
-
-    btn_row = ctk.CTkFrame(dlg, fg_color="transparent")
-    btn_row.pack(fill="x", padx=20, pady=(8, 16))
-    ctk.CTkButton(btn_row, text="OK", width=80, font=FONT_BOLD,
-                  fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
-                  command=dlg.destroy).pack(side="right")
-
-    dlg.after(50, dlg.grab_set)
-    dlg.wait_window()
+    """Error dialog using CTkAlert."""
+    alert = CTkAlert(
+        state="error",
+        title=title,
+        body_text=message,
+        btn1="OK",
+        btn2="",
+        parent=parent,
+        width=520,
+    )
+    alert.get()
 
 
 def _build_tree_str(paths: list[str]) -> str:
@@ -5409,9 +5389,9 @@ class CollectionInstallModeDialog(tk.Frame):
 
     Placed over the mod list panel with place(relx=0, rely=0, relwidth=1, relheight=1).
     Calls on_done(result) when finished, where result is one of:
-      ("new", None, False)                          — create a new profile
-      ("append", profile_name, overwrite_existing)  — append into existing profile
-      None                                          — cancelled
+      ("new", None, False, False)                              — create a new profile
+      ("append", profile_name, overwrite_existing, skip_existing)  — append into existing profile
+      None                                                     — cancelled
     """
 
     def __init__(self, parent, existing_profiles: list[str], on_done):
@@ -5421,6 +5401,7 @@ class CollectionInstallModeDialog(tk.Frame):
 
         self._mode_var = tk.StringVar(value="new")
         self._overwrite_var = tk.BooleanVar(value=False)
+        self._skip_existing_var = tk.BooleanVar(value=False)
         self._profile_var = tk.StringVar(
             value=existing_profiles[0] if existing_profiles else ""
         )
@@ -5502,6 +5483,16 @@ class CollectionInstallModeDialog(tk.Frame):
         )
         self._overwrite_cb.grid(row=4, column=0, sticky="w", padx=(16, 0), pady=(0, 4))
 
+        self._skip_existing_cb = ctk.CTkCheckBox(
+            body, text="Skip already installed mods",
+            variable=self._skip_existing_var,
+            font=FONT_NORMAL, text_color=TEXT_DIM,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, border_color=BORDER,
+            checkmark_color="white",
+            state="disabled",
+        )
+        self._skip_existing_cb.grid(row=5, column=0, sticky="w", padx=(16, 0), pady=(0, 4))
+
         # Separator before buttons
         tk.Frame(card, bg=BORDER, height=1).grid(row=row, column=0, sticky="ew")
         row += 1
@@ -5529,16 +5520,20 @@ class CollectionInstallModeDialog(tk.Frame):
             state=state,
             text_color=TEXT_MAIN if is_append else TEXT_DIM,
         )
+        self._skip_existing_cb.configure(
+            state=state,
+            text_color=TEXT_MAIN if is_append else TEXT_DIM,
+        )
 
     def _on_ok(self):
         mode = self._mode_var.get()
         if mode == "new":
-            result = ("new", None, False)
+            result = ("new", None, False, False)
         else:
             profile = self._profile_var.get()
             if not profile or profile == "(no profiles)":
                 return
-            result = ("append", profile, self._overwrite_var.get())
+            result = ("append", profile, self._overwrite_var.get(), self._skip_existing_var.get())
         self._on_done(result)
 
     def _on_cancel(self):
@@ -5614,7 +5609,7 @@ class CollectionContinueInstallDialog(tk.Frame):
         ).pack(side="right", padx=4, pady=8)
 
     def _on_ok(self):
-        self._on_done(("continue", self._profile_name, False))
+        self._on_done(("continue", self._profile_name, False, False))
 
     def _on_cancel(self):
         self._on_done(None)

@@ -579,11 +579,15 @@ def _copy_file_list(file_list: list[tuple[str, str, bool]],
         src, dst = src_dst
         if dst.is_dir():
             shutil.rmtree(dst)
-        try:
-            shutil.copy2(src, dst)
-        except PermissionError:
-            dst.chmod(0o644)
-            shutil.copy2(src, dst)
+        elif dst.exists() or dst.is_symlink():
+            # Unlink first so we don't punch through a hardlink shared with
+            # another mod's staging file (deploy uses hardlinks on this setup).
+            try:
+                dst.unlink()
+            except PermissionError:
+                dst.chmod(0o644)
+                dst.unlink()
+        shutil.copy2(src, dst)
 
     _COPY_WORKERS = 8
     with ThreadPoolExecutor(max_workers=_COPY_WORKERS) as pool:
@@ -1057,9 +1061,11 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 _orig_nexus_clean = re.sub(r"(-\d+)+$", "", raw_stem).strip()
                 _filename_lower = _orig_nexus_clean.lower()
                 _fomod_lower = fomod_clean.lower()
-                # Find length of shared prefix (word-boundary aware: split on spaces)
-                _fn_words = _filename_lower.split()
-                _fm_words = _fomod_lower.split()
+                # Find length of shared prefix (word-boundary aware: tokenize
+                # on any non-alphanumeric run so punctuation-separated variants
+                # like "Foo-Bar_Regional" vs "Foo-Bar_AddOns" split correctly).
+                _fn_words = [w for w in re.split(r"[^a-z0-9]+", _filename_lower) if w]
+                _fm_words = [w for w in re.split(r"[^a-z0-9]+", _fomod_lower) if w]
                 _shared = 0
                 for _a, _b in zip(_fn_words, _fm_words):
                     if _a == _b:

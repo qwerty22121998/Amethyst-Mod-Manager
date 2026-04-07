@@ -1,3 +1,18 @@
+- v1.1.9
+- Fixed meta.ini getting overwritten if a another mod with the same name is installed.
+- The files in the mod files and data tab are now highlighted if they are winning/losing conflicts
+- Added an expand all button in the mod files tab
+- Fomod mods are now deferred to the end of a collection install instead of appearing immediately
+- Fixed some fomods during a collection install that had options that could not be selected due to the plugins.txt not being generated until after the fomod dialogue appeared
+- Fix for separators being deleted when selecting searched mods while priority is reversed
+- When installing a fomod mod manually or via nxm, any additional fomods that appear while a fomod window is open will be queued.
+- Tweaked the check updates logic, it was missing a lot of mods that had updates available
+- Added a copy to profile right click option to quickly move a mod or mods to another profile
+- Added a skip installed mods to collections when appending to a profile.
+- Selecting multiple mods now highlights conflicts for all mods in the selection
+- Fixed fomod installs where the author had entered the wrong mod name into the manifest
+- Fixed smapi wizard downloading the wrong version
+
 - v1.1.8
 - Added OpenMW
 - Added Stalker 2
