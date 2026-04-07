@@ -205,19 +205,25 @@ def check_for_updates(
         for meta in metas:
             install_date = _parse_install_date(meta)
 
-            # --- Path A: Nexus-native flag (requires user to have tracked the mod)
+            # --- Path A: file-level comparison when we know the exact file_id.
+            # This is authoritative and must take precedence over date-based
+            # checks — a mod installed from a collection gets an install date
+            # of "now" even when the collection shipped an older file_id, so
+            # the updatedAt-vs-install-date path would miss real updates.
+            if meta.file_id > 0:
+                rest_fallback.setdefault(mod_id, []).append(meta)
+                continue
+
+            # --- Path B: Nexus-native flag (requires user to have tracked the mod)
             if info is not None and info.viewer_update_available is not None:
                 has_update = info.viewer_update_available
 
-            # --- Path B: date comparison against GraphQL updatedAt
+            # --- Path C: date comparison against GraphQL updatedAt
             elif info is not None and info.updated_at is not None and install_date is not None:
                 has_update = info.updated_at > install_date
 
-            # --- Path C: REST fallback
-            #   - file_id known (exact file comparison)
-            #   - OR GraphQL returned nothing but we have an install date
-            #     (can still do date comparison via file timestamps)
-            elif meta.file_id > 0 or install_date is not None:
+            # --- Path D: REST fallback via install-date comparison
+            elif install_date is not None:
                 rest_fallback.setdefault(mod_id, []).append(meta)
                 continue  # handled below
 
@@ -283,18 +289,23 @@ def check_for_updates(
                 exact_name_match = bool(name_matches)
 
                 install_date = _parse_install_date(meta)
-                if install_date is not None:
+                if meta.file_id > 0:
+                    # Exact file-ID comparison — authoritative when we know
+                    # which file the user has installed.  Preferred over
+                    # date comparison because a freshly-installed collection
+                    # mod has install_date == now but may ship an older file.
+                    latest_ver = _norm_version(latest.version or latest.mod_version or "")
+                    installed_ver = _norm_version(meta.version or "")
+                    same_version = latest_ver != "" and latest_ver == installed_ver
+                    has_update = latest.file_id != meta.file_id and not same_version
+                elif install_date is not None:
                     # Date comparison against the latest file's upload timestamp
                     latest_upload = datetime.fromtimestamp(
                         latest.uploaded_timestamp, tz=timezone.utc
                     )
                     has_update = latest_upload > install_date
                 else:
-                    # Version-string / file-ID comparison (file_id must be known)
-                    latest_ver = _norm_version(latest.version or latest.mod_version or "")
-                    installed_ver = _norm_version(meta.version or "")
-                    same_version = latest_ver != "" and latest_ver == installed_ver
-                    has_update = latest.file_id != meta.file_id and not same_version
+                    continue
 
                 with _lock:
                     _apply_update_result(
