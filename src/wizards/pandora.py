@@ -368,7 +368,7 @@ class PandoraWizard(ctk.CTkFrame):
                 env=env,
                 cwd=str(exe.parent),
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
             )
             self._set_label(
                 "_run_status",
@@ -376,10 +376,20 @@ class PandoraWizard(ctk.CTkFrame):
                 color="#6bc76b",
             )
             self.after(0, lambda: self._done_btn.configure(state="normal"))
-            proc.wait()
-            self._log("Pandora Wizard: Pandora closed.")
-            self._set_label("_run_status", "Pandora finished.", color="#6bc76b")
-            self.after(0, self._on_done)
+            _stdout, stderr_bytes = proc.communicate()
+            rc = proc.returncode
+            self._log(f"Pandora Wizard: Pandora exited (code {rc}).")
+            if stderr_bytes:
+                for line in stderr_bytes.decode(errors="replace").splitlines():
+                    self._log(f"  Pandora stderr: {line}")
+            if rc != 0:
+                self._set_label(
+                    "_run_status",
+                    f"Pandora exited with error (code {rc}).\nSee the log for details. Click Done to close.",
+                    color="#e06c6c",
+                )
+            else:
+                self._set_label("_run_status", "Pandora finished. Click Done to close.", color="#6bc76b")
         except Exception as exc:
             self._set_label("_run_status", f"Launch error: {exc}", color="#e06c6c")
             self._log(f"Pandora Wizard: launch error: {exc}")
