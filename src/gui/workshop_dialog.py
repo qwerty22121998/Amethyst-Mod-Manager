@@ -11,6 +11,7 @@ VersionPickerOverlay placed over the workshop itself.
 from __future__ import annotations
 
 import json
+import zipfile
 import tkinter as tk
 import tkinter.font as tkfont
 import tkinter.messagebox as messagebox
@@ -24,9 +25,11 @@ from Nexus.nexus_meta import read_meta
 from Utils.config_paths import get_fomod_selections_path
 from Utils.plugins import read_plugins
 from Utils.portal_filechooser import pick_save_file
+from gui.ctk_components import CTkAlert
 from gui.theme import (
     BG_DEEP,
     BG_HEADER,
+    BG_PANEL,
     BG_ROW,
     BG_SEP,
     BG_HOVER,
@@ -38,17 +41,18 @@ from gui.theme import (
     FONT_HEADER,
     FONT_BOLD,
     FONT_SMALL,
+    FS11,
     scaled,
     font_sized,
 )
 
 _ROW_H   = scaled(26)
-_HEADERS = ("Mod Name", "Mod ID", "Preferred Version", "Optional", "Fomod", "Source")
+_HEADERS = ("Mod Name", "Mod ID", "Preferred Version", "Source", "Fomod", "Optional")
 
 # Fixed widths for the smaller columns.
 # Name gets whatever is left over.
 _CW_MODID   = scaled(90)
-_CW_VER     = scaled(160)
+_CW_VER     = scaled(190)
 _CW_OPT     = scaled(90)
 _CW_FOMOD   = scaled(70)
 _CW_SRC     = scaled(90)
@@ -57,7 +61,7 @@ _CW_FIXED   = _CW_MODID + _CW_VER + _CW_OPT + _CW_FOMOD + _CW_SRC
 def _compute_col_layout(canvas_w: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """Return (col_widths, col_x) for the 6 columns given canvas_w."""
     cw_name = max(canvas_w - _CW_FIXED, scaled(150))
-    cw = (cw_name, _CW_MODID, _CW_VER, _CW_OPT, _CW_FOMOD, _CW_SRC)
+    cw = (cw_name, _CW_MODID, _CW_VER, _CW_SRC, _CW_FOMOD, _CW_OPT)
     cx: tuple[int, ...] = (0,)
     for w in cw[:-1]:
         cx = cx + (cx[-1] + w,)
@@ -85,6 +89,11 @@ def _truncate(text: str, max_px: int, font: tkfont.Font) -> str:
         else:
             hi = mid - 1
     return text[:lo] + ellipsis
+
+
+def _norm_ver_name(s: str) -> str:
+    """Normalise a mod/file name for match comparison (lower, alnum only)."""
+    return "".join(ch for ch in s.lower() if ch.isalnum())
 
 
 # ---------------------------------------------------------------------------
@@ -240,8 +249,13 @@ class VersionPickerOverlay(tk.Frame):
             c.itemconfigure(self._pool_bg[s], state="normal")
 
             is_cur = entry["label"] == self._current
-            fg = "white" if is_cur else TEXT_MAIN
-            fg2 = "white" if is_cur else TEXT_DIM
+            is_match = bool(entry.get("matches"))
+            if is_cur:
+                fg, fg2 = "white", "white"
+            elif is_match:
+                fg, fg2 = "#5cd65c", "#5cd65c"
+            else:
+                fg, fg2 = TEXT_MAIN, TEXT_DIM
 
             c.coords(self._pool_label[s], self._VCX[0] + scaled(4), yc)
             c.itemconfigure(self._pool_label[s], text=entry["label"], fill=fg, state="normal")
@@ -252,6 +266,7 @@ class VersionPickerOverlay(tk.Frame):
     def _apply_row_bg(self, s: int, di: int):
         entry  = self._ver_entries[di]
         is_cur = entry["label"] == self._current
+        is_match = bool(entry.get("matches"))
         if is_cur:
             fill = ACCENT
         elif di == self._hover_idx:
@@ -259,8 +274,12 @@ class VersionPickerOverlay(tk.Frame):
         else:
             fill = BG_ROW if di % 2 == 0 else BG_DEEP
         self._canvas.itemconfigure(self._pool_bg[s], fill=fill)
-        fg  = "white" if is_cur else TEXT_MAIN
-        fg2 = "white" if is_cur else TEXT_DIM
+        if is_cur:
+            fg, fg2 = "white", "white"
+        elif is_match:
+            fg, fg2 = "#5cd65c", "#5cd65c"
+        else:
+            fg, fg2 = TEXT_MAIN, TEXT_DIM
         self._canvas.itemconfigure(self._pool_label[s], fill=fg)
         self._canvas.itemconfigure(self._pool_name[s],  fill=fg2)
 
@@ -314,7 +333,7 @@ def _source_btn_style(source: str) -> tuple[str, str]:
         return "#5a7a5a", "Direct"
     if source == "bundle":
         return "#7a5a7a", "Bundle"
-    return BG_SEP, "Nexus"
+    return "#c77a3a", "Nexus"
 
 
 class SourcePickerOverlay(tk.Frame):
@@ -432,6 +451,8 @@ class WorkshopDialog(tk.Frame):
         self._overlay_parent = overlay_parent  # plugin panel container
 
         self._rows: list[dict] = []
+        self._all_rows: list[dict] = []
+        self._hide_no_fileid_var = tk.BooleanVar(value=False)
 
         self._pool_bg:      list[int] = []
         self._pool_name:    list[int] = []
@@ -450,8 +471,8 @@ class WorkshopDialog(tk.Frame):
 
         self._canvas_w  = scaled(840)
         self._col_cw, self._col_cx = _compute_col_layout(self._canvas_w)
-        self._font_main = font_sized("Segoe UI", 10)
-        self._font_small = font_sized("Segoe UI", 9)
+        self._font_main = font_sized("Segoe UI", 10, "bold")
+        self._font_small = font_sized("Segoe UI", 9, "bold")
 
         global _tk_font_cache
         if _tk_font_cache is None:
@@ -468,9 +489,10 @@ class WorkshopDialog(tk.Frame):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
-        self.grid_rowconfigure(2, weight=1)
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=0)
+        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=0)
         self.grid_columnconfigure(0, weight=1)
 
         toolbar = tk.Frame(self, bg=BG_HEADER, height=scaled(28))
@@ -489,10 +511,66 @@ class WorkshopDialog(tk.Frame):
             font=FONT_HEADER, command=self._do_export,
         ).pack(side="right", padx=(0, 4), pady=2)
 
+        ctk.CTkButton(
+            toolbar, text="Load", width=scaled(60), height=scaled(26),
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._do_load,
+        ).pack(side="right", padx=(0, 4), pady=2)
+
+        ctk.CTkButton(
+            toolbar, text="Save", width=scaled(60), height=scaled(26),
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=self._do_save,
+        ).pack(side="right", padx=(0, 4), pady=2)
+
         tk.Label(
             toolbar, text="Workshop", bg=BG_HEADER, fg=TEXT_MAIN,
             font=FONT_BOLD,
         ).pack(side="left", padx=8)
+
+        tk.Checkbutton(
+            toolbar, text="Only show mods without file ID",
+            variable=self._hide_no_fileid_var,
+            bg=BG_HEADER, fg=TEXT_MAIN, selectcolor=BG_DEEP,
+            activebackground=BG_HEADER, activeforeground=TEXT_MAIN,
+            font=FONT_SMALL, bd=0, highlightthickness=0,
+            command=self._apply_filter,
+        ).pack(side="left", padx=(12, 0))
+
+        search_bar = tk.Frame(self, bg=BG_DEEP, bd=0, highlightthickness=0, height=scaled(32))
+        search_bar.grid(row=3, column=0, sticky="ew")
+        search_bar.grid_propagate(False)
+
+        tk.Label(search_bar, text="🔍", bg=BG_DEEP, fg=TEXT_DIM,
+                 font=("Segoe UI", FS11)).pack(side="left", padx=(8, 2), pady=4)
+
+        self._search_entry = tk.Entry(
+            search_bar,
+            bg=BG_PANEL, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
+            relief="flat", font=("Segoe UI", FS11),
+            bd=0, highlightthickness=1,
+            highlightbackground=BORDER, highlightcolor=ACCENT,
+        )
+        self._search_entry.pack(side="left", fill="x", expand=True, padx=(2, 2), pady=4)
+
+        self._search_clear_btn = ctk.CTkButton(
+            search_bar, text="✕", width=scaled(32), height=scaled(24),
+            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            font=FONT_HEADER, cursor="hand2",
+            command=self._on_search_clear,
+        )
+        self._search_clear_btn.pack(side="left", padx=(0, 8), pady=4)
+        self._search_clear_btn.pack_forget()
+
+        self._search_entry.bind("<KeyRelease>", self._on_search_change)
+        self._search_entry.bind("<Escape>", self._on_search_clear)
+        self._search_entry.bind("<Control-a>", lambda e: (
+            self._search_entry.select_range(0, "end"),
+            self._search_entry.icursor("end"),
+            "break"
+        )[-1])
+
+        self._search_text = ""
 
         self._hdr_frame = tk.Frame(self, bg=BG_HEADER, height=scaled(22))
         self._hdr_frame.grid(row=1, column=0, sticky="ew")
@@ -537,15 +615,182 @@ class WorkshopDialog(tk.Frame):
         else:
             self.destroy()
 
+    def _workshop_dir(self) -> "Path | None":
+        profile_dir = getattr(self._game, "_active_profile_dir", None)
+        if not profile_dir:
+            return None
+        d = Path(profile_dir) / "workshop"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _do_save(self):
+        if not self._rows:
+            CTkAlert(state="warning", title="Workshop",
+                     body_text="Nothing to save.", btn1="OK", btn2="",
+                     parent=self.winfo_toplevel()).get()
+            return
+        ws_dir = self._workshop_dir()
+        if not ws_dir:
+            CTkAlert(state="error", title="Workshop",
+                     body_text="No active profile.", btn1="OK", btn2="",
+                     parent=self.winfo_toplevel()).get()
+            return
+
+        # Save directly to the profile's workshop folder with a timestamped name.
+        from datetime import datetime
+        fname = f"workshop_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        self._write_settings(ws_dir / fname)
+
+    def _write_settings(self, out_path):
+        if not out_path:
+            return
+        try:
+            out_path = Path(out_path)
+            if out_path.suffix.lower() != ".json":
+                out_path = out_path.with_suffix(".json")
+            def _row_file_id(r):
+                fid = r.get("file_id") or 0
+                if not fid:
+                    lbl = r.get("ver_label", "")
+                    if lbl and " — " in lbl:
+                        try:
+                            fid = int(lbl.split(" — ")[0])
+                        except ValueError:
+                            fid = 0
+                return fid
+
+            data = {
+                "version": 1,
+                "mods": [
+                    {
+                        "name":       r["name"],
+                        "optional":   r["optional"],
+                        "source":     r.get("source", "nexus"),
+                        "direct_url": r.get("direct_url", ""),
+                        "file_id":    _row_file_id(r),
+                        "ver_label":  r.get("ver_label", "—"),
+                    }
+                    for r in self._all_rows
+                ],
+            }
+            with open(out_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2)
+            CTkAlert(state="info", title="Workshop",
+                     body_text=f"Settings saved to:\n{out_path}",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
+        except Exception as exc:
+            CTkAlert(state="error", title="Workshop",
+                     body_text=f"Save failed:\n{exc}",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
+
+    def _do_load(self):
+        ws_dir = self._workshop_dir()
+        if not ws_dir:
+            CTkAlert(state="error", title="Workshop",
+                     body_text="No active profile.", btn1="OK", btn2="",
+                     parent=self.winfo_toplevel()).get()
+            return
+
+        files = sorted(
+            ws_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not files:
+            CTkAlert(state="info", title="Workshop",
+                     body_text="No saved settings found.",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
+            return
+
+        top = tk.Toplevel(self)
+        top.title("Load Workshop Settings")
+        top.configure(bg=BG_DEEP)
+        top.transient(self)
+        top.after(50, lambda: (top.grab_set() if top.winfo_viewable() else None))
+
+        tk.Label(
+            top, text="Select a saved workshop file:",
+            bg=BG_DEEP, fg=TEXT_MAIN, font=FONT_BOLD,
+        ).pack(padx=12, pady=(12, 6), anchor="w")
+
+        lb = tk.Listbox(
+            top, width=50, height=min(15, max(4, len(files))),
+            bg=BG_ROW, fg=TEXT_MAIN, selectbackground=ACCENT,
+            highlightthickness=0, bd=0, font=FONT_SMALL,
+        )
+        for f in files:
+            lb.insert("end", f.name)
+        lb.selection_set(0)
+        lb.pack(padx=12, pady=4, fill="both", expand=True)
+
+        def _load_selected():
+            sel = lb.curselection()
+            if not sel:
+                return
+            path = files[sel[0]]
+            top.destroy()
+            self._read_settings(path)
+
+        btns = tk.Frame(top, bg=BG_DEEP)
+        btns.pack(fill="x", padx=12, pady=(6, 12))
+        ctk.CTkButton(
+            btns, text="Load", width=scaled(80), height=scaled(26),
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+            font=FONT_HEADER, command=_load_selected,
+        ).pack(side="right", padx=(4, 0))
+        ctk.CTkButton(
+            btns, text="Cancel", width=scaled(80), height=scaled(26),
+            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            font=FONT_HEADER, command=top.destroy,
+        ).pack(side="right")
+
+        lb.bind("<Double-Button-1>", lambda _e: _load_selected())
+
+    def _read_settings(self, in_path):
+        if not in_path:
+            return
+        try:
+            with open(in_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            by_name = {m["name"]: m for m in data.get("mods", [])}
+            for row in self._all_rows:
+                m = by_name.get(row["name"])
+                if not m:
+                    continue
+                row["optional"]   = bool(m.get("optional", False))
+                row["source"]     = m.get("source", "nexus")
+                row["direct_url"] = m.get("direct_url", "")
+                if m.get("file_id"):
+                    row["file_id"] = m["file_id"]
+                if m.get("ver_label"):
+                    row["ver_label"] = m["ver_label"]
+                    # Back-fill file_id from ver_label ("fileid — version") if missing.
+                    if not row.get("file_id") and " — " in row["ver_label"]:
+                        try:
+                            row["file_id"] = int(row["ver_label"].split(" — ")[0])
+                        except ValueError:
+                            pass
+            self._apply_filter()
+            CTkAlert(state="info", title="Workshop",
+                     body_text="Settings loaded.",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
+        except Exception as exc:
+            CTkAlert(state="error", title="Workshop",
+                     body_text=f"Load failed:\n{exc}",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
+
     def _do_export(self):
         if not self._rows:
-            messagebox.showwarning("Workshop", "No mods to export.", parent=self)
+            CTkAlert(state="warning", title="Workshop",
+                     body_text="No mods to export.", btn1="OK", btn2="",
+                     parent=self.winfo_toplevel()).get()
             return
 
         pick_save_file(
             "Export Amethyst Manifest",
             lambda p: self.after(0, lambda: self._prefetch_sizes_then_export(p)),
-            current_name="manifest.json",
+            current_name="manifest.amethyst",
+            filters=[("Amethyst Manifest (*.amethyst)", ["*.amethyst"]), ("All files", ["*"])],
         )
 
     def _prefetch_sizes_then_export(self, out_path):
@@ -616,7 +861,10 @@ class WorkshopDialog(tk.Frame):
 
             row_source = row.get("source", "nexus")
             if row_source == "direct":
-                source: dict = {"directUrl": row.get("direct_url", "")}
+                source: dict = {
+                    "type": "direct",
+                    "url":  row.get("direct_url", ""),
+                }
             elif row_source == "bundle":
                 source = {"bundle": True}
             else:
@@ -633,8 +881,16 @@ class WorkshopDialog(tk.Frame):
                 "optional": row["optional"],
             }
 
-            if row["has_fomod"] and game_name:
-                fomod_path = get_fomod_selections_path(game_name, row["name"])
+            if row["has_fomod"] and row.get("fomod_export", True) and game_name:
+                # Prefer the profile-local copy so manifest exports stay
+                # profile-specific even if the global fomod settings differ.
+                fomod_path = None
+                if profile_dir:
+                    candidate = Path(profile_dir) / "fomod" / f"{row['name']}.json"
+                    if candidate.is_file():
+                        fomod_path = candidate
+                if fomod_path is None:
+                    fomod_path = get_fomod_selections_path(game_name, row["name"])
                 if fomod_path.is_file():
                     try:
                         with fomod_path.open("r", encoding="utf-8") as fh:
@@ -648,34 +904,108 @@ class WorkshopDialog(tk.Frame):
 
             mods.append(mod_entry)
 
-        load_order = [r["name"] for r in self._rows]
-
-        plugins: list[dict] = []
-        if profile_dir:
-            plugins_path = Path(profile_dir) / "plugins.txt"
-            if plugins_path.is_file():
-                try:
-                    for p in read_plugins(plugins_path):
-                        plugins.append({"name": p.name, "enabled": p.enabled})
-                except Exception:
-                    pass
+        try:
+            from version import __version__ as _app_version
+        except Exception:
+            _app_version = ""
 
         manifest = {
             "AmethystManifest": True,
+            "info": {
+                "domainName": self._game_domain,
+                "appVersion": _app_version,
+            },
             "mods":             mods,
-            "loadOrder":        load_order,
-            "plugins":          plugins,
         }
 
         try:
             out_path = Path(out_path)
-            if out_path.suffix.lower() != ".json":
-                out_path = out_path.with_suffix(".json")
-            with open(out_path, "w", encoding="utf-8") as fh:
-                json.dump(manifest, fh, indent=2)
-            messagebox.showinfo("Workshop", f"Manifest exported to:\n{out_path}", parent=self)
+            if out_path.suffix.lower() not in (".zip", ".amethyst"):
+                out_path = out_path.with_suffix(".amethyst")
+
+            staging_root = (
+                self._game.get_effective_mod_staging_path() if self._game else None
+            )
+            overwrite_root = (
+                self._game.get_effective_overwrite_path() if self._game else None
+            )
+
+            bundle_names = [
+                r["name"] for r in self._rows if r.get("source") == "bundle"
+            ]
+
+            with zipfile.ZipFile(
+                out_path, "w", compression=zipfile.ZIP_DEFLATED
+            ) as zf:
+                zf.writestr(
+                    "manifest.json",
+                    json.dumps(manifest, indent=2),
+                )
+
+                if staging_root:
+                    for name in bundle_names:
+                        mod_dir = staging_root / name
+                        if not mod_dir.is_dir():
+                            continue
+                        for fp in mod_dir.rglob("*"):
+                            if fp.is_file():
+                                arcname = Path("mods") / name / fp.relative_to(mod_dir)
+                                zf.write(fp, arcname.as_posix())
+
+                if overwrite_root and overwrite_root.is_dir():
+                    for fp in overwrite_root.rglob("*"):
+                        if fp.is_file():
+                            arcname = Path("overwrite") / fp.relative_to(overwrite_root)
+                            zf.write(fp, arcname.as_posix())
+
+                # Bundle profile state files: fixed names + any *.ini files.
+                if profile_dir:
+                    pdir = Path(profile_dir)
+                    fixed = [
+                        "modlist.txt",
+                        "plugins.txt",
+                        "loadorder.txt",
+                        "profile_state.json",
+                        "userlist.yaml",
+                    ]
+                    for fname in fixed:
+                        fp = pdir / fname
+                        if not fp.is_file():
+                            continue
+                        if fname == "profile_state.json":
+                            # Inject profile_specific_mods=true if missing.
+                            try:
+                                ps = json.loads(fp.read_text(encoding="utf-8"))
+                            except Exception:
+                                ps = {}
+                            if not isinstance(ps, dict):
+                                ps = {}
+                            settings = ps.get("profile_settings")
+                            if not isinstance(settings, dict):
+                                settings = {}
+                                ps["profile_settings"] = settings
+                            if not settings.get("profile_specific_mods"):
+                                settings["profile_specific_mods"] = True
+                            zf.writestr(
+                                (Path("profile") / fname).as_posix(),
+                                json.dumps(ps, indent=2),
+                            )
+                        else:
+                            zf.write(fp, (Path("profile") / fname).as_posix())
+                    for fp in pdir.glob("*.ini"):
+                        if fp.is_file():
+                            zf.write(
+                                fp,
+                                (Path("profile") / fp.name).as_posix(),
+                            )
+
+            CTkAlert(state="info", title="Workshop",
+                     body_text=f"Manifest exported to:\n{out_path}",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
         except Exception as exc:
-            messagebox.showerror("Workshop", f"Export failed:\n{exc}", parent=self)
+            CTkAlert(state="error", title="Workshop",
+                     body_text=f"Export failed:\n{exc}",
+                     btn1="OK", btn2="", parent=self.winfo_toplevel()).get()
 
     # ------------------------------------------------------------------
     # Pool
@@ -698,7 +1028,7 @@ class WorkshopDialog(tk.Frame):
             fmr  = c.create_rectangle(0, OFF, 0, OFF, outline=BORDER, fill="", state="hidden")
             fmm  = c.create_text(0, OFF, text="✓", anchor="center", fill=ACCENT, font=FN, state="hidden")
             sbtn = c.create_rectangle(0, OFF, 0, OFF, fill=BG_SEP, outline="", state="hidden")
-            slbl = c.create_text(0, OFF, text="", anchor="w", fill=TEXT_MAIN, font=FS, state="hidden")
+            slbl = c.create_text(0, OFF, text="", anchor="center", fill=TEXT_MAIN, font=FS, state="hidden")
 
             self._pool_bg.append(bg)
             self._pool_name.append(name)
@@ -742,12 +1072,13 @@ class WorkshopDialog(tk.Frame):
             else:
                 ver_label = "—"
 
-            has_fomod = (
-                game_name is not None
-                and get_fomod_selections_path(game_name, entry.name).is_file()
+            profile_dir = getattr(self._game, "_active_profile_dir", None)
+            has_fomod = bool(
+                profile_dir
+                and (Path(profile_dir) / "fomod" / f"{entry.name}.json").is_file()
             )
 
-            self._rows.append({
+            self._all_rows.append({
                 "name":             entry.name,
                 "mod_id":           mod_id,
                 "file_id":          file_id,
@@ -755,14 +1086,47 @@ class WorkshopDialog(tk.Frame):
                 "ver_options":      [{"label": ver_label, "name": "", "size_bytes": 0}],
                 "optional":         False,
                 "has_fomod":        has_fomod,
+                "fomod_export":     has_fomod,
                 "versions_fetched": False,
                 "size_bytes":       0,
                 "source":           "nexus",
                 "direct_url":       "",
             })
 
+        self._apply_filter()
+
+    def _on_search_change(self, event=None):
+        self._search_text = self._search_entry.get().lower()
+        if self._search_text:
+            self._search_clear_btn.pack(side="left", padx=(0, 8), pady=4)
+        else:
+            self._search_clear_btn.pack_forget()
+        self._apply_filter()
+
+    def _on_search_clear(self, event=None):
+        self._search_entry.delete(0, "end")
+        self._search_text = ""
+        self._search_clear_btn.pack_forget()
+        self._apply_filter()
+
+    def _apply_filter(self):
+        if self._hide_no_fileid_var.get():
+            rows = [r for r in self._all_rows if not r.get("file_id")]
+        else:
+            rows = list(self._all_rows)
+        if self._search_text:
+            q = self._search_text
+            rows = [r for r in rows if q in r["name"].lower()]
+        self._rows = rows
+
+        # Reset pool slots since data_idx mapping changed.
+        for s in range(self._POOL):
+            if self._pool_slot[s] != -1:
+                self._hide_slot(s)
+
         n = len(self._rows)
         self._canvas.configure(scrollregion=(0, 0, self._canvas_w, n * _ROW_H))
+        self._canvas.yview_moveto(0)
         self._redraw()
 
     # ------------------------------------------------------------------
@@ -848,7 +1212,7 @@ class WorkshopDialog(tk.Frame):
         c.itemconfigure(self._pool_ver[s], text=row["ver_label"], state="normal")
 
         # Optional checkbox
-        cbx0 = CX[3] + (CW[3] - _CB_SIZE) // 2
+        cbx0 = CX[5] + (CW[5] - _CB_SIZE) // 2
         cbx1 = cbx0 + _CB_SIZE
         cby0 = y0 + _CB_PAD
         cby1 = cby0 + _CB_SIZE
@@ -867,19 +1231,21 @@ class WorkshopDialog(tk.Frame):
         c.itemconfigure(self._pool_fomod_rect[s],
                         state="normal" if row["has_fomod"] else "hidden")
         c.coords(self._pool_fomod_mark[s], (fmx0 + fmx1) // 2, (fmy0 + fmy1) // 2)
-        c.itemconfigure(self._pool_fomod_mark[s],
-                        state="normal" if row["has_fomod"] else "hidden")
+        c.itemconfigure(
+            self._pool_fomod_mark[s],
+            state="normal" if (row["has_fomod"] and row.get("fomod_export", True)) else "hidden",
+        )
 
         # Source button
         src_color, src_text = _source_btn_style(row["source"])
         src_fg = "white"
-        sx0 = CX[5] + scaled(4)
-        sx1 = CX[5] + CW[5] - scaled(4)
+        sx0 = CX[3] + scaled(4)
+        sx1 = CX[3] + CW[3] - scaled(4)
         sy0 = y0 + scaled(3)
         sy1 = y1 - scaled(3)
         c.coords(self._pool_src_btn[s], sx0, sy0, sx1, sy1)
         c.itemconfigure(self._pool_src_btn[s], fill=src_color, state="normal")
-        c.coords(self._pool_src_lbl[s], sx0 + scaled(4), yc)
+        c.coords(self._pool_src_lbl[s], (sx0 + sx1) // 2, yc)
         c.itemconfigure(self._pool_src_lbl[s], text=src_text, fill=src_fg, state="normal")
 
         self._pool_slot[s] = data_idx
@@ -930,7 +1296,7 @@ class WorkshopDialog(tk.Frame):
         CX = self._col_cx
 
         # Optional checkbox
-        if CX[3] <= cx < CX[3] + CW[3]:
+        if CX[5] <= cx < CX[5] + CW[5]:
             row = self._rows[data_idx]
             row["optional"] = not row["optional"]
             for s in range(self._POOL):
@@ -942,13 +1308,27 @@ class WorkshopDialog(tk.Frame):
                     break
             return
 
+        # Fomod checkbox — only toggleable when a fomod selection exists.
+        if CX[4] <= cx < CX[4] + CW[4]:
+            row = self._rows[data_idx]
+            if row.get("has_fomod"):
+                row["fomod_export"] = not row.get("fomod_export", True)
+                for s in range(self._POOL):
+                    if self._pool_slot[s] == data_idx:
+                        self._canvas.itemconfigure(
+                            self._pool_fomod_mark[s],
+                            state="normal" if row["fomod_export"] else "hidden",
+                        )
+                        break
+            return
+
         # Version button
         if CX[2] <= cx < CX[2] + CW[2]:
             self._open_version_overlay(data_idx)
             return
 
         # Source button
-        if CX[5] <= cx < CX[5] + CW[5]:
+        if CX[3] <= cx < CX[3] + CW[3]:
             self._open_source_overlay(data_idx)
 
     # ------------------------------------------------------------------
@@ -966,9 +1346,11 @@ class WorkshopDialog(tk.Frame):
 
         # Build entry dicts for the picker
         cur_label = row["ver_label"]
+        mod_name_norm = _norm_ver_name(row["name"])
         entries = [
             {"label": e["label"], "name": e["name"],
-             "current": e["label"] == cur_label}
+             "current": e["label"] == cur_label,
+             "matches": bool(mod_name_norm) and _norm_ver_name(e["name"]) == mod_name_norm}
             for e in row["ver_options"]
         ]
 
@@ -998,6 +1380,12 @@ class WorkshopDialog(tk.Frame):
         opt = next((o for o in row["ver_options"] if o["label"] == label), None)
         if opt:
             row["size_bytes"] = opt.get("size_bytes", 0)
+        # Sync file_id parsed from "fileid — version"
+        if label and " — " in label:
+            try:
+                row["file_id"] = int(label.split(" — ")[0])
+            except ValueError:
+                pass
         for s in range(self._POOL):
             if self._pool_slot[s] == data_idx:
                 self._canvas.itemconfigure(self._pool_ver[s], text=label)
@@ -1080,6 +1468,10 @@ class WorkshopDialog(tk.Frame):
             selected  = matched or options[0]
             row["ver_label"]  = selected["label"]
             row["size_bytes"] = selected["size_bytes"]
+            try:
+                row["file_id"] = int(selected["label"].split(" — ")[0])
+            except (ValueError, IndexError):
+                pass
             for s in range(self._POOL):
                 if self._pool_slot[s] == data_idx:
                     self._canvas.itemconfigure(self._pool_ver[s], text=selected["label"])

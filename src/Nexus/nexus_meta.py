@@ -59,6 +59,7 @@ class NexusModMeta:
     has_update: bool = False           # set by the update checker
     ignore_update: bool = False        # user asked to ignore this update
     missing_requirements: str = ""     # semicolon-separated "modId:name" pairs
+    is_fomod: bool = False             # True if installed via FOMOD installer
 
     @property
     def nexus_page_url(self) -> str:
@@ -130,13 +131,14 @@ _KEY_MAP: dict[str, str] = {
     "hasUpdate":         "has_update",
     "ignoreUpdate":      "ignore_update",
     "missingRequirements": "missing_requirements",
+    "FOMOD":             "is_fomod",
 }
 
 # Attributes that are ints
 _INT_FIELDS = {"mod_id", "file_id", "category_id", "latest_file_id"}
 
 # Attributes that are bools
-_BOOL_FIELDS = {"endorsed", "has_update", "ignore_update"}
+_BOOL_FIELDS = {"endorsed", "has_update", "ignore_update", "is_fomod"}
 
 
 def read_meta(meta_ini_path: Path) -> NexusModMeta:
@@ -190,6 +192,10 @@ def write_meta(meta_ini_path: Path, meta: NexusModMeta) -> None:
         if value is None:
             continue
         if attr in _BOOL_FIELDS:
+            # Never clobber an existing FOMOD=True with False — preserve the
+            # flag set by the installer even when callers construct fresh metas.
+            if attr == "is_fomod" and not value:
+                continue
             cp.set(_SECTION, ini_key, "true" if value else "false")
         else:
             cp.set(_SECTION, ini_key, str(value).replace("%", "%%"))

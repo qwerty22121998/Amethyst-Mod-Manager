@@ -181,6 +181,7 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
     install_dates: dict[str, str] = {}
     install_datetimes: dict[str, datetime] = {}
     category_names: dict[str, str] = {}
+    fomod_mods: set[str] = set()
     today = datetime.now().date()
     for entry in entries:
         if entry.is_separator:
@@ -215,6 +216,8 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
                 install_datetimes[entry.name] = dt
             if meta.category_name:
                 category_names[entry.name] = meta.category_name
+            if meta.is_fomod:
+                fomod_mods.add(entry.name)
         except Exception:
             pass
     return {
@@ -225,6 +228,7 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
         "install_dates": install_dates,
         "install_datetimes": install_datetimes,
         "category_names": category_names,
+        "fomod_mods": fomod_mods,
     }
 
 
@@ -368,6 +372,7 @@ class ModListPanel(ctk.CTkFrame):
         # Map mod name → install date display string
         self._install_dates: dict[str, str] = {}
         self._category_names: dict[str, str] = {}
+        self._fomod_mods: set[str] = set()
         # Map mod name → install datetime for sorting (parallel to _install_dates)
         self._install_datetimes: dict[str, datetime] = {}
 
@@ -438,6 +443,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_has_plugins: bool = False
         self._filter_has_disabled_files: bool = False
         self._filter_has_updates: bool = False
+        self._filter_fomod_only: bool = False
         self._filter_categories: frozenset[str] = frozenset()  # when non-empty, show only these categories
         self._disabled_plugins_map: dict[str, list[str]] = {}  # mod_name → [plugin, ...]
         self._excluded_mod_files_map: dict[str, list[str]] = {}  # mod_name → [rel_key, ...]
@@ -877,6 +883,7 @@ class ModListPanel(ctk.CTkFrame):
             ("filter_has_plugins",         "Show only mods with plugins"),
             ("filter_has_disabled_files",  "Show mods with disabled files"),
             ("filter_has_updates",         "Show only mods with updates"),
+            ("filter_fomod_only",          "Show only FOMOD mods"),
         ]
 
         self._fsp_vars: dict[str, tk.BooleanVar] = {}
@@ -1675,6 +1682,7 @@ class ModListPanel(ctk.CTkFrame):
             self._install_dates.clear()
             self._install_datetimes.clear()
             self._category_names.clear()
+            self._fomod_mods.clear()
             self._vis_dirty = True
             return
         if not self._call_threadsafe:
@@ -1705,6 +1713,7 @@ class ModListPanel(ctk.CTkFrame):
         self._install_dates = results["install_dates"]
         self._install_datetimes = results["install_datetimes"]
         self._category_names = results.get("category_names", {})
+        self._fomod_mods = results.get("fomod_mods", set())
         if self._filter_panel_open:
             self._refresh_filter_category_list()
         self._vis_dirty = True
@@ -2760,6 +2769,18 @@ class ModListPanel(ctk.CTkFrame):
                     result.append(i)
             base = result
 
+        # Step 4e2: FOMOD-only filter (show only mods installed via FOMOD)
+        if self._filter_fomod_only:
+            result = []
+            for i in base:
+                entry = self._entries[i]
+                if entry.is_separator:
+                    if self._sep_block_has_fomod(i):
+                        result.append(i)
+                elif entry.name in self._fomod_mods:
+                    result.append(i)
+            base = result
+
         # Step 4f: category filter (show only mods in selected categories)
         if self._filter_categories:
             allowed = self._filter_categories
@@ -3547,6 +3568,14 @@ class ModListPanel(ctk.CTkFrame):
         for i in self._sep_block_range(sep_idx):
             if not self._entries[i].is_separator:
                 if self._entries[i].name in self._update_mods:
+                    return True
+        return False
+
+    def _sep_block_has_fomod(self, sep_idx: int) -> bool:
+        """True if this separator's block contains at least one FOMOD mod."""
+        for i in self._sep_block_range(sep_idx):
+            if not self._entries[i].is_separator:
+                if self._entries[i].name in self._fomod_mods:
                     return True
         return False
 
@@ -6419,6 +6448,7 @@ class ModListPanel(ctk.CTkFrame):
         self._fsp_vars["filter_has_plugins"].set(self._filter_has_plugins)
         self._fsp_vars["filter_has_disabled_files"].set(self._filter_has_disabled_files)
         self._fsp_vars["filter_has_updates"].set(self._filter_has_updates)
+        self._fsp_vars["filter_fomod_only"].set(self._filter_fomod_only)
         self._refresh_filter_category_list()
         self._filter_btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
 
@@ -6471,6 +6501,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_has_plugins = state.get("filter_has_plugins", False)
         self._filter_has_disabled_files = state.get("filter_has_disabled_files", False)
         self._filter_has_updates = state.get("filter_has_updates", False)
+        self._filter_fomod_only = state.get("filter_fomod_only", False)
         self._filter_categories = state.get("filter_categories") or frozenset()
         self._invalidate_derived_caches()
         self._redraw()

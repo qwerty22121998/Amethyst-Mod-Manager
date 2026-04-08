@@ -284,10 +284,12 @@ def _try_auto_strip_for_file_types(
     return (file_list, False)
 
 
-def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -> None:
+def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "",
+                              is_fomod: bool = False) -> None:
     """Write the current datetime as the ``installed`` key in meta.ini if not
     already present.  Also write ``installationFile`` if *installation_file* is
-    given and the key is not yet set (MO2-compatible)."""
+    given and the key is not yet set (MO2-compatible).  If *is_fomod* is True,
+    also set ``FOMOD=True`` so the modlist panel can identify FOMOD installs."""
     import configparser as _cp
     parser = _cp.ConfigParser()
     if meta_ini_path.is_file():
@@ -301,6 +303,9 @@ def _stamp_meta_install_date(meta_ini_path: Path, installation_file: str = "") -
         changed = True
     if installation_file and not parser.get("General", "installationFile", fallback=""):
         parser.set("General", "installationFile", installation_file)
+        changed = True
+    if is_fomod and parser.get("General", "FOMOD", fallback="").lower() != "true":
+        parser.set("General", "FOMOD", "True")
         changed = True
     if changed:
         meta_ini_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1127,6 +1132,19 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 log_fn("FOMOD installer detected — deferring until dependencies are installed.")
                 return FOMOD_DEFERRED
 
+            def _write_profile_fomod(selections):
+                """Mirror fomod selections into <profile>/fomod/<mod>.json."""
+                pdir = getattr(game, "_active_profile_dir", None)
+                if not pdir:
+                    return
+                try:
+                    pfomod = Path(pdir) / "fomod"
+                    pfomod.mkdir(parents=True, exist_ok=True)
+                    with open(pfomod / f"{mod_name}.json", "w", encoding="utf-8") as f:
+                        json.dump(selections, f, indent=2)
+                except OSError:
+                    pass
+
             if fomod_auto_selections is not None:
                 # Collection install: use the author's pre-chosen options,
                 # skip the interactive wizard entirely.
@@ -1140,6 +1158,7 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                             json.dump(final_selections, f, indent=2)
                     except OSError:
                         pass
+                _write_profile_fomod(final_selections)
             else:
                 log_fn("FOMOD installer detected — opening wizard...")
                 saved_selections = None
@@ -1213,6 +1232,7 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                             json.dump(dialog_result, f, indent=2)
                     except OSError:
                         pass
+                _write_profile_fomod(dialog_result)
 
                 final_selections = dialog_result
 
@@ -1666,7 +1686,8 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 log_fn(f"[FOMOD DEV] All {len(file_list)} FOMOD file(s) verified present.")
 
         _stamp_meta_install_date(dest_root / "meta.ini",
-                                  installation_file=os.path.basename(archive_path))
+                                  installation_file=os.path.basename(archive_path),
+                                  is_fomod=is_fomod_install)
 
         for fn in getattr(game, "additional_install_logic", []):
             try:

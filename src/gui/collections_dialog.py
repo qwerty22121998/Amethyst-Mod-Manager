@@ -1671,6 +1671,38 @@ class CollectionDetailDialog(tk.Frame):
                 return
 
             self._log(f"Collection install: created profile '{profile_name}' at {profile_dir}")
+
+            # If this import came from a bundle .zip, extract its mods/ and
+            # overwrite/ folders into the newly created profile.
+            bundle_zip = getattr(self, "_bundle_zip_path", None)
+            if bundle_zip:
+                try:
+                    import zipfile as _zipfile
+                    import shutil as _shutil
+                    pdir = Path(profile_dir)
+                    mods_dest = pdir / "mods"
+                    overwrite_dest = pdir / "overwrite"
+                    mods_dest.mkdir(parents=True, exist_ok=True)
+                    overwrite_dest.mkdir(parents=True, exist_ok=True)
+                    with _zipfile.ZipFile(bundle_zip, "r") as zf:
+                        for n in zf.namelist():
+                            if n.endswith("/"):
+                                continue
+                            parts = n.split("/")
+                            if len(parts) < 2:
+                                continue
+                            if parts[0] == "mods":
+                                dest = mods_dest / Path(*parts[1:])
+                            elif parts[0] == "overwrite":
+                                dest = overwrite_dest / Path(*parts[1:])
+                            else:
+                                continue
+                            dest.parent.mkdir(parents=True, exist_ok=True)
+                            with zf.open(n) as srcf, open(dest, "wb") as dstf:
+                                _shutil.copyfileobj(srcf, dstf)
+                    self._log(f"Bundle import: extracted mods/overwrite into {pdir}")
+                except Exception as exc:
+                    self._log(f"Bundle import: extraction failed: {exc}")
             # Store collection URL in profile_state (profile_settings) for "Open Current" button
             game_domain = getattr(self._game, "nexus_game_domain", None) or self._game_domain
             collection_url = f"https://www.nexusmods.com/{game_domain}/collections/{self._collection.slug}"
@@ -2157,7 +2189,11 @@ class CollectionDetailDialog(tk.Frame):
                         if result.success:
                             effective_domain = fallback_domain
             except Exception as exc:
-                self._log(f"Collection install: download failed for '{mod.mod_name}': {exc}")
+                import traceback as _tb
+                self._log(
+                    f"Collection install: download exception for '{mod.mod_name}' "
+                    f"(mod_id={mod.mod_id}, file_id={mod.file_id}): {exc}\n{_tb.format_exc()}"
+                )
 
             # If progress_cb was never called (cached archive skip), advance by full mod size
             mod_size = getattr(mod, "size_bytes", 0) or 0
@@ -2195,7 +2231,19 @@ class CollectionDetailDialog(tk.Frame):
                 return
 
             if result is None or not result.success or not result.file_path:
-                self._log(f"Collection install: download failed for '{mod.mod_name}'")
+                _reason = ""
+                if result is None:
+                    _reason = "no result (exception during download)"
+                elif not result.success:
+                    _reason = (result.error or "unknown error").strip() or "unknown error"
+                    if not result.file_path:
+                        _reason += " (no file_path)"
+                else:
+                    _reason = "success but no file_path"
+                self._log(
+                    f"Collection install: download failed for '{mod.mod_name}' "
+                    f"(mod_id={mod.mod_id}, file_id={mod.file_id}): {_reason}"
+                )
                 with _install_lock:
                     _install_counters["skipped"] += 1
                     _install_counters["done"] += 1
@@ -2774,6 +2822,32 @@ class CollectionDetailDialog(tk.Frame):
                 )
             except Exception as exc:
                 self._log(f"Collection install: reconcile modlist failed: {exc}")
+
+        # If this install came from a bundle .zip, extract the profile/
+        # state files NOW (after modlist/plugins have been written by the
+        # installer), so they take precedence over anything the install
+        # pipeline generated.
+        _bundle_zip = getattr(self, "_bundle_zip_path", None)
+        if _bundle_zip:
+            try:
+                import zipfile as _zipfile
+                import shutil as _shutil
+                with _zipfile.ZipFile(_bundle_zip, "r") as _zf:
+                    for _n in _zf.namelist():
+                        if _n.endswith("/"):
+                            continue
+                        _parts = _n.split("/")
+                        if len(_parts) < 2 or _parts[0] != "profile":
+                            continue
+                        _dest = Path(profile_dir) / Path(*_parts[1:])
+                        _dest.parent.mkdir(parents=True, exist_ok=True)
+                        with _zf.open(_n) as _srcf, open(_dest, "wb") as _dstf:
+                            _shutil.copyfileobj(_srcf, _dstf)
+                self._log(
+                    f"Bundle import: restored profile state files into {profile_dir}"
+                )
+            except Exception as exc:
+                self._log(f"Bundle import: profile extraction failed: {exc}")
 
         # Restore the original profile dir
         self._game.set_active_profile_dir(old_profile)
@@ -4920,12 +4994,17 @@ class CollectionsDialog(tk.Frame):
             revision_number=revision_number,
             local_manifest_path=local_manifest_path,
         )
+        panel._bundle_zip_path = getattr(self, "_pending_bundle_zip", None)
+        self._pending_bundle_zip = None
         panel.place(relx=0, rely=0, relwidth=1, relheight=1)
         self._detail_panel = panel
 
     def _import_manifest(self):
         from Utils.portal_filechooser import _run_file_picker_worker
-        filters = [("JSON manifest", ["*.json"]), ("All files", ["*"])]
+        filters = [
+            ("Amethyst Manifest (*.amethyst, *.zip, *.json)", ["*.amethyst", "*.zip", "*.json"]),
+            ("All files", ["*"]),
+        ]
         threading.Thread(
             target=_run_file_picker_worker,
             args=("Import Manifest", filters, lambda p: self.after(0, lambda: self._on_manifest_picked(p))),
@@ -4936,16 +5015,75 @@ class CollectionsDialog(tk.Frame):
         if not path:
             return
         import json as _json
+        import zipfile as _zipfile
+        import shutil as _shutil
+
+        src = Path(path)
+        manifest_path = src
+        bundle_zip_path: "Path | None" = None
+
+        # If a zip archive was selected, extract only manifest.json now.
+        # The bundled mods/ and overwrite/ folders are deferred until the
+        # new profile is created during install.
+        if src.suffix.lower() in (".zip", ".amethyst"):
+            try:
+                with _zipfile.ZipFile(src, "r") as zf:
+                    if "manifest.json" not in zf.namelist():
+                        raise RuntimeError("manifest.json not found in archive.")
+                    import tempfile
+                    tmp = Path(tempfile.mkdtemp(prefix="amethyst_manifest_"))
+                    manifest_path = tmp / "manifest.json"
+                    with zf.open("manifest.json") as srcf, open(manifest_path, "wb") as dstf:
+                        _shutil.copyfileobj(srcf, dstf)
+                bundle_zip_path = src
+            except Exception as exc:
+                tk.messagebox.showerror(
+                    "Import Manifest",
+                    f"Failed to read archive:\n{exc}",
+                    parent=self,
+                )
+                return
+
         try:
-            cj = _json.loads(Path(path).read_text(encoding="utf-8"))
+            cj = _json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         except Exception as exc:
             tk.messagebox.showerror("Import Manifest", f"Could not read manifest:\n{exc}", parent=self)
             return
+
+        # Switch to the game matching the manifest's domainName before doing
+        # anything else. If no configured game matches, silently abort.
+        manifest_domain = (cj.get("info") or {}).get("domainName")
+        if manifest_domain:
+            from gui.game_helpers import _GAMES as _GH_GAMES
+            matched = None
+            for _name, _g in _GH_GAMES.items():
+                if _g.nexus_game_domain == manifest_domain and _g.is_configured():
+                    matched = (_name, _g)
+                    break
+            if not matched:
+                return
+            try:
+                topbar = getattr(self._app_root, "_topbar", None)
+                if topbar is not None and topbar._game_var.get() != matched[0]:
+                    topbar._game_var.set(matched[0])
+                    topbar._on_game_change(matched[0])
+            except Exception:
+                return
+
         from Nexus.nexus_api import NexusCollection as _NC
-        col_name = (cj.get("info") or {}).get("name") or Path(path).stem
+        # For bundle .zip imports, prefer the zip filename as the collection
+        # (and therefore profile) name. Otherwise fall back to manifest info
+        # or the file stem.
+        if bundle_zip_path is not None:
+            col_name = bundle_zip_path.stem
+        else:
+            col_name = (cj.get("info") or {}).get("name") or Path(manifest_path).stem
         game_domain = (cj.get("info") or {}).get("domainName") or self._game_domain
         col = _NC(name=col_name, slug="", game_domain=game_domain)
-        self._open_detail(col, local_manifest_path=str(path))
+        # Stash the bundle zip so the detail panel can extract it into
+        # the new profile after _create_profile runs.
+        self._pending_bundle_zip = bundle_zip_path
+        self._open_detail(col, local_manifest_path=str(manifest_path))
 
     def _close_detail(self):
         panel = getattr(self, "_detail_panel", None)
