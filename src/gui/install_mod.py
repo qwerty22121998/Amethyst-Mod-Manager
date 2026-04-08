@@ -5,6 +5,7 @@ Used by ModListPanel, PluginPanel, TopBar, and App. Imports dialogs and mod_name
 
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -16,6 +17,11 @@ import zipfile
 # Any worker that needs user input acquires this lock, marshals the dialog to
 # the main thread, waits for the result, then releases.
 _interactive_dialog_lock = threading.Lock()
+
+# Set while a FOMOD dialog is open (either on the main thread or via a worker).
+# Used by the NXM install queue to defer new installs until the dialog closes,
+# preventing a second FomodDialog overlay from being placed on top of the first.
+fomod_dialog_active = threading.Event()
 
 # Guards /tmp space accounting so parallel workers don't all race to claim the
 # same free space before any of them has started writing.
@@ -37,7 +43,7 @@ from gui.dialogs import (
 )
 from gui.fomod_dialog import FomodDialog
 from gui.mod_name_utils import _strip_title_metadata, _suggest_mod_names
-from Utils.fomod_parser import detect_fomod, parse_module_config
+from Utils.fomod_parser import detect_fomod, parse_module_config, parse_mod_info
 from Utils.fomod_installer import resolve_files
 from Utils.ui_config import load_dev_mode
 from Utils.config_paths import get_fomod_selections_path
@@ -573,9 +579,14 @@ def _copy_file_list(file_list: list[tuple[str, str, bool]],
         src, dst = src_dst
         if dst.is_dir():
             shutil.rmtree(dst)
-        elif dst.exists():
-            dst.chmod(0o644)
-            dst.unlink()
+        elif dst.exists() or dst.is_symlink():
+            # Unlink first so we don't punch through a hardlink shared with
+            # another mod's staging file (deploy uses hardlinks on this setup).
+            try:
+                dst.unlink()
+            except PermissionError:
+                dst.chmod(0o644)
+                dst.unlink()
         shutil.copy2(src, dst)
 
     _COPY_WORKERS = 8
@@ -1016,6 +1027,15 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             mod_root, config_path = fomod_result
             config = parse_module_config(config_path)
 
+            # info.xml <Name> is set by the mod author to the specific variant
+            # name and is more reliable than ModuleConfig.xml <moduleName>,
+            # which mod authors sometimes copy from a sibling variant and forget
+            # to update.  Prefer info.xml when it exists and differs.
+            _info_path = str(Path(config_path).parent / "info.xml")
+            _mod_info = parse_mod_info(_info_path)
+            if _mod_info.name and _mod_info.name != config.name:
+                config.name = _mod_info.name
+
             if config.name:
                 fomod_clean = _strip_title_metadata(config.name)
                 seen = set()
@@ -1028,7 +1048,39 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
                 # Only let the FOMOD name override mod_name when the caller
                 # didn't supply an explicit preferred_name (collection installs
                 # use preferred_name to keep mods from the same page distinct).
-                if not preferred_name.strip():
+                # Also skip the override when the filename already encodes a
+                # specific variant name that differs from the FOMOD moduleName.
+                # Example: file = "Security Overhaul SKSE - Regional Locks-…"
+                #          FOMOD moduleName = "Security Overhaul SKSE - Add-ons"
+                # Both share a common prefix but diverge — using the FOMOD name
+                # would install into the wrong folder and load saved selections
+                # from a different variant.
+                # Rule: don't let the FOMOD name override when the filename name
+                # and FOMOD name share a substantial common prefix but then
+                # diverge (i.e. they are sibling variants, not the same thing).
+                _orig_nexus_clean = re.sub(r"(-\d+)+$", "", raw_stem).strip()
+                _filename_lower = _orig_nexus_clean.lower()
+                _fomod_lower = fomod_clean.lower()
+                # Find length of shared prefix (word-boundary aware: tokenize
+                # on any non-alphanumeric run so punctuation-separated variants
+                # like "Foo-Bar_Regional" vs "Foo-Bar_AddOns" split correctly).
+                _fn_words = [w for w in re.split(r"[^a-z0-9]+", _filename_lower) if w]
+                _fm_words = [w for w in re.split(r"[^a-z0-9]+", _fomod_lower) if w]
+                _shared = 0
+                for _a, _b in zip(_fn_words, _fm_words):
+                    if _a == _b:
+                        _shared += 1
+                    else:
+                        break
+                # They are sibling variants if: they share words, but both have
+                # additional words that differ from each other.
+                _are_siblings = (
+                    _shared > 0
+                    and _shared < len(_fn_words)
+                    and _shared < len(_fm_words)
+                    and _fn_words[_shared:] != _fm_words[_shared:]
+                )
+                if not preferred_name.strip() and not _are_siblings:
                     mod_name = suggestions[0]
 
             installed_files: set[str] = set()
@@ -1105,46 +1157,50 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
 
                 if clear_progress_fn is not None:
                     clear_progress_fn()
-                if threading.current_thread() is threading.main_thread():
-                    import tkinter as tk
-                    container = getattr(parent_window, '_mod_panel_container', None) or parent_window
-                    _done_var = tk.BooleanVar(value=False)
-                    _result_holder: list = [None]
+                fomod_dialog_active.set()
+                try:
+                    if threading.current_thread() is threading.main_thread():
+                        import tkinter as tk
+                        container = getattr(parent_window, '_mod_panel_container', None) or parent_window
+                        _done_var = tk.BooleanVar(value=False)
+                        _result_holder: list = [None]
 
-                    def _on_done(result):
-                        _result_holder[0] = result
-                        _done_var.set(True)
+                        def _on_done(result):
+                            _result_holder[0] = result
+                            _done_var.set(True)
 
-                    panel = FomodDialog(container, config, mod_root,
-                                        installed_files=installed_files,
-                                        active_files=active_files,
-                                        saved_selections=saved_selections,
-                                        selections_path=sel_path,
-                                        on_done=_on_done)
-                    try:
-                        if panel.winfo_exists():
-                            panel.place(relx=0, rely=0, relwidth=1, relheight=1)
-                            panel.lift()
-                            panel.focus_set()
-                            parent_window.wait_variable(_done_var)
-                    except Exception:
-                        import traceback as _tb; _tb.print_exc()
-                    dialog_result = _result_holder[0]
-                else:
-                    with _interactive_dialog_lock:
-                        result_holder = [None]
-                        done_event = threading.Event()
-                        parent_window.after(
-                            0,
-                            lambda: _show_fomod_dialog_on_main(
-                                parent_window, config, mod_root,
-                                installed_files, active_files,
-                                saved_selections, sel_path,
-                                result_holder, done_event,
-                            ),
-                        )
-                        done_event.wait()
-                        dialog_result = result_holder[0]
+                        panel = FomodDialog(container, config, mod_root,
+                                            installed_files=installed_files,
+                                            active_files=active_files,
+                                            saved_selections=saved_selections,
+                                            selections_path=sel_path,
+                                            on_done=_on_done)
+                        try:
+                            if panel.winfo_exists():
+                                panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+                                panel.lift()
+                                panel.focus_set()
+                                parent_window.wait_variable(_done_var)
+                        except Exception:
+                            import traceback as _tb; _tb.print_exc()
+                        dialog_result = _result_holder[0]
+                    else:
+                        with _interactive_dialog_lock:
+                            result_holder = [None]
+                            done_event = threading.Event()
+                            parent_window.after(
+                                0,
+                                lambda: _show_fomod_dialog_on_main(
+                                    parent_window, config, mod_root,
+                                    installed_files, active_files,
+                                    saved_selections, sel_path,
+                                    result_holder, done_event,
+                                ),
+                            )
+                            done_event.wait()
+                            dialog_result = result_holder[0]
+                finally:
+                    fomod_dialog_active.clear()
 
                 if dialog_result is None:
                     log_fn("FOMOD install cancelled.")

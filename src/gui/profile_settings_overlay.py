@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 import customtkinter as ctk
+from PIL import Image, ImageTk
 
 from gui.theme import (
     ACCENT,
@@ -71,6 +72,14 @@ class ProfileSettingsOverlay(tk.Frame):
         self._rename_frame: tk.Frame | None = None
         self._rename_entry: ctk.CTkEntry | None = None
         self._rename_target: str | None = None
+
+        _icons_dir = Path(__file__).resolve().parent.parent / "icons"
+        _lock_path = _icons_dir / "lock.png"
+        if _lock_path.is_file():
+            img = Image.open(_lock_path).convert("RGBA").resize((16, 16), Image.LANCZOS)
+            self._lock_icon: ImageTk.PhotoImage | None = ImageTk.PhotoImage(img)
+        else:
+            self._lock_icon = None
 
         self._build()
 
@@ -161,11 +170,46 @@ class ProfileSettingsOverlay(tk.Frame):
             row = tk.Frame(self._list_frame, bg=row_bg, height=44)
             row.pack(fill="x", pady=(0, 1))
             row.grid_propagate(False)
-            row.grid_columnconfigure(0, weight=1)
             row.grid_rowconfigure(0, weight=1)
 
             is_default = profile == "default" or self._is_original_default(profile)
             is_active = profile == self._current_profile
+            is_locked = self._is_profile_locked(profile)
+
+            # Lock toggle — drawn box with lock icon inside (matches separator lock style)
+            BOX = 18
+            lock_canvas = tk.Canvas(
+                row, width=BOX, height=BOX,
+                bg=row_bg, highlightthickness=0, bd=0,
+            )
+            lock_canvas.grid(row=0, column=0, padx=(8, 0))
+
+            box_fill = BG_DEEP if is_locked else row_bg
+            lock_canvas.create_rectangle(
+                1, 1, BOX - 1, BOX - 1,
+                outline=BORDER, width=1, fill=box_fill, tags="box",
+            )
+            if self._lock_icon:
+                lock_canvas.create_image(
+                    BOX // 2, BOX // 2, anchor="center",
+                    image=self._lock_icon,
+                    state="normal" if is_locked else "hidden",
+                    tags="mark",
+                )
+            else:
+                lock_canvas.create_text(
+                    BOX // 2, BOX // 2, anchor="center",
+                    text="🔒", fill=TEXT_MAIN,
+                    state="normal" if is_locked else "hidden",
+                    tags="mark",
+                )
+
+            if not is_default:
+                lock_canvas.configure(cursor="hand2")
+                lock_canvas.bind(
+                    "<ButtonRelease-1>",
+                    lambda e, p=profile, c=lock_canvas, bg=row_bg: self._on_lock_canvas_click(p, c, bg),
+                )
 
             # Profile name label
             label_text = profile
@@ -178,10 +222,12 @@ class ProfileSettingsOverlay(tk.Frame):
                 row, text=label_text,
                 font=FONT_BOLD if is_active else FONT_NORMAL,
                 fg=lbl_color, bg=row_bg, anchor="w",
-            ).grid(row=0, column=0, sticky="ew", padx=12)
+            ).grid(row=0, column=1, sticky="ew", padx=(4, 12))
+
+            row.grid_columnconfigure(1, weight=1)
 
             btn_frame = tk.Frame(row, bg=row_bg)
-            btn_frame.grid(row=0, column=1, padx=8)
+            btn_frame.grid(row=0, column=2, padx=8)
 
             # Rename button (always available)
             ctk.CTkButton(
@@ -204,14 +250,15 @@ class ProfileSettingsOverlay(tk.Frame):
                 command=lambda p=profile: self._show_steam_command(p),
             ).pack(side="left", padx=(0, 6))
 
-            # Remove button (disabled for default)
+            # Remove button (disabled for locked/default profiles)
+            can_remove = not is_default and not is_locked
             remove_btn = ctk.CTkButton(
                 btn_frame, text="Remove", width=72, height=28, font=FONT_SMALL,
-                fg_color="#6b3333" if not is_default else "#3a3a3a",
-                hover_color="#8c4444" if not is_default else "#3a3a3a",
-                text_color="white" if not is_default else TEXT_DIM,
-                state="normal" if not is_default else "disabled",
-                command=(lambda p=profile: self._on_remove(p)) if not is_default else lambda: None,
+                fg_color="#6b3333" if can_remove else "#3a3a3a",
+                hover_color="#8c4444" if can_remove else "#3a3a3a",
+                text_color="white" if can_remove else TEXT_DIM,
+                state="normal" if can_remove else "disabled",
+                command=(lambda p=profile: self._on_remove(p)) if can_remove else lambda: None,
             )
             remove_btn.pack(side="left")
 
@@ -328,7 +375,7 @@ class ProfileSettingsOverlay(tk.Frame):
     # ------------------------------------------------------------------
 
     def _on_remove(self, profile: str):
-        if self._is_original_default(profile):
+        if self._is_original_default(profile) or self._is_profile_locked(profile):
             return
         alert = CTkAlert(
             state="warning",
@@ -388,6 +435,32 @@ class ProfileSettingsOverlay(tk.Frame):
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _is_profile_locked(self, profile: str) -> bool:
+        """Return True if this profile has been locked (or is the default)."""
+        if self._is_original_default(profile):
+            return True
+        profile_dir = self._get_profile_dir(profile)
+        try:
+            return bool(read_profile_settings(profile_dir, None).get("profile_locked", False))
+        except Exception:
+            return False
+
+    def _on_lock_canvas_click(self, profile: str, canvas: tk.Canvas, row_bg: str):
+        """Toggle the lock state for a profile when the drawn checkbox is clicked."""
+        currently_locked = self._is_profile_locked(profile)
+        new_locked = not currently_locked
+        profile_dir = self._get_profile_dir(profile)
+        try:
+            merge_profile_settings(profile_dir, {"profile_locked": new_locked})
+        except Exception as e:
+            self._log(f"Could not save lock state: {e}")
+            return
+        # Update the canvas visually
+        canvas.itemconfigure("box", fill=BG_DEEP if new_locked else row_bg)
+        canvas.itemconfigure("mark", state="normal" if new_locked else "hidden")
+        # Repopulate so the Remove button state updates
+        self._populate_list()
 
     def _is_original_default(self, profile: str) -> bool:
         """Return True if this profile was originally the default (by name or flag)."""

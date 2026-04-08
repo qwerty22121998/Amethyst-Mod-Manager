@@ -42,10 +42,6 @@ FONT_NORMAL = ("Segoe UI", 14)
 FONT_BOLD   = ("Segoe UI", 14, "bold")
 
 
-def _to_wine_path(p: Path) -> str:
-    return "Z:" + str(p).replace("/", "\\")
-
-
 def find_mod_exe(game: "BaseGame", exe_name: str) -> Path | None:
     """Search the mod staging directory for exe_name (used to decide whether to show the wizard)."""
     staging = game.get_effective_mod_staging_path()

@@ -20,13 +20,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import Callable, NamedTuple
 
-# ---------------------------------------------------------------------------
-# Wine path helper (mirrors gui.py::_to_wine_path)
-# ---------------------------------------------------------------------------
-
-def _to_wine_path(linux_path: "Path | str") -> str:
-    r"""Convert a Linux absolute path to a Proton/Wine Z:\ path."""
-    return "Z:" + str(linux_path).replace("/", "\\")
+from gui.path_utils import _to_wine_path
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +267,7 @@ def _bootstrap_pgpatcher_settings(
     *,
     update: bool = False,
     output_mod: "Path | None" = None,
+    pfx: "Path | None" = None,
 ) -> None:
     """
     Write cfg/settings.json next to PGPatcher.exe.
@@ -312,8 +307,8 @@ def _bootstrap_pgpatcher_settings(
         settings = copy.deepcopy(_PGPATCHER_SETTINGS_TEMPLATE)
 
     # Update the two profile-dependent paths
-    settings.setdefault("params", {}).setdefault("game", {})["dir"] = _to_wine_path(game_path)
-    settings["params"].setdefault("output", {})["dir"] = _to_wine_path(output_mod_dir)
+    settings.setdefault("params", {}).setdefault("game", {})["dir"] = _to_wine_path(game_path, pfx)
+    settings["params"].setdefault("output", {})["dir"] = _to_wine_path(output_mod_dir, pfx)
 
     # Write cfg/settings.json (create cfg/ if needed)
     try:
@@ -333,6 +328,7 @@ def _bootstrap_npc_plugin_chooser_settings(
     game_path: "Path | None",
     staging_path: "Path | None",
     log_fn: "Callable[[str], None]",
+    pfx: "Path | None" = None,
 ) -> None:
     """
     Write or update settings.json next to "NPC Plugin Chooser 2.exe".
@@ -352,8 +348,8 @@ def _bootstrap_npc_plugin_chooser_settings(
     except (OSError, ValueError):
         settings = {}
 
-    settings["ModsFolder"] = _to_wine_path(staging_path)
-    settings["SkyrimGamePath"] = _to_wine_path(game_path / "Data")
+    settings["ModsFolder"] = _to_wine_path(staging_path, pfx)
+    settings["SkyrimGamePath"] = _to_wine_path(game_path / "Data", pfx)
 
     try:
         settings_file.write_text(json.dumps(settings, indent=2), encoding="utf-8")
@@ -433,6 +429,10 @@ def build_default_exe_args(
     staging_path: Path | None = (
         game.get_mod_staging_path() if hasattr(game, "get_mod_staging_path") else None
     )
+    prefix_path: Path | None = (
+        game.get_prefix_path() if hasattr(game, "get_prefix_path") else None
+    )
+    pfx = (prefix_path / "pfx") if prefix_path is not None else None
 
     # Determine whether we're writing to a profile-local or global exe_args.json
     from Utils.config_paths import get_profile_exe_args_path
@@ -467,11 +467,11 @@ def build_default_exe_args(
                 existing[name] = ""
                 changed = True
             if name == "PGPatcher.exe":
-                _bootstrap_pgpatcher_settings(exe_path, game_path, effective_staging_path, _log)
+                _bootstrap_pgpatcher_settings(exe_path, game_path, effective_staging_path, _log, pfx=pfx)
             if name == "WitcherScriptMerger.exe":
                 update_witcher3_script_merger_config(game_path, exe_path) # type: ignore
             if name == "NPC Plugin Chooser 2.exe":
-                _bootstrap_npc_plugin_chooser_settings(exe_path, game_path, effective_staging_path, _log)
+                _bootstrap_npc_plugin_chooser_settings(exe_path, game_path, effective_staging_path, _log, pfx=pfx)
             continue
 
         # Skip unknowns and already-configured entries
@@ -493,7 +493,7 @@ def build_default_exe_args(
                 else game_path
             )
             sep = _flag_sep(profile.game_flag)
-            parts.append(f'{profile.game_flag}{sep}"{_to_wine_path(target)}"')
+            parts.append(f'{profile.game_flag}{sep}"{_to_wine_path(target, pfx)}"')
 
         # Output argument — defaults to the effective overwrite folder
         if profile.output_flag:
@@ -503,7 +503,7 @@ def build_default_exe_args(
                 if effective_staging_path else None
             )
             if overwrite_path:
-                parts.append(f'{profile.output_flag}{sep}"{_to_wine_path(overwrite_path)}"')
+                parts.append(f'{profile.output_flag}{sep}"{_to_wine_path(overwrite_path, pfx)}"')
             else:
                 parts.append(f'{profile.output_flag}{sep}"<select output folder>"')
 

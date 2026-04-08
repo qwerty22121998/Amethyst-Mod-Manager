@@ -61,7 +61,7 @@ from Utils.filemap import OVERWRITE_NAME as _OVERWRITE_NAME
 from gui.plugin_panel import PluginPanel
 from gui.top_bar import TopBar
 from gui.status_bar import StatusBar
-from gui.install_mod import install_mod_from_archive
+from gui.install_mod import install_mod_from_archive, fomod_dialog_active
 from gui.mod_name_utils import _suggest_mod_names
 from gui.version_check import (
     is_appimage,
@@ -703,12 +703,12 @@ class App(ctk.CTk):
     def _nxm_install(self, result, matched_game, mod_info=None, file_info=None):
         """Install a downloaded NXM file into the current game.
 
-        If a modal dialog currently holds the Tk grab (e.g. a FOMOD wizard is
-        open), the install is deferred until the modal is dismissed to avoid a
-        deadlock from nested wait_window / grab_set calls.
+        If a modal dialog currently holds the Tk grab or a FOMOD wizard overlay
+        is open, the install is deferred until the dialog is dismissed to avoid
+        a second FomodDialog being placed on top of the first.
         """
-        if self.grab_current() is not None:
-            # A modal is open — queue and poll until it's gone.
+        if self.grab_current() is not None or fomod_dialog_active.is_set():
+            # A dialog is open — queue and poll until it's gone.
             self._nxm_install_queue.append((result, matched_game, mod_info, file_info))
             self._poll_nxm_install_queue()
             return
@@ -718,7 +718,7 @@ class App(ctk.CTk):
         """Retry queued NXM installs once no modal dialog holds the grab."""
         if not self._nxm_install_queue:
             return
-        if self.grab_current() is not None:
+        if self.grab_current() is not None or fomod_dialog_active.is_set():
             # Still blocked — check again shortly.
             self.after(300, self._poll_nxm_install_queue)
             return
@@ -726,8 +726,8 @@ class App(ctk.CTk):
         while self._nxm_install_queue:
             result, matched_game, mod_info, file_info = self._nxm_install_queue.pop(0)
             self._nxm_install_impl(result, matched_game, mod_info=mod_info, file_info=file_info)
-            if self.grab_current() is not None:
-                # This install opened a modal; resume after it closes.
+            if self.grab_current() is not None or fomod_dialog_active.is_set():
+                # This install opened a dialog; resume after it closes.
                 self.after(300, self._poll_nxm_install_queue)
                 break
 
@@ -754,26 +754,23 @@ class App(ctk.CTk):
             nonlocal _installed
             _installed = True
 
-        installed_name = install_mod_from_archive(str(_archive_path), self, log, game, mod_panel,
-                                                  on_installed=_on_installed)
+        # Build metadata now from the NXM link data so install_mod_from_archive
+        # can write it directly, skipping the async detection thread entirely.
+        prebuilt_meta = build_meta_from_download(
+            game_domain=result.game_domain,
+            mod_id=result.mod_id,
+            file_id=result.file_id,
+            archive_name=result.file_name,
+            mod_info=mod_info,
+            file_info=file_info,
+        )
 
-        # Write Nexus metadata to the installed mod's meta.ini
+        installed_name = install_mod_from_archive(str(_archive_path), self, log, game, mod_panel,
+                                                  on_installed=_on_installed,
+                                                  prebuilt_meta=prebuilt_meta)
+
         if installed_name:
-            try:
-                meta = build_meta_from_download(
-                    game_domain=result.game_domain,
-                    mod_id=result.mod_id,
-                    file_id=result.file_id,
-                    archive_name=result.file_name,
-                    mod_info=mod_info,
-                    file_info=file_info,
-                )
-                meta_path = game.get_effective_mod_staging_path() / installed_name / "meta.ini"
-                if meta_path.parent.is_dir():
-                    write_meta(meta_path, meta)
-                    log(f"Nexus: Saved metadata (mod {meta.mod_id}, v{meta.version})")
-            except Exception as exc:
-                log(f"Nexus: Warning — could not save metadata: {exc}")
+            log(f"Nexus: Saved metadata (mod {prebuilt_meta.mod_id}, file {prebuilt_meta.file_id})")
 
         if _installed and _archive_path:
             try:

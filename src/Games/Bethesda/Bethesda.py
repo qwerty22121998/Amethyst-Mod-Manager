@@ -61,6 +61,10 @@ class Fallout_3(BaseGame):
         return "fallout3"
     
     @property
+    def mods_dir(self) -> str:
+        return "Data"
+
+    @property
     def mod_folder_strip_prefixes(self) -> set[str]:
         return {"Data"}
     

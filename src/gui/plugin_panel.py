@@ -2119,6 +2119,59 @@ class PluginPanel(ctk.CTkFrame):
         if self._mod_files_on_change is not None:
             self._mod_files_on_change()
 
+    def _get_conflict_cache(self, full_index):
+        """Return (contested_keys, filemap_winner), cached by index+filemap mtime.
+
+        Pass ``full_index`` if the caller already has it loaded; otherwise
+        ``None`` and it will be read on a cache miss.  Both call sites
+        (Mod Files and Data tabs) share the same cache.
+        """
+        idx_path = self._mod_files_index_path
+        if idx_path is None:
+            return set(), {}
+        fm_path = idx_path.parent / "filemap.txt"
+        try:
+            idx_mtime = idx_path.stat().st_mtime if idx_path.is_file() else 0.0
+        except OSError:
+            idx_mtime = 0.0
+        try:
+            fm_mtime = fm_path.stat().st_mtime if fm_path.is_file() else 0.0
+        except OSError:
+            fm_mtime = 0.0
+        sig = (str(idx_path), idx_mtime, fm_mtime)
+        cached = getattr(self, "_conflict_cache", None)
+        if cached is not None and cached[0] == sig:
+            return cached[1], cached[2]
+
+        filemap_winner: dict[str, str] = {}
+        if fm_path.is_file():
+            try:
+                for _line in fm_path.read_text(encoding="utf-8").splitlines():
+                    if "\t" in _line:
+                        _rk, _mn = _line.split("\t", 1)
+                        filemap_winner[_rk.lower()] = _mn
+            except Exception:
+                pass
+
+        contested_keys: set[str] = set()
+        if full_index is None:
+            try:
+                from Utils.filemap import read_mod_index
+                full_index = read_mod_index(idx_path)
+            except Exception:
+                full_index = None
+        if full_index:
+            _key_count: dict[str, int] = {}
+            for _mn, (_norm, _root) in full_index.items():
+                for _k in _norm:
+                    _key_count[_k] = _key_count.get(_k, 0) + 1
+                for _k in _root:
+                    _key_count[_k] = _key_count.get(_k, 0) + 1
+            contested_keys = {_k for _k, _c in _key_count.items() if _c > 1}
+
+        self._conflict_cache = (sig, contested_keys, filemap_winner)
+        return contested_keys, filemap_winner
+
     def show_mod_files(self, mod_name: str | None):
         """Populate the Mod Files tab for the given mod name."""
         self._mod_files_mod_name = mod_name
@@ -2158,28 +2211,7 @@ class PluginPanel(ctk.CTkFrame):
             return
 
         # Build conflict lookup sets from filemap.txt and full mod index.
-        # filemap_winner: rel_key_lower → winning mod name
-        # contested_keys: rel_keys provided by 2+ mods
-        filemap_winner: dict[str, str] = {}
-        contested_keys: set[str] = set()
-        if self._mod_files_index_path is not None:
-            _fm_path = self._mod_files_index_path.parent / "filemap.txt"
-            if _fm_path.is_file():
-                try:
-                    for _line in _fm_path.read_text(encoding="utf-8").splitlines():
-                        if "\t" in _line:
-                            _rk, _mn = _line.split("\t", 1)
-                            filemap_winner[_rk.lower()] = _mn
-                except Exception:
-                    pass
-        if full_index is not None:
-            _key_count: dict[str, int] = {}
-            for _mn, (_norm, _root) in full_index.items():
-                for _k in _norm:
-                    _key_count[_k] = _key_count.get(_k, 0) + 1
-                for _k in _root:
-                    _key_count[_k] = _key_count.get(_k, 0) + 1
-            contested_keys = {_k for _k, _c in _key_count.items() if _c > 1}
+        contested_keys, filemap_winner = self._get_conflict_cache(full_index)
 
         # Configure conflict highlight tags
         self._mf_tree.tag_configure("dim", foreground=TEXT_DIM)
@@ -2347,23 +2379,8 @@ class PluginPanel(ctk.CTkFrame):
             raw_entries = [(p, m) for p, m in raw_entries if m not in custom_deploy_mods]
         self._data_filemap_entries = self._resolve_data_entries(raw_entries)
 
-        # Build contested_keys: rel_keys that appear in 2+ mods
-        contested_keys: set[str] = set()
-        if self._mod_files_index_path is not None:
-            try:
-                from Utils.filemap import read_mod_index
-                full_index = read_mod_index(self._mod_files_index_path)
-                if full_index:
-                    _key_count: dict[str, int] = {}
-                    for _mn, (_norm, _root) in full_index.items():
-                        for _k in _norm:
-                            _key_count[_k] = _key_count.get(_k, 0) + 1
-                        for _k in _root:
-                            _key_count[_k] = _key_count.get(_k, 0) + 1
-                    contested_keys = {_k for _k, _c in _key_count.items() if _c > 1}
-            except Exception:
-                pass
-
+        # Build contested_keys from the shared conflict cache.
+        contested_keys, _ = self._get_conflict_cache(None)
         self._data_contested_keys = contested_keys
         self._build_data_tree_from_entries(self._data_filemap_entries, contested_keys)
 
@@ -2426,6 +2443,14 @@ class PluginPanel(ctk.CTkFrame):
                     # flat placement — just filename under dest
                     basename = rel_norm.split("/")[-1]
                     full_path = dest + "/" + basename if dest else basename
+                # Strip the game's deploy subfolder prefix so the resolved
+                # path is shown relative to that folder (matching how the
+                # filemap entries themselves are stored).
+                _mods_dir = getattr(game, "mods_dir", None)
+                if _mods_dir:
+                    _prefix = _mods_dir.rstrip("/") + "/"
+                    if full_path.lower().startswith(_prefix.lower()):
+                        full_path = full_path[len(_prefix):]
             else:
                 full_path = rel_norm
             resolved.append((full_path, mod_name))
@@ -4324,6 +4349,9 @@ class PluginPanel(ctk.CTkFrame):
         lines = []
 
         def _quote(s: str) -> str:
+            if "'" in s:
+                escaped = s.replace('"', '\\"')
+                return f'"{escaped}"'
             return f"'{s}'"
 
         plugins = data.get("plugins", [])

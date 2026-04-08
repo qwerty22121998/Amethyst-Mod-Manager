@@ -28,6 +28,7 @@ finish-args:
   - --filesystem=~/.var/app/com.valvesoftware.Steam
   - --filesystem=~/.var/app/com.heroicgameslauncher.hgl
   - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Flatpak
 
 tags:
   - modmanager

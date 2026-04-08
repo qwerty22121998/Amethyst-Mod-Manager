@@ -41,10 +41,6 @@ _EXE_NAME   = "Wrye Bash.exe"
 _APP_DIR    = "Wrye Bash"
 
 
-def _to_wine_path(p: Path) -> str:
-    return "Z:" + str(p).replace("/", "\\")
-
-
 def _get_applications_dir(game: "BaseGame") -> Path:
     return game.get_mod_staging_path().parent / "Applications" / _APP_DIR
 

@@ -192,7 +192,7 @@ def write_meta(meta_ini_path: Path, meta: NexusModMeta) -> None:
         if attr in _BOOL_FIELDS:
             cp.set(_SECTION, ini_key, "true" if value else "false")
         else:
-            cp.set(_SECTION, ini_key, str(value))
+            cp.set(_SECTION, ini_key, str(value).replace("%", "%%"))
 
     meta_ini_path.parent.mkdir(parents=True, exist_ok=True)
     with open(meta_ini_path, "w", encoding="utf-8") as f:

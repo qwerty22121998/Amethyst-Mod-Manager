@@ -23,6 +23,7 @@ import customtkinter as ctk
 
 from Utils.xdg import open_url
 from Utils.portal_filechooser import pick_file
+from gui.path_utils import _to_wine_path
 
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
@@ -84,10 +85,6 @@ def _flatten_subdirs(dest: Path, exe_name: str) -> None:
             tmp.rmdir()
         else:
             break
-
-
-def _to_wine_path(p: Path) -> str:
-    return "Z:" + str(p).replace("/", "\\")
 
 
 def _set_winxp_compat(prefix_path: Path, exe: Path, log_fn=None) -> None:
@@ -606,9 +603,10 @@ class SSEEditWizard(ctk.CTkFrame):
             self._set_label("_run_status", "Game path not configured.", color="#e06c6c")
             return
 
-        data_arg = f'-d:{_to_wine_path(game_path / "Data")}'
-
         prefix_path = self._game.get_prefix_path()
+        pfx = (prefix_path / "pfx") if prefix_path is not None else None
+        data_arg = f'-d:{_to_wine_path(game_path / "Data", pfx)}'
+
         if prefix_path is not None:
             _set_winxp_compat(prefix_path, exe, log_fn=self._log)
 

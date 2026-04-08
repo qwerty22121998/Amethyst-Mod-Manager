@@ -100,6 +100,7 @@ class SkyrimSE(Fallout_3):
             CustomRule(dest="", filenames=["skse64_1_6_1170.dll"]),
             CustomRule(dest="", filenames=["skse64_loader.exe"]),
             CustomRule(dest="", filenames=["d3dcompiler_47.dll"]),
+            CustomRule(dest="Data/SKSE/Plugins/CharGen/Presets", extensions=[".jslot"]),
             # ENB Series files → game root
             CustomRule(dest="", filenames=[
                 "d3d11.dll",

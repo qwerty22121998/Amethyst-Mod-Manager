@@ -128,13 +128,10 @@ class CTkAlert(ctk.CTkToplevel):
         self.overrideredirect(True)
         if parent is not None:
             self.transient(parent)
-        # Defer centering until after the window is fully realized
         self.withdraw()
-        self.after(10, self._center_and_show)
-        self.lift()
 
-        self.x = self.winfo_x()
-        self.y = self.winfo_y()
+        self.x = 0
+        self.y = 0
         self.event = None
 
         self.transparent_color = self._apply_appearance_mode(self.cget("fg_color"))
@@ -183,24 +180,42 @@ class CTkAlert(ctk.CTkToplevel):
 
         self.btn_2 = ctk.CTkButton(self.frame_top, text=btn2, width=120, fg_color="transparent", border_width=1,
                                    command=lambda: self.button_event(btn2), text_color=("black", "white"))
-        self.btn_2.grid(row=2, column=1, padx=(5, 10), pady=20, sticky="e")
+        if btn2:
+            self.btn_2.grid(row=2, column=1, padx=(5, 10), pady=20, sticky="e")
+        else:
+            self.btn_1.grid(row=2, column=0, columnspan=2, padx=10, pady=20, sticky="e")
 
         self.bind("<Escape>", lambda e: self.button_event())
+        self._center_and_show()
 
     def _center_and_show(self):
         """Position the alert centered on the parent window using actual dimensions."""
         parent = self._parent_ref
+        # Fix width only so height can auto-size to content, then cap it
+        self.geometry(f"{self.width}")
+        self.update_idletasks()
+        # winfo_reqheight() returns scaled tk pixels; convert back to design
+        # units so CTkToplevel.geometry() doesn't double-scale the value.
+        scale = self._get_window_scaling() or 1
+        req_h = self.winfo_reqheight() / scale
+        max_h = self.height * 2  # cap at 2× the design height
+        final_h = int(min(max(req_h, self.height), max_h))
+        self.geometry(f"{self.width}x{final_h}")
+        self.update_idletasks()
         if parent is not None:
             try:
-                self.geometry(f"{self.width}x{self.height}")  # Set size; CTk applies window scaling
-                parent.update_idletasks()
-                self.update_idletasks()
-                px = parent.winfo_rootx()
-                py = parent.winfo_rooty()
-                pw = parent.winfo_width()
-                ph = parent.winfo_height()
-                aw = self.winfo_width() or scaled(self.width)
-                ah = self.winfo_height() or scaled(self.height)
+                top = parent.winfo_toplevel()
+                top.update_idletasks()
+                px = top.winfo_rootx()
+                py = top.winfo_rooty()
+                pw = top.winfo_width()
+                ph = top.winfo_height()
+                aw = self.winfo_width()
+                ah = self.winfo_height()
+                if aw <= 1:
+                    aw = scaled(self.width)
+                if ah <= 1:
+                    ah = scaled(final_h)
                 cx = px + (pw - aw) // 2
                 cy = py + (ph - ah) // 2
                 self.geometry(f"+{cx}+{cy}")
@@ -226,9 +241,11 @@ class CTkAlert(ctk.CTkToplevel):
             return
         if self.old_x is None or self.old_y is None:
             return
-        self.y = event.y_root - self.old_y
-        self.x = event.x_root - self.old_x
-        self.geometry(f'+{self.x}+{self.y}')
+        dx = event.x_root - self.old_x
+        dy = event.y_root - self.old_y
+        self.geometry(f'+{self.winfo_x() + dx}+{self.winfo_y() + dy}')
+        self.old_x = event.x_root
+        self.old_y = event.y_root
 
     def button_event(self, event=None):
         self.grab_release()

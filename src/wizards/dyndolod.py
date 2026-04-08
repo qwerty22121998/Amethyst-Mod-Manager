@@ -27,6 +27,7 @@ import customtkinter as ctk
 
 from Utils.xdg import open_url
 from Utils.portal_filechooser import pick_file
+from gui.path_utils import _to_wine_path
 
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
@@ -94,10 +95,6 @@ def _flatten_subdirs(dest: Path, exe_name: str) -> None:
             tmp.rmdir()
         else:
             break
-
-
-def _to_wine_path(p: Path) -> str:
-    return "Z:" + str(p).replace("/", "\\")
 
 
 # ---------------------------------------------------------------------------
@@ -562,8 +559,9 @@ class _DynDOLODBaseWizard(ctk.CTkFrame):
         output    = staging / self._output_dir
         output.mkdir(parents=True, exist_ok=True)
 
-        data_arg   = f'-d:{_to_wine_path(game_path / "Data")}'
-        output_arg = f'-o:{_to_wine_path(output)}'
+        pfx = (_prefix / "pfx") if _prefix is not None else None
+        data_arg   = f'-d:{_to_wine_path(game_path / "Data", pfx)}'
+        output_arg = f'-o:{_to_wine_path(output, pfx)}'
 
         self._log(f"DynDOLOD Wizard: launching {exe} via Proton")
         self._log(f"  args: {data_arg}  {output_arg}  -sse")

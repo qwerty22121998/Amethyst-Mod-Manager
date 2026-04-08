@@ -65,6 +65,7 @@ from gui.dialogs import (
     _OverwritesDialog,
     _PriorityDialog,
     _DisablePluginsDialog,
+    _ReplaceModDialog,
     ask_yes_no,
     show_error,
 )
@@ -1946,16 +1947,30 @@ class ModListPanel(ctk.CTkFrame):
         # Mod-level highlight sets (used when a separator is selected and some mods are expanded)
         conflict_mod_higher: set[str] = set()  # mod names that selected-separator mods override
         conflict_mod_lower:  set[str] = set()  # mod names that override selected-separator mods
+        # Mod-level conflict sets for all selected non-separator mods (multi-selection support)
+        conflict_sel_higher: set[str] = set()  # mod names that any selected mod overrides
+        conflict_sel_lower:  set[str] = set()  # mod names that override any selected mod
         if sel_entry and not sel_entry.is_separator:
-            sel_name = sel_entry.name
-            for cm in self._overrides.get(sel_name, set()):
-                si = self._sep_idx_for_mod(cm)
-                if si >= 0 and self._entries[si].name in self._collapsed_seps:
-                    conflict_sep_higher.add(si)
-            for cm in self._overridden_by.get(sel_name, set()):
-                si = self._sep_idx_for_mod(cm)
-                if si >= 0 and self._entries[si].name in self._collapsed_seps:
-                    conflict_sep_lower.add(si)
+            # Collect conflicts for every selected non-separator mod
+            for sel_i in self._sel_set:
+                if sel_i < 0 or sel_i >= len(self._entries):
+                    continue
+                e = self._entries[sel_i]
+                if e.is_separator:
+                    continue
+                sel_name = e.name
+                for cm in self._overrides.get(sel_name, set()):
+                    si = self._sep_idx_for_mod(cm)
+                    if si >= 0 and self._entries[si].name in self._collapsed_seps:
+                        conflict_sep_higher.add(si)
+                    else:
+                        conflict_sel_higher.add(cm)
+                for cm in self._overridden_by.get(sel_name, set()):
+                    si = self._sep_idx_for_mod(cm)
+                    if si >= 0 and self._entries[si].name in self._collapsed_seps:
+                        conflict_sep_lower.add(si)
+                    else:
+                        conflict_sel_lower.add(cm)
         elif sel_entry and sel_entry.is_separator and sel_entry.name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME):
             # Selected entry is a normal separator — highlight all separators/mods
             # that conflict with any mod inside this separator.
@@ -1993,11 +2008,17 @@ class ModListPanel(ctk.CTkFrame):
                 if si >= 0 and self._entries[si].name in self._collapsed_seps:
                     conflict_sep_higher.add(si)
 
-        # Special case: if Overwrite overrides the selected mod, highlight the Overwrite row green.
-        if sel_entry and not sel_entry.is_separator and OVERWRITE_NAME in self._overridden_by.get(sel_entry.name, set()):
-            ow_idx = next((i for i, e in enumerate(self._entries) if e.name == OVERWRITE_NAME), -1)
-            if ow_idx >= 0:
-                conflict_sep_higher.add(ow_idx)
+        # Special case: if Overwrite overrides any selected mod, highlight the Overwrite row green.
+        if sel_entry and not sel_entry.is_separator:
+            for sel_i in self._sel_set:
+                if sel_i < 0 or sel_i >= len(self._entries):
+                    continue
+                e = self._entries[sel_i]
+                if not e.is_separator and OVERWRITE_NAME in self._overridden_by.get(e.name, set()):
+                    ow_idx = next((j for j, oe in enumerate(self._entries) if oe.name == OVERWRITE_NAME), -1)
+                    if ow_idx >= 0:
+                        conflict_sep_higher.add(ow_idx)
+                    break
 
         highlighted_sep_idx: int = -1
         if self._highlighted_mod:
@@ -2265,10 +2286,9 @@ class ModListPanel(ctk.CTkFrame):
                         bg = BG_HOVER_ROW
                     elif sel_entry and (not sel_entry.is_separator
                                         or sel_entry.name == OVERWRITE_NAME):
-                        sel_name = sel_entry.name
-                        if entry.name in self._overrides.get(sel_name, set()):
+                        if entry.name in conflict_sel_higher:
                             bg = conflict_higher
-                        elif entry.name in self._overridden_by.get(sel_name, set()):
+                        elif entry.name in conflict_sel_lower:
                             bg = conflict_lower
                         else:
                             bg = BG_ROW if row % 2 == 0 else BG_ROW_ALT
@@ -3306,45 +3326,55 @@ class ModListPanel(ctk.CTkFrame):
         # position.  The snapshot above preserves the original order for restore.
         _inverted = (self._sort_column == "priority" and self._sort_ascending)
         if _inverted:
-            # Compute visual order from the current (snapshot) state
-            if self._vis_dirty:
-                self._visible_indices = self._compute_visible_indices()
-                self._vis_dirty = False
-            vis_order = self._visible_indices  # display order indices
-
-            # Build the full reordered index list.  vis_order only includes
-            # visible entries.  Non-visible entries (collapsed/filtered mods)
-            # must stay with their owning separator so _sep_block_range still
-            # works.  For each separator in vis_order, append its hidden mods
-            # right after it.
-            vis_set = set(vis_order)
-
-            # Map each non-visible entry to its owning separator (in original
-            # _entries order, scan backwards to find the nearest separator).
-            sep_hidden: dict[int, list[int]] = {}  # sep_idx → [hidden entry indices]
-            orphaned: list[int] = []
-            for i in range(len(self._entries)):
-                if i in vis_set:
-                    continue
-                # Find owning separator by scanning backwards
-                owner = -1
-                for j in range(i - 1, -1, -1):
-                    if self._entries[j].is_separator:
-                        owner = j
-                        break
-                if owner >= 0:
-                    sep_hidden.setdefault(owner, []).append(i)
+            # Build the FULL inverted order of every entry (not just the
+            # filtered/collapsed visible subset).  Dropping non-visible
+            # separators and their mods from new_order would persist that
+            # loss on save — see the search+collapsed-sep bug.
+            #
+            # Natural order is:
+            #   [OW, highest-pri-group, ..., lowest-pri-group, Root]
+            # Inverted order (priority ascending) is:
+            #   [Root, lowest-pri-group, ..., highest-pri-group, OW]
+            # and mods within each group are reversed.  This mirrors
+            # _uninvert_entries_order so release can cleanly invert back.
+            groups: list[tuple[int | None, list[int]]] = []
+            current_sep: int | None = None
+            current_mods: list[int] = []
+            for _i in range(len(self._entries)):
+                if self._entries[_i].is_separator:
+                    if current_sep is not None or current_mods:
+                        groups.append((current_sep, current_mods))
+                    current_sep = _i
+                    current_mods = []
                 else:
-                    orphaned.append(i)
+                    current_mods.append(_i)
+            if current_sep is not None or current_mods:
+                groups.append((current_sep, current_mods))
+
+            ow_group = None
+            rf_group = None
+            middle: list[tuple[int | None, list[int]]] = []
+            for g in groups:
+                _sep_idx, _mods = g
+                if _sep_idx is not None and self._entries[_sep_idx].name == OVERWRITE_NAME:
+                    ow_group = g
+                elif _sep_idx is not None and self._entries[_sep_idx].name == ROOT_FOLDER_NAME:
+                    rf_group = g
+                else:
+                    middle.append(g)
+
+            # Inverted order: Root first, middle reversed, OW last.
+            inv_groups = (([rf_group] if rf_group else [])
+                          + list(reversed(middle))
+                          + ([ow_group] if ow_group else []))
 
             new_order: list[int] = []
-            for vi in vis_order:
-                new_order.append(vi)
-                if self._entries[vi].is_separator and vi in sep_hidden:
-                    # Append hidden mods in reversed order to match inverted
-                    # display (ascending priority = descending _entries index)
-                    new_order.extend(reversed(sep_hidden[vi]))
-            new_order.extend(orphaned)
+            for _sep_idx, _mods in inv_groups:
+                if _sep_idx is not None:
+                    new_order.append(_sep_idx)
+                # Within each group, reverse mod order so ascending priority
+                # (lowest-pri first) matches the visual display.
+                new_order.extend(reversed(_mods))
 
             new_entries = [self._entries[i] for i in new_order]
             new_vars = [self._check_vars[i] for i in new_order]
@@ -4001,6 +4031,40 @@ class ModListPanel(ctk.CTkFrame):
 
         if mod_folder is not None and not _is_multi:
             menu.add_command("Open folder", lambda: self._open_folder(mod_folder))
+
+        # "Copy to profile" submenu — only for real mods, 2+ profiles
+        if (not is_separator and not is_synthetic
+                and self._modlist_path is not None and self._game is not None):
+            _app = self.winfo_toplevel()
+            _topbar = getattr(_app, "_topbar", None)
+            _game_name = _topbar._game_var.get() if _topbar else ""
+            _cur_profile = self._modlist_path.parent.name
+            _all_profiles = _profiles_for_game(_game_name)
+            _other_profiles = [p for p in _all_profiles if p != _cur_profile]
+            if _other_profiles:
+                if _is_multi:
+                    _copy_mod_names = [
+                        self._entries[i].name
+                        for i in sorted(self._sel_set)
+                        if 0 <= i < len(self._entries)
+                        and not self._entries[i].is_separator
+                        and self._entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
+                    ]
+                    if _copy_mod_names:
+                        menu.add_submenu(
+                            f"Copy to profile ({len(_copy_mod_names)})",
+                            lambda profs=_other_profiles, mns=_copy_mod_names: self._show_copy_to_profile_picker_multi(
+                                mns, profs, parent_dismiss=menu._withdraw, parent_popup=menu,
+                            ),
+                        )
+                else:
+                    _copy_mod_name = self._entries[idx].name
+                    menu.add_submenu(
+                        "Copy to profile",
+                        lambda profs=_other_profiles, mn=_copy_mod_name: self._show_copy_to_profile_picker(
+                            mn, profs, parent_dismiss=menu._withdraw, parent_popup=menu,
+                        ),
+                    )
 
         if not _is_multi and (not is_separator or is_overwrite):
             conflict_status = (
@@ -4754,6 +4818,129 @@ class ModListPanel(ctk.CTkFrame):
             on_pick=lambda sep_name: self._move_to_separator(mod_idx, sep_name),
             parent_dismiss=parent_dismiss, parent_popup=parent_popup,
         )
+
+    def _show_copy_to_profile_picker(self, mod_name: str, profiles: list[str],
+                                     parent_dismiss=None,
+                                     parent_popup=None) -> tk.Toplevel:
+        """Show a popup listing other profiles; clicking one copies the mod there."""
+        return self._show_picker_popup(
+            profiles, profiles,
+            on_pick=lambda profile: self._copy_mod_to_profile(mod_name, profile),
+            parent_dismiss=parent_dismiss, parent_popup=parent_popup,
+        )
+
+    def _copy_mod_to_profile(self, mod_name: str, target_profile: str) -> None:
+        """Copy a mod's staging folder to another profile's staging folder."""
+        if self._game is None or self._modlist_path is None:
+            return
+        src_folder = self._staging_root / mod_name
+        if not src_folder.is_dir():
+            show_error("Error", f"Mod folder not found:\n{src_folder}", parent=self.winfo_toplevel())
+            return
+
+        # Determine the target staging root
+        game = self._game
+        profile_root = game.get_profile_root()
+        target_profile_dir = profile_root / "profiles" / target_profile
+        from gui.game_helpers import profile_uses_specific_mods
+        if profile_uses_specific_mods(target_profile_dir):
+            target_staging = target_profile_dir / "mods"
+        else:
+            target_staging = game.get_mod_staging_path()
+
+        dest_folder = target_staging / mod_name
+
+        if dest_folder.exists():
+            dlg = _ReplaceModDialog(self.winfo_toplevel(), mod_name)
+            self.wait_window(dlg)
+            if dlg.result == "cancel":
+                return
+            if dlg.result == "rename":
+                new_name = dlg.new_name
+                if not new_name:
+                    return
+                dest_folder = target_staging / new_name
+            elif dlg.result == "all":
+                def _force_remove(func, path, _exc):
+                    os.chmod(path, 0o700)
+                    func(path)
+                shutil.rmtree(dest_folder, onexc=_force_remove)
+
+        def _do_copy():
+            try:
+                shutil.copytree(str(src_folder), str(dest_folder))
+                self.after(0, lambda: self._log(
+                    f"Copied '{mod_name}' → profile '{target_profile}'"))
+            except Exception as exc:
+                self.after(0, lambda e=exc: show_error(
+                    "Copy Failed", f"Failed to copy mod:\n{e}", parent=self.winfo_toplevel()))
+
+        threading.Thread(target=_do_copy, daemon=True).start()
+
+    def _show_copy_to_profile_picker_multi(self, mod_names: list[str], profiles: list[str],
+                                          parent_dismiss=None,
+                                          parent_popup=None) -> tk.Toplevel:
+        """Show a popup listing other profiles; clicking one copies all mods there."""
+        return self._show_picker_popup(
+            profiles, profiles,
+            on_pick=lambda profile: self._copy_mods_to_profile(mod_names, profile),
+            parent_dismiss=parent_dismiss, parent_popup=parent_popup,
+        )
+
+    def _copy_mods_to_profile(self, mod_names: list[str], target_profile: str) -> None:
+        """Copy multiple mods' staging folders to another profile's staging folder."""
+        if self._game is None or self._modlist_path is None:
+            return
+        game = self._game
+        profile_root = game.get_profile_root()
+        target_profile_dir = profile_root / "profiles" / target_profile
+        from gui.game_helpers import profile_uses_specific_mods
+        if profile_uses_specific_mods(target_profile_dir):
+            target_staging = target_profile_dir / "mods"
+        else:
+            target_staging = game.get_mod_staging_path()
+
+        # Pre-check which destinations already exist and confirm once.
+        existing = [m for m in mod_names if (target_staging / m).exists()]
+        replace_existing = False
+        if existing:
+            replace_existing = ask_yes_no(
+                self.winfo_toplevel(),
+                f"{len(existing)} mod(s) already exist in profile '{target_profile}':\n\n"
+                + "\n".join(existing[:10])
+                + ("\n…" if len(existing) > 10 else "")
+                + "\n\nReplace them? (No = skip existing)",
+                title="Mods Exist",
+            )
+
+        def _do_copy():
+            copied, skipped = 0, 0
+            for mod_name in mod_names:
+                src_folder = self._staging_root / mod_name
+                if not src_folder.is_dir():
+                    skipped += 1
+                    continue
+                dest_folder = target_staging / mod_name
+                try:
+                    if dest_folder.exists():
+                        if not replace_existing:
+                            skipped += 1
+                            continue
+                        def _force_remove(func, path, _exc):
+                            os.chmod(path, 0o700)
+                            func(path)
+                        shutil.rmtree(dest_folder, onexc=_force_remove)
+                    shutil.copytree(str(src_folder), str(dest_folder))
+                    copied += 1
+                except Exception as exc:
+                    self.after(0, lambda e=exc, n=mod_name: show_error(
+                        "Copy Failed", f"Failed to copy '{n}':\n{e}", parent=self.winfo_toplevel()))
+                    return
+            self.after(0, lambda c=copied, s=skipped: self._log(
+                f"Copied {c} mod(s) → profile '{target_profile}'"
+                + (f" ({s} skipped)" if s else "")))
+
+        threading.Thread(target=_do_copy, daemon=True).start()
 
     def _show_separator_picker_multi(self, indices: list[int], sep_names: list[str],
                                      parent_dismiss=None,

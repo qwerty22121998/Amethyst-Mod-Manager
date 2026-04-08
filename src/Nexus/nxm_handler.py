@@ -218,6 +218,11 @@ class NxmHandler:
 
     @staticmethod
     def _desktop_path() -> Path:
+        # Inside a Flatpak XDG_DATA_HOME is redirected to ~/.var/app/<id>/data,
+        # which the host xdg-mime doesn't search.  Always write to the real
+        # host location so the registration actually takes effect.
+        if Path("/.flatpak-info").exists():
+            return Path.home() / ".local" / "share" / "applications" / _DESKTOP_FILE_NAME
         xdg = os.environ.get("XDG_DATA_HOME")
         base = Path(xdg) if xdg else Path.home() / ".local" / "share"
         return base / "applications" / _DESKTOP_FILE_NAME
@@ -236,14 +241,19 @@ class NxmHandler:
         """
         Build the Exec= line for the .desktop file.
 
-        If we're running from an AppImage, point to the AppImage path.
-        Otherwise, use the current Python interpreter + script.
+        The command must be resolvable on the *host* system (where the browser
+        runs), not inside the sandbox.
         """
+        # Flatpak: the host can't see /app/..., so use `flatpak run <app-id>`
+        flatpak_app_id = os.environ.get("FLATPAK_ID")
+        if flatpak_app_id:
+            return f"flatpak run {flatpak_app_id} --nxm %u"
+
         appimage = os.environ.get("APPIMAGE")
         if appimage:
             return f'"{appimage}" --nxm %u'
 
-        # Running from source — use python + gui.py (or whatever the entry point is)
+        # Running from source — use python + gui.py
         script = Path(sys.argv[0]).resolve()
         return f'"{sys.executable}" "{script}" --nxm %u'
 
@@ -286,30 +296,43 @@ class NxmHandler:
             except OSError as exc:
                 app_log(f"Could not write Flatpak .desktop file: {exc}")
 
-        # Register as default handler
-        if shutil.which("xdg-mime"):
-            try:
-                subprocess.run(
-                    ["xdg-mime", "default", _DESKTOP_FILE_NAME,
-                     "x-scheme-handler/nxm"],
-                    check=True,
-                    capture_output=True,
-                )
-                app_log("Registered nxm:// protocol handler via xdg-mime")
-            except subprocess.CalledProcessError as exc:
-                app_log(f"xdg-mime default failed: {exc.stderr}")
-                return False
+        # Register as default handler.
+        # Inside a Flatpak sandbox xdg-mime is not available directly; use
+        # flatpak-spawn --host to run it on the host system instead.
+        in_flatpak = Path("/.flatpak-info").exists()
+        if in_flatpak and shutil.which("flatpak-spawn"):
+            xdg_mime_cmd = ["flatpak-spawn", "--host", "--directory=/", "xdg-mime"]
+        elif shutil.which("xdg-mime"):
+            xdg_mime_cmd = ["xdg-mime"]
         else:
             app_log("xdg-mime not found — nxm:// handler not registered")
             return False
 
+        try:
+            subprocess.run(
+                [*xdg_mime_cmd, "default", _DESKTOP_FILE_NAME,
+                 "x-scheme-handler/nxm"],
+                check=True,
+                capture_output=True,
+            )
+            app_log("Registered nxm:// protocol handler via xdg-mime")
+        except subprocess.CalledProcessError as exc:
+            app_log(f"xdg-mime default failed: {exc.stderr}")
+            return False
+
         # Refresh the desktop database so Flatpak apps pick up the new entry.
-        if shutil.which("update-desktop-database"):
+        if in_flatpak and shutil.which("flatpak-spawn"):
+            udd_cmd = ["flatpak-spawn", "--host", "--directory=/", "update-desktop-database"]
+            udd_available = True
+        else:
+            udd_cmd = ["update-desktop-database"]
+            udd_available = bool(shutil.which("update-desktop-database"))
+        if udd_available:
             for db_dir in {desktop_path.parent, flatpak_path.parent}:
                 if db_dir.exists():
                     try:
                         subprocess.run(
-                            ["update-desktop-database", str(db_dir)],
+                            [*udd_cmd, str(db_dir)],
                             check=True,
                             capture_output=True,
                         )
