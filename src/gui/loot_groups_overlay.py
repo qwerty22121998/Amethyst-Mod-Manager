@@ -27,6 +27,7 @@ from gui.theme import (
     BORDER,
     FONT_BOLD,
     FONT_NORMAL,
+    FONT_FAMILY,
     FONT_SMALL,
     TEXT_DIM,
     TEXT_MAIN,
@@ -140,7 +141,7 @@ class LootGroupsOverlay(tk.Frame):
             bg=BG_PANEL, fg=TEXT_MAIN, selectbackground=ACCENT,
             selectforeground="white", activestyle="none",
             relief="flat", bd=0, highlightthickness=0,
-            font=("Segoe UI", 11),
+            font=(FONT_FAMILY, 11),
         )
         vsb = tk.Scrollbar(list_frame, orient="vertical",
                            command=self._groups_listbox.yview,
@@ -159,7 +160,7 @@ class LootGroupsOverlay(tk.Frame):
         tk.Entry(
             add_row, textvariable=self._new_group_var,
             bg=BG_PANEL, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", 11),
+            relief="flat", font=(FONT_FAMILY, 11),
             highlightthickness=1, highlightbackground=BORDER,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 6))
 

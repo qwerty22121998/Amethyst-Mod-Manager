@@ -12,26 +12,19 @@ import customtkinter as ctk
 import tkinter as tk
 
 import gui.theme as _theme
-from gui.theme import scaled
+from gui.theme import (
+    ACCENT, ACCENT_HOV, BG_DEEP, BG_HEADER, BG_PANEL, BORDER,
+    TEXT_DIM, TEXT_MAIN,
+    scaled,
+)
 from Utils.profile_backup import list_backups, restore_backup
 
-# ---------------------------------------------------------------------------
-# Colors / fonts (kept in sync with gui.py)
-# ---------------------------------------------------------------------------
-BG_DEEP   = "#1a1a1a"
-BG_PANEL  = "#252526"
-BG_HEADER = "#2a2a2b"
-BG_HOVER  = "#3e3e40"
-ACCENT    = "#0078d4"
-ACCENT_HOV = "#1084d8"
-TEXT_MAIN = "#d4d4d4"
-TEXT_DIM  = "#858585"
-BORDER    = "#444444"
+_BG_HOVER_BTN = "#3e3e40"  # subtle grey hover for buttons (not the blue selection hover)
 
-def _font_normal(): return ("Segoe UI", _theme.FS12)
-def _font_bold():   return ("Segoe UI", _theme.FS12, "bold")
-def _font_small():  return ("Segoe UI", _theme.FS10)
-def _font_list():   return ("Segoe UI", _theme.FS11)
+def _font_normal(): return (_theme.FONT_FAMILY, _theme.FS12)
+def _font_bold():   return (_theme.FONT_FAMILY, _theme.FS12, "bold")
+def _font_small():  return (_theme.FONT_FAMILY, _theme.FS10)
+def _font_list():   return (_theme.FONT_FAMILY, _theme.FS11)
 
 
 class BackupRestorePanel(ctk.CTkFrame):
@@ -65,7 +58,7 @@ class BackupRestorePanel(ctk.CTkFrame):
         ).pack(side="left", padx=scaled(12))
         ctk.CTkButton(
             title_bar, text="\u2715", width=32, height=32, font=_font_bold(),
-            fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            fg_color=BG_PANEL, hover_color=_BG_HOVER_BTN, text_color=TEXT_MAIN,
             command=self._on_cancel,
         ).pack(side="right", padx=scaled(4))
         ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")

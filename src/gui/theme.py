@@ -8,7 +8,7 @@ from pathlib import Path
 import customtkinter as ctk
 from PIL import Image as PilImage
 
-from Utils.ui_config import get_ui_scale
+from Utils.ui_config import get_ui_scale, get_font_family, load_font_family
 
 # ---------------------------------------------------------------------------
 # Color palette
@@ -62,6 +62,11 @@ conflict_lower = "#9a0e0e"
 # ---------------------------------------------------------------------------
 # Fonts
 # ---------------------------------------------------------------------------
+# Font families — loaded from amethyst.ini at startup via load_font_family().
+load_font_family()
+FONT_FAMILY = get_font_family()
+FONT_MONO_FAMILY = "Liberation Mono"
+
 # Base sizes are tuned for Windows/SteamOS at 96 DPI (tk scaling ~1.33).
 # Point sizes are scaled by ui_scale so fonts scale on HiDPI; CustomTkinter
 # does not scale user-provided font tuples.
@@ -72,7 +77,7 @@ def _font_pt(base: int) -> int:
 
 def font_sized(name: str, base_pt: int, *styles: str) -> tuple:
     """Return a font tuple (name, size, *styles) with size scaled by ui_scale.
-    Use for one-off fonts instead of hardcoding e.g. font=(\"Segoe UI\", 11)."""
+    Use for one-off fonts instead of hardcoding e.g. font=(FONT_FAMILY, 11)."""
     return (name, _font_pt(base_pt), *styles)
 
 
@@ -82,12 +87,12 @@ def font_sized_px(name: str, base_pt: int, *styles: str) -> tuple:
     return (name, _pt_to_px(base_pt), *styles)
 
 
-FONT_NORMAL = ("Segoe UI", _font_pt(14))
-FONT_BOLD   = ("Segoe UI", _font_pt(14), "bold")
-FONT_SMALL  = ("Segoe UI", _font_pt(12))
-FONT_MONO   = ("Courier New", _font_pt(14))
-FONT_SEP    = ("Segoe UI", _font_pt(12), "bold")
-FONT_HEADER = ("Segoe UI", _font_pt(12), "bold")
+FONT_NORMAL = (FONT_FAMILY, _font_pt(14))
+FONT_BOLD   = (FONT_FAMILY, _font_pt(14), "bold")
+FONT_SMALL  = (FONT_FAMILY, _font_pt(12))
+FONT_MONO   = (FONT_MONO_FAMILY, _font_pt(14))
+FONT_SEP    = (FONT_FAMILY, _font_pt(12), "bold")
+FONT_HEADER = (FONT_FAMILY, _font_pt(12), "bold")
 
 # Pixel sizes for tk.Label / canvas create_text / ttk.Style font= args.
 # Negative values tell Tk to treat them as pixels rather than points,

@@ -74,6 +74,7 @@ from gui.theme import (
     FONT_SMALL,
     font_sized,
     font_sized_px,
+    FONT_FAMILY,
     scaled,
 )
 
@@ -852,14 +853,14 @@ class CollectionDetailDialog(tk.Frame):
         tk.Label(
             hdr, textvariable=self._name_var,
             bg=BG_HEADER, fg=TEXT_MAIN,
-            font=font_sized_px("Segoe UI", 13, "bold"),
+            font=font_sized_px(FONT_FAMILY, 13, "bold"),
             anchor="w",
         ).pack(side="left", padx=14)
 
         tk.Label(
             hdr, textvariable=self._size_var,
             bg=BG_HEADER, fg=TEXT_DIM,
-            font=font_sized_px("Segoe UI", 10),
+            font=font_sized_px(FONT_FAMILY, 10),
             anchor="e",
         ).pack(side="right", padx=14)
 
@@ -869,7 +870,7 @@ class CollectionDetailDialog(tk.Frame):
         tk.Label(
             rev_frame, text="Revision:",
             bg=BG_HEADER, fg=TEXT_DIM,
-            font=font_sized_px("Segoe UI", 10),
+            font=font_sized_px(FONT_FAMILY, 10),
         ).pack(side="left", padx=(0, 4))
         self._revision_btn = ctk.CTkButton(
             rev_frame,
@@ -883,7 +884,7 @@ class CollectionDetailDialog(tk.Frame):
             border_width=1,
             text_color=TEXT_MAIN,
             text_color_disabled=TEXT_DIM,
-            font=font_sized("Segoe UI", 10),
+            font=font_sized(FONT_FAMILY, 10),
             anchor="w",
             command=self._open_revision_popup,
         )
@@ -893,7 +894,7 @@ class CollectionDetailDialog(tk.Frame):
         self._status_lbl = tk.Label(
             self, textvariable=self._status_var,
             bg=BG_DEEP, fg=TEXT_DIM,
-            font=font_sized_px("Segoe UI", 12),
+            font=font_sized_px(FONT_FAMILY, 12),
             anchor="w", bd=0, highlightthickness=0,
         )
         self._status_lbl.pack(fill="x", side="top", padx=10, pady=(4, 0))
@@ -933,13 +934,13 @@ class CollectionDetailDialog(tk.Frame):
             "CollDetail.Treeview",
             background=BG_PANEL, foreground=TEXT_MAIN,
             fieldbackground=BG_PANEL, rowheight=scaled(24),
-            font=("Segoe UI", _theme.FS9),
+            font=(FONT_FAMILY, _theme.FS9),
             borderwidth=0, relief="flat",
         )
         style.configure(
             "CollDetail.Treeview.Heading",
             background=BG_HEADER, foreground=TEXT_MAIN,
-            font=("Segoe UI", _theme.FS9, "bold"),
+            font=(FONT_FAMILY, _theme.FS9, "bold"),
             borderwidth=0, relief="flat",
         )
         style.map(
@@ -987,7 +988,7 @@ class CollectionDetailDialog(tk.Frame):
         # --- Priority note ---
         self._priority_note = tk.Label(
             self, text="Order = author's install order  (↓ installed last = highest priority)",
-            bg=BG_DEEP, fg=TEXT_DIM, font=font_sized_px("Segoe UI", 8), anchor="w",
+            bg=BG_DEEP, fg=TEXT_DIM, font=font_sized_px(FONT_FAMILY, 8), anchor="w",
         )
         self._priority_note.pack(fill="x", side="top", padx=10, pady=(0, 2))
 
@@ -998,7 +999,7 @@ class CollectionDetailDialog(tk.Frame):
         ctk.CTkButton(
             ftr, text="Close",
             height=scaled(30), fg_color="#3c3c3c", hover_color="#505050",
-            text_color=TEXT_MAIN, font=font_sized("Segoe UI", 10),
+            text_color=TEXT_MAIN, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_close,
         ).pack(side="right", padx=10, pady=6)
@@ -1006,7 +1007,7 @@ class CollectionDetailDialog(tk.Frame):
         self._install_btn = ctk.CTkButton(
             ftr, text="Install Collection",
             height=scaled(30), fg_color="#2d7a2d", hover_color="#3a9e3a",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10, "bold"),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10, "bold"),
             border_width=0,
             command=self._on_install_collection,
         )
@@ -1015,7 +1016,7 @@ class CollectionDetailDialog(tk.Frame):
         ctk.CTkButton(
             ftr, text="Open on Nexus",
             height=scaled(30), fg_color="#3a5a8a", hover_color="#4a70aa",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_open_on_nexus,
         ).pack(side="right", padx=(10, 0), pady=6)
@@ -1023,7 +1024,7 @@ class CollectionDetailDialog(tk.Frame):
         self._open_missing_btn = ctk.CTkButton(
             ftr, text="Open Missing on Nexus",
             height=scaled(30), fg_color="#5a3a00", hover_color="#7a5200",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_open_missing_on_nexus,
         )
@@ -1032,7 +1033,7 @@ class CollectionDetailDialog(tk.Frame):
         self._reset_btn = ctk.CTkButton(
             ftr, text="Reset Load Order",
             height=scaled(30), fg_color="#5a3a00", hover_color="#7a5200",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_reset_load_order,
         )
@@ -1166,7 +1167,7 @@ class CollectionDetailDialog(tk.Frame):
             selectbackground=ACCENT, selectforeground="#ffffff",
             activestyle="none",
             relief="flat", bd=0, highlightthickness=0,
-            font=font_sized_px("Segoe UI", 10),
+            font=font_sized_px(FONT_FAMILY, 10),
         )
         for lbl in labels:
             lb.insert("end", lbl)
@@ -2937,13 +2938,13 @@ class CollectionDetailDialog(tk.Frame):
 
         tk.Label(
             inner, text=f"Installing {mod_count} mods…" if mod_count else "Installing…",
-            font=("Segoe UI", 16, "bold"), fg="#ffffff", bg="#2b2b2b",
+            font=(FONT_FAMILY, 16, "bold"), fg="#ffffff", bg="#2b2b2b",
             bd=0, highlightthickness=0,
         ).pack(pady=(20, 4))
         if profile_name:
             tk.Label(
                 inner, text=f"Profile: {profile_name}",
-                font=("Segoe UI", 12), fg="#aaaaaa", bg="#2b2b2b",
+                font=(FONT_FAMILY, 12), fg="#aaaaaa", bg="#2b2b2b",
                 bd=0, highlightthickness=0,
             ).pack(pady=(0, 4))
 
@@ -2951,7 +2952,7 @@ class CollectionDetailDialog(tk.Frame):
         tk.Label(
             inner, textvariable=self._status_var,
             bg="#2b2b2b", fg="#aaaaaa",
-            font=("Segoe UI", 11), anchor="w", bd=0, highlightthickness=0,
+            font=(FONT_FAMILY, 11), anchor="w", bd=0, highlightthickness=0,
         ).pack(fill="x", padx=16, pady=(6, 2))
 
         # Dedicated overlay progress bar (install progress)
@@ -2965,7 +2966,7 @@ class CollectionDetailDialog(tk.Frame):
         # Download progress section (hidden until downloads start)
         dl_msg_lbl = tk.Label(
             inner, text="", bg="#2b2b2b", fg="#aaaaaa",
-            font=("Segoe UI", 10), anchor="w", bd=0, highlightthickness=0,
+            font=(FONT_FAMILY, 10), anchor="w", bd=0, highlightthickness=0,
         )
         dl_bar = ctk.CTkProgressBar(
             inner, height=6, progress_color=ACCENT,
@@ -2982,7 +2983,7 @@ class CollectionDetailDialog(tk.Frame):
             btn_row, text="Pause",
             height=scaled(28), width=scaled(110),
             fg_color="#7a5a00", hover_color="#a07800",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_pause_install,
         )
@@ -2992,7 +2993,7 @@ class CollectionDetailDialog(tk.Frame):
             btn_row, text="Cancel",
             height=scaled(28), width=scaled(110),
             fg_color="#7a1a1a", hover_color="#a02020",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_cancel_install,
         )
@@ -3079,16 +3080,16 @@ class CollectionDetailDialog(tk.Frame):
 
         tk.Label(
             inner, text="Manual Download Required",
-            font=("Segoe UI", 16, "bold"), fg="#ffffff", bg="#2b2b2b",
+            font=(FONT_FAMILY, 16, "bold"), fg="#ffffff", bg="#2b2b2b",
         ).pack(pady=(20, 2))
         tk.Label(
             inner, text=f"Non-premium users must download each mod manually.",
-            font=("Segoe UI", 10), fg="#aaaaaa", bg="#2b2b2b",
+            font=(FONT_FAMILY, 10), fg="#aaaaaa", bg="#2b2b2b",
         ).pack(pady=(0, 2))
         if profile_name:
             tk.Label(
                 inner, text=f"Profile: {profile_name}",
-                font=("Segoe UI", 11), fg="#aaaaaa", bg="#2b2b2b",
+                font=(FONT_FAMILY, 11), fg="#aaaaaa", bg="#2b2b2b",
             ).pack(pady=(0, 6))
 
         # --- Mod info card ---
@@ -3096,7 +3097,7 @@ class CollectionDetailDialog(tk.Frame):
         card.pack(fill="x", padx=20, pady=(6, 4))
 
         self._manual_mod_name_lbl = tk.Label(
-            card, text="", font=("Segoe UI", 13, "bold"), fg="#ffffff", bg="#333333",
+            card, text="", font=(FONT_FAMILY, 13, "bold"), fg="#ffffff", bg="#333333",
             anchor="w", wraplength=scaled(480),
         )
         self._manual_mod_name_lbl.pack(fill="x", padx=12, pady=(10, 2))
@@ -3104,11 +3105,11 @@ class CollectionDetailDialog(tk.Frame):
         info_row = tk.Frame(card, bg="#333333")
         info_row.pack(fill="x", padx=12, pady=(0, 2))
         self._manual_mod_size_lbl = tk.Label(
-            info_row, text="", font=("Segoe UI", 10), fg="#aaaaaa", bg="#333333", anchor="w",
+            info_row, text="", font=(FONT_FAMILY, 10), fg="#aaaaaa", bg="#333333", anchor="w",
         )
         self._manual_mod_size_lbl.pack(side="left")
         self._manual_mod_badge_lbl = tk.Label(
-            info_row, text="", font=("Segoe UI", 9, "bold"), fg="#ffffff", bg="#2d7a2d",
+            info_row, text="", font=(FONT_FAMILY, 9, "bold"), fg="#ffffff", bg="#2d7a2d",
             padx=6, pady=1,
         )
         self._manual_mod_badge_lbl.pack(side="left", padx=(8, 0))
@@ -3123,7 +3124,7 @@ class CollectionDetailDialog(tk.Frame):
         self._manual_status_var = tk.StringVar(value="Preparing\u2026")
         tk.Label(
             inner, textvariable=self._manual_status_var,
-            bg="#2b2b2b", fg="#aaaaaa", font=("Segoe UI", 10), anchor="w",
+            bg="#2b2b2b", fg="#aaaaaa", font=(FONT_FAMILY, 10), anchor="w",
         ).pack(fill="x", padx=20, pady=(6, 2))
 
         # --- Buttons ---
@@ -3134,7 +3135,7 @@ class CollectionDetailDialog(tk.Frame):
             btn_row, text="Open Download Page",
             height=32, width=200,  # unscaled — CTk applies set_widget_scaling internally
             fg_color=ACCENT, hover_color=ACCENT_HOV,
-            text_color="#ffffff", font=font_sized("Segoe UI", 11),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 11),
             border_width=0,
             command=lambda: None,  # replaced per-mod
         )
@@ -3144,7 +3145,7 @@ class CollectionDetailDialog(tk.Frame):
             btn_row, text="Open next 5",
             height=32, width=110,  # unscaled — CTk applies set_widget_scaling internally
             fg_color="#1a5a8a", hover_color="#2070a8",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=lambda: None,  # replaced per-mod
         )
@@ -3155,7 +3156,7 @@ class CollectionDetailDialog(tk.Frame):
             btn_row, text="Select File\u2026",
             height=32, width=120,  # unscaled — CTk applies set_widget_scaling internally
             fg_color="#444444", hover_color="#555555",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_manual_select_file,
         )
@@ -3165,7 +3166,7 @@ class CollectionDetailDialog(tk.Frame):
             btn_row, text="Skip",
             height=32, width=80,  # unscaled — CTk applies set_widget_scaling internally
             fg_color="#7a5a00", hover_color="#a07800",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_manual_skip,
         )
@@ -3177,7 +3178,7 @@ class CollectionDetailDialog(tk.Frame):
         ctk.CTkCheckBox(
             inner, text="Auto open next mod",
             variable=self._manual_auto_open_var,
-            font=font_sized("Segoe UI", 10),
+            font=font_sized(FONT_FAMILY, 10),
             text_color="#cccccc",
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             border_color="#666666",
@@ -3191,7 +3192,7 @@ class CollectionDetailDialog(tk.Frame):
 
         self._manual_progress_lbl = tk.Label(
             bottom, text=f"0 of {mod_count} mods installed",
-            font=("Segoe UI", 10), fg="#aaaaaa", bg="#2b2b2b", anchor="w",
+            font=(FONT_FAMILY, 10), fg="#aaaaaa", bg="#2b2b2b", anchor="w",
         )
         self._manual_progress_lbl.pack(side="left")
 
@@ -3199,7 +3200,7 @@ class CollectionDetailDialog(tk.Frame):
             bottom, text="Cancel",
             height=28, width=100,  # unscaled — CTk applies set_widget_scaling internally
             fg_color="#7a1a1a", hover_color="#a02020",
-            text_color="#ffffff", font=font_sized("Segoe UI", 10),
+            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_manual_cancel,
         )
@@ -4252,7 +4253,7 @@ class CollectionDetailDialog(tk.Frame):
         tk.Label(
             hdr,
             text=f"Off-site mods ({len(self._offsite_mods)}) — must be downloaded manually:",
-            bg=BG_HEADER, fg=TEXT_DIM, font=font_sized_px("Segoe UI", 9), anchor="w",
+            bg=BG_HEADER, fg=TEXT_DIM, font=font_sized_px(FONT_FAMILY, 9), anchor="w",
         ).pack(side="left", padx=10)
 
         # Scrollable rows
@@ -4293,14 +4294,14 @@ class CollectionDetailDialog(tk.Frame):
 
             tk.Label(
                 row, text=name or url, bg=row_bg, fg=TEXT_MAIN,
-                font=font_sized_px("Segoe UI", 9), anchor="w",
+                font=font_sized_px(FONT_FAMILY, 9), anchor="w",
             ).pack(side="left", padx=(10, 4), fill="x", expand=True)
 
             _url = url  # capture for lambda
             ctk.CTkButton(
                 row, text="Open", width=scaled(55), height=scaled(22),
                 fg_color=ACCENT, hover_color=ACCENT_HOV,
-                text_color="#ffffff", font=font_sized("Segoe UI", 9),
+                text_color="#ffffff", font=font_sized(FONT_FAMILY, 9),
                 border_width=0,
                 command=lambda u=_url: open_url(u),
             ).pack(side="right", padx=6, pady=3)

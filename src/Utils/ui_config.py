@@ -17,7 +17,11 @@ _DEFAULT_SCALE = 1.0
 _MIN_SCALE = 0.5
 _MAX_SCALE = 3.0
 
+_DEFAULT_FONT_FAMILY = "Noto Sans"
+_INI_FONT_OPTION = "font_family"
+
 _ui_scale: float = _DEFAULT_SCALE
+_font_family: str = _DEFAULT_FONT_FAMILY
 
 
 def get_ui_config_path() -> Path:
@@ -128,6 +132,43 @@ def save_ui_scale(scale: float | str) -> None:
 def get_ui_scale() -> float:
     """Return the current ui_scale (call load_ui_scale first at startup)."""
     return _ui_scale
+
+
+def load_font_family() -> str:
+    """Load font_family from INI. Returns the value, or the default if unset."""
+    global _font_family
+    path = get_ui_config_path()
+    if not path.is_file():
+        return _font_family
+    try:
+        parser = configparser.ConfigParser()
+        parser.read(path)
+        value = parser.get(_INI_SECTION, _INI_FONT_OPTION, fallback="").strip()
+        _font_family = value if value else _DEFAULT_FONT_FAMILY
+    except Exception:
+        pass
+    return _font_family
+
+
+def save_font_family(family: str) -> None:
+    """Persist font_family to amethyst.ini [ui] section."""
+    global _font_family
+    _font_family = family.strip() or _DEFAULT_FONT_FAMILY
+    path = get_ui_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parser = configparser.ConfigParser()
+    if path.is_file():
+        parser.read(path)
+    if _INI_SECTION not in parser:
+        parser[_INI_SECTION] = {}
+    parser[_INI_SECTION][_INI_FONT_OPTION] = _font_family
+    with path.open("w") as f:
+        parser.write(f)
+
+
+def get_font_family() -> str:
+    """Return the current font family (call load_font_family first at startup)."""
+    return _font_family
 
 
 def _clamp(value: float) -> float:

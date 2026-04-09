@@ -30,20 +30,11 @@ from wizards.script_extender import (
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
 
-# ---------------------------------------------------------------------------
-# Theme
-# ---------------------------------------------------------------------------
-BG_DEEP    = "#1a1a1a"
-BG_PANEL   = "#252526"
-BG_HEADER  = "#2a2a2b"
-ACCENT     = "#0078d4"
-ACCENT_HOV = "#1084d8"
-TEXT_MAIN  = "#d4d4d4"
-TEXT_DIM   = "#858585"
-
-FONT_NORMAL = ("Segoe UI", 14)
-FONT_BOLD   = ("Segoe UI", 14, "bold")
-FONT_SMALL  = ("Segoe UI", 12)
+from gui.theme import (
+    ACCENT, ACCENT_HOV, BG_DEEP, BG_HEADER, BG_PANEL,
+    TEXT_DIM, TEXT_MAIN,
+    FONT_NORMAL, FONT_BOLD, FONT_SMALL,
+)
 
 _NEXUS_URL       = "https://www.nexusmods.com/morrowind/mods/19510?tab=files&file_id=1000007846"
 _ARCHIVE_KEYWORDS = ["morrowind code patch"]

@@ -1596,7 +1596,7 @@ class PluginPanel(ctk.CTkFrame):
         self._mf_expand_btn = tk.Button(
             toolbar, text="⊞ Expand All",
             bg=BG_PANEL, fg=TEXT_MAIN, activebackground=BG_HOVER,
-            relief="flat", font=("Segoe UI", _theme.FS10),
+            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
             bd=0, cursor="hand2", highlightthickness=0,
             command=self._toggle_mf_tree_expand,
         )
@@ -1605,7 +1605,7 @@ class PluginPanel(ctk.CTkFrame):
         self._mod_files_label = tk.Label(
             toolbar, text="(no mod selected)",
             bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", _theme.FS10),
+            font=(_theme.FONT_FAMILY, _theme.FS10),
             anchor="w",
         )
         self._mod_files_label.pack(side="left", padx=8, pady=4, fill="x", expand=True)
@@ -1651,7 +1651,7 @@ class PluginPanel(ctk.CTkFrame):
         style.configure("ModFiles.Treeview",
             background=_bg, foreground=_fg,
             fieldbackground=_bg, borderwidth=0,
-            rowheight=scaled(22), font=("Segoe UI", _theme.FS10),
+            rowheight=scaled(22), font=(_theme.FONT_FAMILY, _theme.FS10),
             focuscolor=_bg,
         )
         style.map("ModFiles.Treeview",
@@ -1660,7 +1660,7 @@ class PluginPanel(ctk.CTkFrame):
         )
         style.configure("ModFiles.Treeview.Heading",
             background=_bg, foreground=_fg,
-            font=("Segoe UI", _theme.FS10, "bold"), relief="flat",
+            font=(_theme.FONT_FAMILY, _theme.FS10, "bold"), relief="flat",
         )
 
         self._mf_tree = ttk.Treeview(
@@ -1723,7 +1723,7 @@ class PluginPanel(ctk.CTkFrame):
         ctk.CTkButton(
             toolbar, text="↺ Refresh", width=80, height=24,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
-            font=("Segoe UI", _theme.FS10), corner_radius=4,
+            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
             command=self._refresh_ini_files_tab,
         ).pack(side="left", padx=8, pady=2)
 
@@ -1732,7 +1732,7 @@ class PluginPanel(ctk.CTkFrame):
         self._ini_search_entry = tk.Entry(
             toolbar, textvariable=self._ini_search_var,
             bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", _theme.FS10), width=30,
+            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10), width=30,
             highlightthickness=0, highlightbackground=BG_DEEP,
         )
         self._ini_search_entry.pack(side="right", padx=8, pady=3)
@@ -1744,7 +1744,7 @@ class PluginPanel(ctk.CTkFrame):
         self._ini_search_entry.bind("<Control-a>", _ini_select_all)
         tk.Label(
             toolbar, text="Search:", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", _theme.FS10),
+            font=(_theme.FONT_FAMILY, _theme.FS10),
         ).pack(side="right")
 
         # List frame: tree | marker_strip | scrollbar
@@ -1761,7 +1761,7 @@ class PluginPanel(ctk.CTkFrame):
         style.configure(_style_name,
             background=_bg, foreground=_fg,
             fieldbackground=_bg, borderwidth=0,
-            rowheight=scaled(22), font=("Segoe UI", _theme.FS10),
+            rowheight=scaled(22), font=(_theme.FONT_FAMILY, _theme.FS10),
             focuscolor=_bg,
         )
         style.map(_style_name,
@@ -1770,7 +1770,7 @@ class PluginPanel(ctk.CTkFrame):
         )
         style.configure(f"{_style_name}.Heading",
             background=_bg, foreground=_fg,
-            font=("Segoe UI", _theme.FS10, "bold"), relief="flat",
+            font=(_theme.FONT_FAMILY, _theme.FS10, "bold"), relief="flat",
         )
         # Remove the expand/collapse indicator (dark box) — flat list has no hierarchy
         try:
@@ -2299,7 +2299,7 @@ class PluginPanel(ctk.CTkFrame):
         tk.Button(
             toolbar, text="↺ Refresh",
             bg=ACCENT, fg=TEXT_MAIN, activebackground=ACCENT_HOV,
-            relief="flat", font=("Segoe UI", _theme.FS10),
+            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
             bd=0, cursor="hand2", highlightthickness=0,
             command=self._refresh_data_tab,
         ).pack(side="left", padx=(8, 2), pady=2)
@@ -2308,7 +2308,7 @@ class PluginPanel(ctk.CTkFrame):
         self._data_expand_btn = tk.Button(
             toolbar, text="⊞ Expand All",
             bg=BG_PANEL, fg=TEXT_MAIN, activebackground=BG_HOVER,
-            relief="flat", font=("Segoe UI", _theme.FS10),
+            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
             bd=0, cursor="hand2", highlightthickness=0,
             command=self._toggle_data_tree_expand,
         )
@@ -2319,14 +2319,14 @@ class PluginPanel(ctk.CTkFrame):
         search_entry = tk.Entry(
             toolbar, textvariable=self._data_search_var,
             bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", _theme.FS10), width=30,
+            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10), width=30,
             highlightthickness=0, highlightbackground=BG_DEEP,
         )
         search_entry.pack(side="right", padx=8, pady=3)
         search_entry.bind("<Escape>", lambda e: self._data_search_var.set(""))
         tk.Label(
             toolbar, text="Search:", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", _theme.FS10),
+            font=(_theme.FONT_FAMILY, _theme.FS10),
         ).pack(side="right")
 
         self._data_tree = CTkTreeview(
@@ -2854,14 +2854,14 @@ class PluginPanel(ctk.CTkFrame):
         search_bar.grid(row=4, column=0, sticky="ew")
         tk.Label(
             search_bar, text="Search:", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", _theme.FS10),
+            font=(_theme.FONT_FAMILY, _theme.FS10),
         ).pack(side="left", padx=(8, 4), pady=3)
         self._plugin_search_var = tk.StringVar()
         self._plugin_search_var.trace_add("write", self._on_plugin_search_changed)
         _psearch_entry = tk.Entry(
             search_bar, textvariable=self._plugin_search_var,
             bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", _theme.FS10),
+            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
             highlightthickness=0, highlightbackground=BG_DEEP,
         )
         _psearch_entry.pack(side="left", padx=(0, 8), pady=3, fill="x", expand=True)
@@ -2886,9 +2886,9 @@ class PluginPanel(ctk.CTkFrame):
         ul_inner.pack(fill="x", padx=8, pady=(6, 2))
         ul_inner.grid_columnconfigure(1, weight=1)
 
-        _lkw = dict(bg=BG_HEADER, fg=TEXT_DIM, font=("Segoe UI", _theme.FS10))
+        _lkw = dict(bg=BG_HEADER, fg=TEXT_DIM, font=(_theme.FONT_FAMILY, _theme.FS10))
         _ekw = dict(bg=BG_DEEP, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-                    relief="flat", font=("Segoe UI", _theme.FS10),
+                    relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
                     highlightthickness=1, highlightbackground=BORDER)
 
         tk.Label(ul_inner, text="After:", **_lkw).grid(row=0, column=0, sticky="w", padx=(0, 6), pady=2)
@@ -2909,7 +2909,7 @@ class PluginPanel(ctk.CTkFrame):
 
         self._ul_name_label = tk.Label(
             btn_frame, text="", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", _theme.FS10), anchor="w",
+            font=(_theme.FONT_FAMILY, _theme.FS10), anchor="w",
         )
         self._ul_name_label.pack(side="left")
 
@@ -2955,7 +2955,7 @@ class PluginPanel(ctk.CTkFrame):
 
         self._grp_name_label = tk.Label(
             grp_btn_frame, text="", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", _theme.FS10), anchor="w",
+            font=(_theme.FONT_FAMILY, _theme.FS10), anchor="w",
         )
         self._grp_name_label.pack(side="left")
 
@@ -2988,9 +2988,9 @@ class PluginPanel(ctk.CTkFrame):
             missing_strip_id = c.create_rectangle(0, -200, 3, -200,
                                                    fill="#c0392b", outline="", state="hidden")
             name_id = c.create_text(0, -200, text="", anchor="w", fill="",
-                                    font=("Segoe UI", _theme.FS11), state="hidden")
+                                    font=(_theme.FONT_FAMILY, _theme.FS11), state="hidden")
             idx_id = c.create_text(0, -200, text="", anchor="center", fill="",
-                                   font=("Segoe UI", _theme.FS10), state="hidden")
+                                   font=(_theme.FONT_FAMILY, _theme.FS10), state="hidden")
             warn_id: int | None = None
             if self._warning_icon:
                 warn_id = c.create_image(0, -200, image=self._warning_icon,
@@ -3021,7 +3021,7 @@ class PluginPanel(ctk.CTkFrame):
             )
             cb_mark = c.create_text(
                 0, -200, text="✓", anchor="center", fill=ACCENT,
-                font=("Segoe UI", _theme.FS12, "bold"), state="hidden",
+                font=(_theme.FONT_FAMILY, _theme.FS12, "bold"), state="hidden",
                 tags=(cb_tag, "pcb"),
             )
             self._pool_check_rects.append(cb_rect)
@@ -3052,7 +3052,7 @@ class PluginPanel(ctk.CTkFrame):
             else:
                 lk_mark = c.create_text(
                     0, -200, text="🔒", anchor="center", fill=TEXT_MAIN,
-                    font=("Segoe UI", _theme.FS9), state="hidden",
+                    font=(_theme.FONT_FAMILY, _theme.FS9), state="hidden",
                     tags=(lk_tag, "plk"),
                 )
             self._pool_lock_rects.append(lk_rect)
@@ -3295,7 +3295,7 @@ class PluginPanel(ctk.CTkFrame):
             else:
                 lbl = tk.Label(
                     self._pheader, anchor=anchor,
-                    font=("Segoe UI", _theme.FS11, "bold"), fg=TEXT_SEP, bg=BG_HEADER,
+                    font=(_theme.FONT_FAMILY, _theme.FS11, "bold"), fg=TEXT_SEP, bg=BG_HEADER,
                     **({"image": self._icon_lock, "text": ""} if use_img else {"text": title}),
                 )
                 lbl.place(x=col_x[i], y=0, width=cw, height=scaled(28))
@@ -3679,7 +3679,7 @@ class PluginPanel(ctk.CTkFrame):
                 else:
                     name_color = TEXT_MAIN
                 name_max_px = self._pcol_x[2] - self._pcol_x[1] - scaled(4)
-                name_font = ("Segoe UI", _theme.FS11)
+                name_font = (_theme.FONT_FAMILY, _theme.FS11)
                 display_name = _truncate_plugin_name(c, entry.name, name_font, name_max_px)
                 c.coords(self._pool_name[s], self._pcol_x[1], y_mid)
                 c.itemconfigure(self._pool_name[s], text=display_name,
@@ -3952,7 +3952,7 @@ class PluginPanel(ctk.CTkFrame):
         lbl = tk.Label(
             tw, text=text, justify="left",
             bg="#1a1a2e", fg="#ff6b6b",
-            font=("Segoe UI", _theme.FS10), padx=8, pady=4,
+            font=(_theme.FONT_FAMILY, _theme.FS10), padx=8, pady=4,
             wraplength=350,
         )
         lbl.pack()
@@ -4609,7 +4609,7 @@ class PluginPanel(ctk.CTkFrame):
             btn = tk.Label(
                 inner, text=label, anchor="w",
                 bg=BG_PANEL, fg=TEXT_MAIN,
-                font=("Segoe UI", _theme.FS11),
+                font=(_theme.FONT_FAMILY, _theme.FS11),
                 padx=12, pady=5, cursor="hand2",
             )
             btn.pack(fill="x")

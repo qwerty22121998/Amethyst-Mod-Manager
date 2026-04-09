@@ -25,6 +25,7 @@ from gui.theme import (
     TEXT_DIM,
     TEXT_MAIN,
     font_sized,
+    FONT_FAMILY,
     scaled,
 )
 
@@ -96,7 +97,7 @@ class ModCard:
 
         title_label = ctk.CTkLabel(
             self.card, text=title_text,
-            font=font_sized("Segoe UI", 13, "bold"),
+            font=font_sized(FONT_FAMILY, 13, "bold"),
             anchor="w", wraplength=CARD_W - 20, justify="left",
         )
         title_label.grid(row=1, column=0, padx=10, pady=(6, 0), sticky="ew", columnspan=2)
@@ -104,7 +105,7 @@ class ModCard:
         if stats_str:
             stats_label = ctk.CTkLabel(
                 self.card, text=stats_str,
-                font=font_sized("Segoe UI", 11),
+                font=font_sized(FONT_FAMILY, 11),
                 text_color=TEXT_DIM,
                 anchor="w",
             )
@@ -115,7 +116,7 @@ class ModCard:
         if author:
             author_label = ctk.CTkLabel(
                 self.card, text=f"by {author}",
-                font=font_sized("Segoe UI", 11),
+                font=font_sized(FONT_FAMILY, 11),
                 text_color=TEXT_DIM,
                 anchor="w",
             )
@@ -137,7 +138,7 @@ class ModCard:
         view_btn = ctk.CTkButton(
             btn_frame, text="View",
             height=30, fg_color=ACCENT, hover_color=ACCENT_HOV,
-            font=font_sized("Segoe UI", 12), command=on_view,
+            font=font_sized(FONT_FAMILY, 12), command=on_view,
         )
         view_btn.grid(row=0, column=0, padx=(0, 4), sticky="ew")
 
@@ -146,7 +147,7 @@ class ModCard:
             height=30,
             fg_color="#c37800" if is_installed else "#2d7a2d",
             hover_color="#e28b00" if is_installed else "#3a9e3a",
-            font=font_sized("Segoe UI", 12), command=on_install,
+            font=font_sized(FONT_FAMILY, 12), command=on_install,
         )
         install_btn.grid(row=0, column=1, padx=(4, 0), sticky="ew")
 
@@ -213,7 +214,7 @@ class ModCard:
             tk.Label(
                 tw, text=text,
                 bg=BG_DEEP, fg=TEXT_MAIN,
-                font=font_sized("Segoe UI", 11),
+                font=font_sized(FONT_FAMILY, 11),
                 wraplength=scaled(320), justify="left",
                 padx=scaled(8), pady=scaled(6),
             ).pack()

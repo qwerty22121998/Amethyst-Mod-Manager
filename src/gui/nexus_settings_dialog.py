@@ -43,6 +43,7 @@ from gui.theme import (
     FONT_NORMAL,
     FONT_BOLD,
     FONT_SMALL,
+    FONT_FAMILY,
     FONT_MONO,
 )
 
@@ -307,7 +308,7 @@ class NexusSettingsPanel(ctk.CTkFrame):
 
         hdr = ctk.CTkFrame(scroll, fg_color="transparent")
         hdr.pack(fill="x", padx=20, pady=(16, 6))
-        ctk.CTkLabel(hdr, text="✕", font=("Segoe UI", 22, "bold"),
+        ctk.CTkLabel(hdr, text="✕", font=(FONT_FAMILY, 22, "bold"),
                      text_color=TEXT_ERR, width=32).pack(side="left", anchor="n", padx=(0, 10))
         ctk.CTkLabel(hdr, text="No keyring service found on your system.",
                      font=FONT_BOLD, text_color=TEXT_MAIN,

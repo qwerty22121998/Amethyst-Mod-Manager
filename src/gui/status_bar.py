@@ -22,6 +22,7 @@ from Utils.ui_config import (
     load_clear_archive_after_install, save_clear_archive_after_install,
     load_heroic_config_path, save_heroic_config_path,
     load_steam_libraries_vdf_path, save_steam_libraries_vdf_path,
+    load_font_family, save_font_family, get_font_family,
 )
 from gui.ctk_components import CTkProgressPopup, CTkAlert, CTkNotification
 from gui.theme import (
@@ -546,6 +547,30 @@ class SettingsPanel(ctk.CTkFrame):
             command=self._on_auto_toggle,
         ).pack(anchor="w", pady=(6, 0))
 
+        # Font family picker
+        _FONT_OPTIONS = ["Noto Sans", "Cantarell", "DejaVu Sans", "Liberation Sans", "Roboto"]
+        _DEFAULT_FONT = "Noto Sans"
+
+        font_row = ctk.CTkFrame(ui_sec, fg_color="transparent")
+        font_row.pack(anchor="w", pady=(10, 0))
+
+        ctk.CTkLabel(font_row, text="Font:", font=FONT_NORMAL, text_color=TEXT_MAIN,
+                     ).pack(side="left", padx=(0, 8))
+
+        self._font_var = tk.StringVar(value=get_font_family())
+        ctk.CTkOptionMenu(
+            font_row, values=_FONT_OPTIONS, variable=self._font_var,
+            font=FONT_NORMAL, text_color=TEXT_MAIN,
+            fg_color=BG_PANEL, button_color=ACCENT, button_hover_color=ACCENT_HOV,
+            width=scaled(180),
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            font_row, text="Default", width=scaled(70), height=scaled(28),
+            font=FONT_SMALL, fg_color=BG_DEEP, hover_color=BG_HOVER, text_color=TEXT_DIM,
+            command=lambda: self._font_var.set(_DEFAULT_FONT),
+        ).pack(side="left", padx=(8, 0))
+
         ctk.CTkLabel(ui_sec, text="Changes take effect after restart.",
                      font=FONT_SMALL, text_color=TEXT_WARN, anchor="w",
                      ).pack(anchor="w", pady=(8, 0))
@@ -899,6 +924,7 @@ class SettingsPanel(ctk.CTkFrame):
             save_ui_scale("auto")
         else:
             save_ui_scale(round(self._scale_var.get() * 20) / 20)
+        save_font_family(self._font_var.get())
         save_normalize_folder_case(self._norm_case_var.get())
         save_clear_archive_after_install(self._clear_archive_var.get())
         save_collection_settings(
@@ -917,6 +943,7 @@ class SettingsPanel(ctk.CTkFrame):
             save_ui_scale("auto")
         else:
             save_ui_scale(round(self._scale_var.get() * 20) / 20)
+        save_font_family(self._font_var.get())
         save_normalize_folder_case(self._norm_case_var.get())
         save_clear_archive_after_install(self._clear_archive_var.get())
         save_collection_settings(

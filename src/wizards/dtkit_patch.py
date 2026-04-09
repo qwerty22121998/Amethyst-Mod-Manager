@@ -42,21 +42,11 @@ from Utils.dtkit_patch_helper import (
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
 
-# ---------------------------------------------------------------------------
-# Theme constants (kept in sync with gui.py)
-# ---------------------------------------------------------------------------
-BG_DEEP    = "#1a1a1a"
-BG_PANEL   = "#252526"
-BG_HEADER  = "#2a2a2b"
-ACCENT     = "#0078d4"
-ACCENT_HOV = "#1084d8"
-TEXT_MAIN  = "#d4d4d4"
-TEXT_DIM   = "#858585"
-BORDER     = "#444444"
-
-FONT_NORMAL = ("Segoe UI", 14)
-FONT_BOLD   = ("Segoe UI", 14, "bold")
-FONT_SMALL  = ("Segoe UI", 12)
+from gui.theme import (
+    ACCENT, ACCENT_HOV, BG_DEEP, BG_HEADER, BG_PANEL, BORDER,
+    TEXT_DIM, TEXT_MAIN,
+    FONT_NORMAL, FONT_BOLD, FONT_SMALL,
+)
 
 # ---------------------------------------------------------------------------
 # Wizard-only helpers

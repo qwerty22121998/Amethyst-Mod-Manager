@@ -335,14 +335,14 @@ class GamePickerPanel(tk.Frame):
 
         tk.Label(
             title_bar, text="Add Game",
-            font=font_sized_px("Segoe UI", 14, "bold"), fg=TEXT_MAIN, bg=BG_HEADER, anchor="w",
+            font=font_sized_px(_theme.FONT_FAMILY, 14, "bold"), fg=TEXT_MAIN, bg=BG_HEADER, anchor="w",
         ).pack(side="left", padx=scaled(12), pady=scaled(8))
 
         tk.Button(
             title_bar, text="✕  Cancel",
             bg="#6b3333", fg="#ffffff", activebackground="#8c4444",
             activeforeground="#ffffff",
-            relief="flat", font=font_sized_px("Segoe UI", 12),
+            relief="flat", font=font_sized_px(_theme.FONT_FAMILY, 12),
             bd=0, highlightthickness=0, cursor="hand2",
             command=self._on_cancel,
         ).pack(side="right", padx=(scaled(4), scaled(12)), pady=scaled(6))
@@ -353,7 +353,7 @@ class GamePickerPanel(tk.Frame):
         # ---- Subtitle ----
         tk.Label(
             self, text="Select a game to add:",
-            font=font_sized_px("Segoe UI", 14, "bold"), fg=TEXT_MAIN, bg=BG_DEEP, anchor="w",
+            font=font_sized_px(_theme.FONT_FAMILY, 14, "bold"), fg=TEXT_MAIN, bg=BG_DEEP, anchor="w",
         ).grid(row=1, column=0, sticky="ew", padx=scaled(16), pady=(scaled(8), scaled(2)))
 
         # ---- Scrollable canvas ----
@@ -505,14 +505,14 @@ class GamePickerPanel(tk.Frame):
             self._img_refs.append(photo)
             img_lbl = tk.Label(img_frame, image=photo, bg=BG_DEEP)
         else:
-            img_lbl = tk.Label(img_frame, text="?", font=("Segoe UI", 36, "bold"),
+            img_lbl = tk.Label(img_frame, text="?", font=(_theme.FONT_FAMILY, 36, "bold"),
                               fg=TEXT_DIM, bg=BG_DEEP)
         img_lbl.place(relx=0.5, rely=0.5, anchor="center")
         self._img_labels[game_id] = (img_lbl, img_frame)
 
         ctk.CTkLabel(
             card, text=name,
-            font=("Segoe UI", 12, "bold"), text_color=TEXT_MAIN,
+            font=(_theme.FONT_FAMILY, 12, "bold"), text_color=TEXT_MAIN,
             wraplength=scaled(self._CARD_W - 8), anchor="center", justify="center",
         ).grid(row=1, column=0, padx=4, pady=(4, 2), sticky="ew")
 
@@ -933,13 +933,13 @@ class GamePickerPanel(tk.Frame):
             self._img_refs.append(photo)
             img_lbl = tk.Label(img_frame, image=photo, bg=BG_DEEP)
         else:
-            img_lbl = tk.Label(img_frame, text="↓", font=("Segoe UI", 36, "bold"),
+            img_lbl = tk.Label(img_frame, text="↓", font=(_theme.FONT_FAMILY, 36, "bold"),
                                fg=TEXT_DIM, bg=BG_DEEP)
         img_lbl.place(relx=0.5, rely=0.5, anchor="center")
 
         ctk.CTkLabel(
             card, text=display_name,
-            font=("Segoe UI", 12, "bold"), text_color=TEXT_MAIN,
+            font=(_theme.FONT_FAMILY, 12, "bold"), text_color=TEXT_MAIN,
             wraplength=scaled(self._CARD_W - 8), anchor="center", justify="center",
         ).grid(row=1, column=0, padx=4, pady=(4, 2), sticky="ew")
 
@@ -2102,7 +2102,7 @@ class MewgenicsDeployChoicePanel(tk.Frame):
         title_bar.pack_propagate(False)
         tk.Label(
             title_bar, text="Mewgenics — Deploy method",
-            font=font_sized_px("Segoe UI", 13, "bold"),
+            font=font_sized_px(_theme.FONT_FAMILY, 13, "bold"),
             fg=TEXT_MAIN, bg=BG_HEADER, anchor="w",
         ).pack(side="left", padx=scaled(14), pady=scaled(8))
         tk.Button(
@@ -2110,15 +2110,15 @@ class MewgenicsDeployChoicePanel(tk.Frame):
             bg=BG_HEADER, fg=TEXT_DIM, activebackground=BG_HOVER,
             activeforeground=TEXT_MAIN, relief="flat", bd=0,
             highlightthickness=0, cursor="hand2",
-            font=font_sized_px("Segoe UI", 12),
+            font=font_sized_px(_theme.FONT_FAMILY, 12),
             command=lambda: self._on_choice(None),
         ).pack(side="right", padx=scaled(8))
 
         body = tk.Frame(card, bg=BG_PANEL)
         body.pack(fill="both", padx=scaled(16), pady=scaled(12))
 
-        _lbl_font  = font_sized_px("Segoe UI", 12)
-        _desc_font = font_sized_px("Segoe UI", 10)
+        _lbl_font  = font_sized_px(_theme.FONT_FAMILY, 12)
+        _desc_font = font_sized_px(_theme.FONT_FAMILY, 10)
 
         # --- Steam launch command button ---
         ctk.CTkButton(
@@ -2176,7 +2176,7 @@ class MewgenicsLaunchCommandPanel(tk.Frame):
         title_bar.pack_propagate(False)
         tk.Label(
             title_bar, text="Mewgenics — Steam / Lutris launch command",
-            font=font_sized_px("Segoe UI", 13, "bold"),
+            font=font_sized_px(_theme.FONT_FAMILY, 13, "bold"),
             fg=TEXT_MAIN, bg=BG_HEADER, anchor="w",
         ).pack(side="left", padx=scaled(14), pady=scaled(8))
         tk.Button(
@@ -2184,15 +2184,15 @@ class MewgenicsLaunchCommandPanel(tk.Frame):
             bg=BG_HEADER, fg=TEXT_DIM, activebackground=BG_HOVER,
             activeforeground=TEXT_MAIN, relief="flat", bd=0,
             highlightthickness=0, cursor="hand2",
-            font=font_sized_px("Segoe UI", 12),
+            font=font_sized_px(_theme.FONT_FAMILY, 12),
             command=self._on_close,
         ).pack(side="right", padx=scaled(8))
 
         body = tk.Frame(card, bg=BG_PANEL)
         body.pack(fill="both", padx=scaled(16), pady=(scaled(10), 0))
 
-        _lbl_font  = font_sized_px("Segoe UI", 11)
-        _desc_font = font_sized_px("Segoe UI", 10)
+        _lbl_font  = font_sized_px(_theme.FONT_FAMILY, 11)
+        _desc_font = font_sized_px(_theme.FONT_FAMILY, 10)
         _mono_font = font_sized_px("Consolas", 11)
 
         tk.Label(
@@ -2236,14 +2236,14 @@ class MewgenicsLaunchCommandPanel(tk.Frame):
         ctk.CTkButton(
             bar, text="Copy to clipboard",
             width=scaled(140), height=scaled(30),
-            font=font_sized_px("Segoe UI", 11),
+            font=font_sized_px(_theme.FONT_FAMILY, 11),
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._copy,
         ).pack(side="right", padx=(scaled(4), scaled(10)), pady=scaled(8))
         ctk.CTkButton(
             bar, text="Close",
             width=scaled(80), height=scaled(30),
-            font=font_sized_px("Segoe UI", 11),
+            font=font_sized_px(_theme.FONT_FAMILY, 11),
             fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
             command=self._on_close,
         ).pack(side="right", padx=scaled(4), pady=scaled(8))
@@ -2387,7 +2387,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tk.Label(
             outer, text=header,
             bg=BG_PANEL, fg=header_color,
-            font=font_sized_px("Segoe UI", 10, "bold"), anchor="w",
+            font=font_sized_px(_theme.FONT_FAMILY, 10, "bold"), anchor="w",
         ).grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
 
         tree_frame = tk.Frame(outer, bg=BG_DEEP)
@@ -2400,10 +2400,10 @@ class OverwritesPanel(ctk.CTkFrame):
         style.configure(f"{uid}.Treeview",
                         background=BG_DEEP, foreground=TEXT_MAIN,
                         fieldbackground=BG_DEEP, rowheight=scaled(20),
-                        font=font_sized_px("Segoe UI", 9))
+                        font=font_sized_px(_theme.FONT_FAMILY, 9))
         style.configure(f"{uid}.Treeview.Heading",
                         background=BG_HEADER, foreground=TEXT_SEP,
-                        font=font_sized_px("Segoe UI", 9, "bold"), relief="flat")
+                        font=font_sized_px(_theme.FONT_FAMILY, 9, "bold"), relief="flat")
         style.map(f"{uid}.Treeview",
                   background=[("selected", BG_SELECT)],
                   foreground=[("selected", TEXT_MAIN)])
@@ -2451,7 +2451,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tk.Label(
             outer, text=header,
             bg=BG_PANEL, fg=header_color,
-            font=font_sized_px("Segoe UI", 10, "bold"), anchor="w",
+            font=font_sized_px(_theme.FONT_FAMILY, 10, "bold"), anchor="w",
         ).grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
 
         tree_frame = tk.Frame(outer, bg=BG_DEEP)
@@ -2464,10 +2464,10 @@ class OverwritesPanel(ctk.CTkFrame):
         style.configure(f"{uid}.Treeview",
                         background=BG_DEEP, foreground=TEXT_MAIN,
                         fieldbackground=BG_DEEP, rowheight=scaled(20),
-                        font=font_sized_px("Segoe UI", 9))
+                        font=font_sized_px(_theme.FONT_FAMILY, 9))
         style.configure(f"{uid}.Treeview.Heading",
                         background=BG_HEADER, foreground=TEXT_SEP,
-                        font=font_sized_px("Segoe UI", 9, "bold"), relief="flat")
+                        font=font_sized_px(_theme.FONT_FAMILY, 9, "bold"), relief="flat")
         style.map(f"{uid}.Treeview",
                   background=[("selected", BG_SELECT)],
                   foreground=[("selected", TEXT_MAIN)])
@@ -2663,7 +2663,7 @@ class _BENDrRunDialog(ctk.CTkToplevel):
     def _build(self):
         ctk.CTkLabel(
             self, text="BENDr Normal Map Processor",
-            font=("Segoe UI", 16, "bold"), text_color="#d4d4d4",
+            font=(_theme.FONT_FAMILY, 16, "bold"), text_color="#d4d4d4",
         ).pack(pady=(16, 4))
         ctk.CTkLabel(
             self,
@@ -2671,17 +2671,17 @@ class _BENDrRunDialog(ctk.CTkToplevel):
                 "Processes normal maps and parallax textures:\n"
                 "BSA extract → filter → parallax prep → bend normals → BC7 compress"
             ),
-            font=("Segoe UI", 12), text_color="#858585", justify="center",
+            font=(_theme.FONT_FAMILY, 12), text_color="#858585", justify="center",
         ).pack(pady=(0, 12))
 
         ctk.CTkLabel(
             self, text=f"Output: {self._output_dir}",
-            font=("Segoe UI", 11), text_color="#858585", wraplength=440,
+            font=(_theme.FONT_FAMILY, 11), text_color="#858585", wraplength=440,
         ).pack(pady=(4, 12))
 
         ctk.CTkButton(
             self, text="▶  Run BENDr", width=160, height=36,
-            font=("Segoe UI", 13, "bold"),
+            font=(_theme.FONT_FAMILY, 13, "bold"),
             fg_color="#0078d4", hover_color="#1084d8", text_color="white",
             command=self._on_run,
         ).pack(pady=(0, 16))
@@ -2760,7 +2760,7 @@ class _ParallaxRRunDialog(ctk.CTkToplevel):
     def _build(self):
         ctk.CTkLabel(
             self, text="ParallaxR Parallax Texture Processor",
-            font=("Segoe UI", 16, "bold"), text_color="#d4d4d4",
+            font=(_theme.FONT_FAMILY, 16, "bold"), text_color="#d4d4d4",
         ).pack(pady=(16, 4))
         ctk.CTkLabel(
             self,
@@ -2768,17 +2768,17 @@ class _ParallaxRRunDialog(ctk.CTkToplevel):
                 "Processes normal maps and parallax textures:\n"
                 "BSA extract → filter pairs → height maps → output QC"
             ),
-            font=("Segoe UI", 12), text_color="#858585", justify="center",
+            font=(_theme.FONT_FAMILY, 12), text_color="#858585", justify="center",
         ).pack(pady=(0, 12))
 
         ctk.CTkLabel(
             self, text=f"Output: {self._output_dir}",
-            font=("Segoe UI", 11), text_color="#858585", wraplength=440,
+            font=(_theme.FONT_FAMILY, 11), text_color="#858585", wraplength=440,
         ).pack(pady=(4, 12))
 
         ctk.CTkButton(
             self, text="▶  Run ParallaxR", width=160, height=36,
-            font=("Segoe UI", 13, "bold"),
+            font=(_theme.FONT_FAMILY, 13, "bold"),
             fg_color="#0078d4", hover_color="#1084d8", text_color="white",
             command=self._on_run,
         ).pack(pady=(0, 16))
@@ -3776,12 +3776,12 @@ class _SetPrefixDialog(ctk.CTkToplevel):
     game's required folders.  result: ("prefix", path_str) | ("as_is", None) | None
     """
 
-    _FONT_TITLE = ("Segoe UI", 14, "bold")
-    _FONT_BODY  = ("Segoe UI", 13)
-    _FONT_ENTRY = ("Segoe UI", 13)
+    _FONT_TITLE = (_theme.FONT_FAMILY, 14, "bold")
+    _FONT_BODY  = (_theme.FONT_FAMILY, 13)
+    _FONT_ENTRY = (_theme.FONT_FAMILY, 13)
     _FONT_TREE  = ("Courier New", 12)
-    _FONT_BTN   = ("Segoe UI", 13)
-    _FONT_BTN_B = ("Segoe UI", 13, "bold")
+    _FONT_BTN   = (_theme.FONT_FAMILY, 13)
+    _FONT_BTN_B = (_theme.FONT_FAMILY, 13, "bold")
 
     def __init__(self, parent, required_folders: set[str],
                  file_list: list[tuple[str, str, bool]],
@@ -4511,13 +4511,13 @@ class SepColorPanel(ctk.CTkFrame):
         hex_row.grid_columnconfigure(1, weight=1)
         tk.Label(
             hex_row, text="#", bg=BG_DEEP, fg=TEXT_SEP,
-            font=("Segoe UI", 13),
+            font=(_theme.FONT_FAMILY, 13),
         ).grid(row=0, column=0, padx=(0, 2))
         self._hex_var = tk.StringVar()
         self._hex_entry = tk.Entry(
             hex_row, textvariable=self._hex_var,
             bg=BG_PANEL, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", 13), bd=4, width=7,
+            relief="flat", font=(_theme.FONT_FAMILY, 13), bd=4, width=7,
         )
         self._hex_entry.grid(row=0, column=1, sticky="ew")
         self._hex_var.trace_add("write", self._on_hex_typed)
@@ -4915,13 +4915,13 @@ class DeploymentPathsPanel(ctk.CTkFrame):
             f"{_uid}.Treeview",
             background=_tree_bg, foreground=TEXT_MAIN,
             fieldbackground=_tree_bg, rowheight=scaled(22),
-            font=("Segoe UI", _theme.FS10),
+            font=(_theme.FONT_FAMILY, _theme.FS10),
             bordercolor=BG_ROW, borderwidth=1, focuscolor=_tree_bg,
         )
         style.configure(
             f"{_uid}.Treeview.Heading",
             background=BG_HEADER, foreground=TEXT_SEP,
-            font=("Segoe UI", _theme.FS10), borderwidth=0,
+            font=(_theme.FONT_FAMILY, _theme.FS10), borderwidth=0,
         )
         style.map(
             f"{_uid}.Treeview",
@@ -5402,13 +5402,13 @@ class MissingReqsPanel(ctk.CTkFrame):
                 canvas.create_text(
                     NAME_PAD, y_top + scaled(12),
                     text=title[:80] + ("\u2026" if len(title) > 80 else ""),
-                    anchor="w", font=("Segoe UI", _theme.FS11), fill=TEXT_MAIN,
+                    anchor="w", font=(_theme.FONT_FAMILY, _theme.FS11), fill=TEXT_MAIN,
                 )
                 canvas.create_text(
                     NAME_PAD, y_top + scaled(30),
                     text=notes[:120] + ("\u2026" if len(notes) > 120 else ""),
                     anchor="nw", width=name_max_px,
-                    font=("Segoe UI", _theme.FS10), fill=TEXT_DIM,
+                    font=(_theme.FONT_FAMILY, _theme.FS10), fill=TEXT_DIM,
                 )
                 y = y_bot
             total_h = max(y, 1)
@@ -5421,13 +5421,13 @@ class MissingReqsPanel(ctk.CTkFrame):
                 vb = ctk.CTkButton(
                     self, text="View", width=VIEW_W, height=BTN_H,
                     fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="#ffffff",
-                    font=("Segoe UI", _theme.FS10), cursor="hand2",
+                    font=(_theme.FONT_FAMILY, _theme.FS10), cursor="hand2",
                     command=lambda u=url: open_url(u),
                 )
                 ib = ctk.CTkButton(
                     self, text="Install", width=BTN_W, height=BTN_H,
                     fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="#ffffff",
-                    font=("Segoe UI", _theme.FS10), cursor="hand2",
+                    font=(_theme.FONT_FAMILY, _theme.FS10), cursor="hand2",
                     command=lambda r=req: self._on_install(r),
                 )
                 view_btns.append(vb)

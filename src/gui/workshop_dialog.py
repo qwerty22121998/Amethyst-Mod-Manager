@@ -44,6 +44,7 @@ from gui.theme import (
     FS11,
     scaled,
     font_sized,
+    FONT_FAMILY,
 )
 
 _ROW_H   = scaled(26)
@@ -135,7 +136,7 @@ class VersionPickerOverlay(tk.Frame):
         self._col1_x = int(400 * self._COL0_FRAC)
         self._hdr_labels: list[tk.Label] = []
 
-        self._font = font_sized("Segoe UI", 10)
+        self._font = font_sized(FONT_FAMILY, 10)
 
         self._build_ui(mod_name)
         self._create_pool()
@@ -505,12 +506,12 @@ class WorkshopDialog(tk.Frame):
 
         self._canvas_w  = scaled(840)
         self._col_cw, self._col_cx = _compute_col_layout(self._canvas_w)
-        self._font_main = font_sized("Segoe UI", 10, "bold")
-        self._font_small = font_sized("Segoe UI", 9, "bold")
+        self._font_main = font_sized(FONT_FAMILY, 10, "bold")
+        self._font_small = font_sized(FONT_FAMILY, 9, "bold")
 
         global _tk_font_cache
         if _tk_font_cache is None:
-            _tk_font_cache = tkfont.Font(family="Segoe UI", size=10)
+            _tk_font_cache = tkfont.Font(family=FONT_FAMILY, size=10)
 
         self._version_overlay: Optional[VersionPickerOverlay] = None
 
@@ -576,12 +577,12 @@ class WorkshopDialog(tk.Frame):
         search_bar.grid_propagate(False)
 
         tk.Label(search_bar, text="🔍", bg=BG_DEEP, fg=TEXT_DIM,
-                 font=("Segoe UI", FS11)).pack(side="left", padx=(8, 2), pady=4)
+                 font=(FONT_FAMILY, FS11)).pack(side="left", padx=(8, 2), pady=4)
 
         self._search_entry = tk.Entry(
             search_bar,
             bg=BG_PANEL, fg=TEXT_MAIN, insertbackground=TEXT_MAIN,
-            relief="flat", font=("Segoe UI", FS11),
+            relief="flat", font=(FONT_FAMILY, FS11),
             bd=0, highlightthickness=1,
             highlightbackground=BORDER, highlightcolor=ACCENT,
         )

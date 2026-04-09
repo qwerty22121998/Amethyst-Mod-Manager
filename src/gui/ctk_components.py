@@ -34,7 +34,7 @@ from tkinter import ttk
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
-from gui.theme import font_sized_px, scaled
+from gui.theme import font_sized_px, scaled, FONT_FAMILY
 
 try:
     from src.util.CTkGif import CTkGif
@@ -1341,8 +1341,8 @@ class CTkTreeview(ctk.CTkFrame):
                                )
 
         # Use pixel fonts so ttk.Treeview scales on Linux HiDPI (point sizes don't)
-        _tree_font = font_sized_px("Segoe UI", 10)
-        _tree_font_bold = font_sized_px("Segoe UI", 10, "bold")
+        _tree_font = font_sized_px(FONT_FAMILY, 10)
+        _tree_font_bold = font_sized_px(FONT_FAMILY, 10, "bold")
         # rowheight scaled with extra headroom so descenders don't overlap at 1.25x, 1.4x, etc.
         _row_h = scaled(26)
         self.tree_style.configure(self._style_name, background=self.bg_color, foreground=self.text_color,

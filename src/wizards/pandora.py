@@ -30,19 +30,11 @@ from gui.path_utils import _to_wine_path
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
 
-# ---------------------------------------------------------------------------
-# Theme
-# ---------------------------------------------------------------------------
-BG_DEEP    = "#1a1a1a"
-BG_PANEL   = "#252526"
-BG_HEADER  = "#2a2a2b"
-ACCENT     = "#0078d4"
-ACCENT_HOV = "#1084d8"
-TEXT_MAIN  = "#d4d4d4"
-TEXT_DIM   = "#858585"
-
-FONT_NORMAL = ("Segoe UI", 14)
-FONT_BOLD   = ("Segoe UI", 14, "bold")
+from gui.theme import (
+    ACCENT, ACCENT_HOV, BG_DEEP, BG_HEADER, BG_PANEL,
+    TEXT_DIM, TEXT_MAIN,
+    FONT_NORMAL, FONT_BOLD,
+)
 
 _EXE_NAME = "Pandora Behaviour Engine+.exe"
 

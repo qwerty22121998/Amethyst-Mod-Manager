@@ -32,24 +32,11 @@ from Utils.deploy import apply_wine_dll_overrides
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
 
-# ---------------------------------------------------------------------------
-# Theme constants (kept in sync with gui.py)
-# ---------------------------------------------------------------------------
-BG_DEEP    = "#1a1a1a"
-BG_PANEL   = "#252526"
-BG_HEADER  = "#2a2a2b"
-ACCENT     = "#0078d4"
-ACCENT_HOV = "#1084d8"
-TEXT_MAIN  = "#d4d4d4"
-TEXT_DIM   = "#858585"
-TEXT_OK    = "#6bc76b"
-TEXT_WARN  = "#e5a04a"
-TEXT_ERR   = "#e06c6c"
-BORDER     = "#444444"
-
-FONT_NORMAL = ("Segoe UI", 14)
-FONT_BOLD   = ("Segoe UI", 14, "bold")
-FONT_SMALL  = ("Segoe UI", 12)
+from gui.theme import (
+    ACCENT, ACCENT_HOV, BG_DEEP, BG_HEADER, BG_PANEL, BORDER,
+    TEXT_DIM, TEXT_MAIN, TEXT_OK, TEXT_WARN, TEXT_ERR,
+    FONT_NORMAL, FONT_BOLD, FONT_SMALL,
+)
 
 _RESHADE_BASE_URL = "https://reshade.me/downloads/"
 _RESHADE_HOME_URL = "https://reshade.me/"

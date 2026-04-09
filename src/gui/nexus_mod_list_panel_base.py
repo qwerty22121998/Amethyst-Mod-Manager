@@ -29,6 +29,7 @@ from gui.theme import (
     TEXT_MAIN,
     TEXT_DIM,
     FONT_HEADER,
+    FONT_FAMILY,
     FONT_NORMAL,
     FONT_SMALL,
     scaled,
@@ -403,7 +404,7 @@ class _NexusModListPanel:
 
         close_btn = tk.Label(
             header, text="×", bg=BG_HEADER, fg=TEXT_DIM,
-            font=("Segoe UI", 16, "bold"), cursor="hand2",
+            font=(FONT_FAMILY, 16, "bold"), cursor="hand2",
         )
         close_btn.pack(side="right", padx=4)
         close_btn.bind("<Button-1>", lambda _e: self._close_cat_sidebar())
