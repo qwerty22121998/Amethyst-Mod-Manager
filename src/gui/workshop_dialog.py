@@ -794,16 +794,19 @@ class WorkshopDialog(tk.Frame):
                 row["optional"]   = bool(m.get("optional", False))
                 row["source"]     = m.get("source", "nexus")
                 row["direct_url"] = m.get("direct_url", "")
-                if m.get("file_id"):
-                    row["file_id"] = m["file_id"]
-                if m.get("ver_label"):
-                    row["ver_label"] = m["ver_label"]
-                    # Back-fill file_id from ver_label ("fileid — version") if missing.
-                    if not row.get("file_id") and " — " in row["ver_label"]:
-                        try:
-                            row["file_id"] = int(row["ver_label"].split(" — ")[0])
-                        except ValueError:
-                            pass
+                # Only apply file_id / ver_label from the JSON when the mod has no
+                # file_id already set from meta.ini — the installed file takes precedence.
+                if not row.get("file_id"):
+                    if m.get("file_id"):
+                        row["file_id"] = m["file_id"]
+                    if m.get("ver_label"):
+                        row["ver_label"] = m["ver_label"]
+                        # Back-fill file_id from ver_label ("fileid — version") if missing.
+                        if not row.get("file_id") and " — " in row["ver_label"]:
+                            try:
+                                row["file_id"] = int(row["ver_label"].split(" — ")[0])
+                            except ValueError:
+                                pass
             self._apply_filter()
             if not silent:
                 CTkAlert(state="info", title="Workshop",
@@ -1210,6 +1213,7 @@ class WorkshopDialog(tk.Frame):
         if self._search_text:
             q = self._search_text
             rows = [r for r in rows if q in r["name"].lower()]
+        rows.sort(key=lambda r: r["name"].lower())
         self._rows = rows
 
         # Reset pool slots since data_idx mapping changed.
