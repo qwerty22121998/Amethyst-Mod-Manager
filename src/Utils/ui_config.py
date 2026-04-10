@@ -185,11 +185,12 @@ _DEFAULT_MAX_CONCURRENT = 3
 
 
 def load_collection_settings() -> dict:
-    """Return collection settings dict with keys: download_order, max_concurrent."""
+    """Return collection settings dict with keys: download_order, max_concurrent, check_download_locations."""
     path = get_ui_config_path()
     defaults = {
         "download_order": _DEFAULT_DOWNLOAD_ORDER,
         "max_concurrent": _DEFAULT_MAX_CONCURRENT,
+        "check_download_locations": True,
     }
     if not path.is_file():
         return defaults
@@ -204,15 +205,18 @@ def load_collection_settings() -> dict:
             download_order = _DEFAULT_DOWNLOAD_ORDER
         max_concurrent = int(s.get("max_concurrent", str(_DEFAULT_MAX_CONCURRENT)))
         max_concurrent = max(1, min(5, max_concurrent))
+        check_download_locations = s.getboolean("check_download_locations", True)
         return {
             "download_order": download_order,
             "max_concurrent": max_concurrent,
+            "check_download_locations": check_download_locations,
         }
     except Exception:
         return defaults
 
 
-def save_collection_settings(download_order: str, max_concurrent: int) -> None:
+def save_collection_settings(download_order: str, max_concurrent: int,
+                              check_download_locations: bool = True) -> None:
     """Persist collection settings to amethyst.ini."""
     path = get_ui_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -223,6 +227,7 @@ def save_collection_settings(download_order: str, max_concurrent: int) -> None:
         parser[_COLLECTIONS_SECTION] = {}
     parser[_COLLECTIONS_SECTION]["download_order"] = download_order
     parser[_COLLECTIONS_SECTION]["max_concurrent"] = str(max(1, min(5, max_concurrent)))
+    parser[_COLLECTIONS_SECTION]["check_download_locations"] = "true" if check_download_locations else "false"
     with path.open("w") as f:
         parser.write(f)
 

@@ -646,6 +646,18 @@ class SettingsPanel(ctk.CTkFrame):
             font=FONT_NORMAL, text_color=TEXT_MAIN, width=scaled(20))
         self._max_concurrent_lbl.pack(side="left", padx=(6, 0))
 
+        self._check_dl_locations_var = tk.BooleanVar(value=_col_cfg["check_download_locations"])
+        ctk.CTkCheckBox(
+            col_sec, text="Check downloads locations", variable=self._check_dl_locations_var,
+            font=FONT_NORMAL, text_color=TEXT_MAIN,
+        ).pack(anchor="w", pady=(10, 0))
+        ctk.CTkLabel(
+            col_sec,
+            text="When enabled, the system downloads folder and any custom locations\n"
+                 "are scanned before downloading — existing archives are used directly.",
+            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w", justify="left",
+        ).pack(anchor="w", pady=(2, 0))
+
         # ==== General Settings ====
         gen_sec = _begin_section("General Settings")
 
@@ -930,6 +942,7 @@ class SettingsPanel(ctk.CTkFrame):
         save_collection_settings(
             download_order=self._dl_order_from_label.get(self._dl_order_var.get(), "largest"),
             max_concurrent=int(round(self._max_concurrent_var.get())),
+            check_download_locations=self._check_dl_locations_var.get(),
         )
         save_heroic_config_path(self._heroic_path_var.get())
         save_steam_libraries_vdf_path(self._steam_vdf_var.get())
@@ -949,6 +962,7 @@ class SettingsPanel(ctk.CTkFrame):
         save_collection_settings(
             download_order=self._dl_order_from_label.get(self._dl_order_var.get(), "largest"),
             max_concurrent=int(round(self._max_concurrent_var.get())),
+            check_download_locations=self._check_dl_locations_var.get(),
         )
         save_heroic_config_path(self._heroic_path_var.get())
         save_steam_libraries_vdf_path(self._steam_vdf_var.get())

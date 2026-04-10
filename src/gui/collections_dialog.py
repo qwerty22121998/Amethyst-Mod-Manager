@@ -44,7 +44,8 @@ from gui.mod_name_utils import _suggest_mod_names
 from Utils.modlist import write_modlist, read_modlist, ModEntry
 from Utils.filemap import rebuild_mod_index
 from Utils.config_paths import get_download_cache_dir
-from Nexus.nexus_download import delete_archive_and_sidecar
+from Nexus.nexus_download import delete_archive_and_sidecar, DownloadResult, _find_cached_archive, _get_downloads_dir
+from gui.download_locations_overlay import load_extra_download_locations
 from Utils.ui_config import load_clear_archive_after_install
 from Nexus.nexus_meta import build_meta_from_download
 from Utils.xdg import open_url
@@ -2133,6 +2134,12 @@ class CollectionDetailDialog(tk.Frame):
         # different file_ids whose cache lookup resolved to the same file).
         _archive_use_count: dict[str, int] = {}
 
+        # Paths of archives sourced from the system downloads folder or a
+        # user-defined custom location (not the internal download cache).
+        # These are never deleted after install regardless of the
+        # "remove archive after install" setting.
+        _external_archive_paths: set[str] = set()
+
         _install_lock = threading.Lock()
         _install_counters = {"installed": 0, "skipped": 0, "done": 0}
         _install_results: dict[int, str] = {}  # file_id → installed folder name
@@ -2167,17 +2174,65 @@ class CollectionDetailDialog(tk.Frame):
             _ENDERAL_FALLBACKS = {"enderal": "skyrim", "enderalspecialedition": "skyrimspecialedition"}
             result = None
             effective_domain = self._game_domain
-            try:
-                result = downloader.download_file(
-                    game_domain=self._game_domain,
-                    mod_id=mod.mod_id,
-                    file_id=mod.file_id,
-                    progress_cb=_progress_cb,
-                    cancel=_col_cancel,
-                    known_file_name=mod.file_name or "",
-                    expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
-                    dest_dir=get_download_cache_dir(),
+
+            # ------------------------------------------------------------------
+            # Check system downloads folder and custom locations before downloading.
+            # If the archive is already present there, use it in place and skip
+            # the network download entirely.  These paths are never auto-deleted
+            # after install so the user's copy is preserved.
+            # Only runs when the "Check downloads locations" setting is enabled.
+            # ------------------------------------------------------------------
+            _cache_dir_resolved = get_download_cache_dir().resolve()
+            _ext_seen: set = {_cache_dir_resolved}
+            _ext_dirs: list[Path] = []
+            if _col_cfg.get("check_download_locations", True):
+                _sys_dl = _get_downloads_dir()
+                if _sys_dl.resolve() not in _ext_seen and _sys_dl.is_dir():
+                    _ext_dirs.append(_sys_dl)
+                    _ext_seen.add(_sys_dl.resolve())
+                for _xl in load_extra_download_locations():
+                    _xp = Path(_xl).expanduser().resolve()
+                    if _xp not in _ext_seen and Path(_xl).is_dir():
+                        _ext_dirs.append(Path(_xl).expanduser())
+                        _ext_seen.add(_xp)
+            for _ext_dir in _ext_dirs:
+                _ext_found, _ext_complete = _find_cached_archive(
+                    _ext_dir,
+                    mod.file_name or mod.mod_name or "",
+                    getattr(mod, "size_bytes", 0) or 0,
+                    mod.mod_id,
+                    mod.file_id,
                 )
+                if _ext_found and _ext_complete:
+                    self._log(
+                        f"Collection install: '{mod.mod_name}' found in "
+                        f"{_ext_dir} — using local copy, skipping download"
+                    )
+                    result = DownloadResult(
+                        success=True,
+                        file_path=_ext_found,
+                        file_name=_ext_found.name,
+                        bytes_downloaded=_ext_found.stat().st_size,
+                        game_domain=self._game_domain,
+                        mod_id=mod.mod_id,
+                        file_id=mod.file_id,
+                    )
+                    with _install_lock:
+                        _external_archive_paths.add(str(_ext_found))
+                    break
+
+            try:
+                if result is None:
+                    result = downloader.download_file(
+                        game_domain=self._game_domain,
+                        mod_id=mod.mod_id,
+                        file_id=mod.file_id,
+                        progress_cb=_progress_cb,
+                        cancel=_col_cancel,
+                        known_file_name=mod.file_name or "",
+                        expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
+                        dest_dir=get_download_cache_dir(),
+                    )
                 err = result.error or ""
                 is_404 = "No Mod Found" in err or "No File found for mod" in err
                 if not result.success and is_404:
@@ -2334,9 +2389,15 @@ class CollectionDetailDialog(tk.Frame):
                 done_so_far = _install_counters["done"]
 
                 # Delete archive and .fileid sidecar once all consumers of this path are done.
+                # Never delete archives that came from the user's downloads folder or
+                # a custom scan location — those belong to the user, not the cache.
                 if archive_path in _archive_use_count:
                     _archive_use_count[archive_path] -= 1
-                    if _archive_use_count[archive_path] == 0 and load_clear_archive_after_install():
+                    if (
+                        _archive_use_count[archive_path] == 0
+                        and load_clear_archive_after_install()
+                        and archive_path not in _external_archive_paths
+                    ):
                         try:
                             delete_archive_and_sidecar(Path(archive_path))
                         except Exception as _del_exc:
@@ -2459,7 +2520,7 @@ class CollectionDetailDialog(tk.Frame):
 
             # Before processing deferred FOMODs, write a preliminary plugins.txt
             # so that fomod conditions can see plugins from already-installed mods.
-            if _fomod_deferred:
+            if _fomod_deferred and not _col_cancel.is_set():
                 try:
                     import os as _os
                     _plugin_exts = (".esm", ".esl", ".esp")
@@ -2497,7 +2558,7 @@ class CollectionDetailDialog(tk.Frame):
 
             # Process deferred FOMOD mods (those without auto-selections) now that
             # all other mods are installed so their dependencies are available.
-            if _fomod_deferred:
+            if _fomod_deferred and not _col_cancel.is_set():
                 self._log(f"Installing {len(_fomod_deferred)} deferred FOMOD mod(s)…")
                 _set_status(f"Installing {len(_fomod_deferred)} deferred FOMOD mod(s)…")
                 for _def_mod, _def_result, _def_domain in _fomod_deferred:
@@ -2550,11 +2611,16 @@ class CollectionDetailDialog(tk.Frame):
                             self.after(0, lambda fid=_def_mod.file_id: self._mark_row_installed(fid))
                         except Exception:
                             pass
-                    # Clean up archive (decrement use count, delete when it hits zero)
+                    # Clean up archive (decrement use count, delete when it hits zero).
+                    # Skip deletion for archives sourced from user download locations.
                     with _install_lock:
                         if _def_archive in _archive_use_count:
                             _archive_use_count[_def_archive] -= 1
-                            if _archive_use_count[_def_archive] == 0 and load_clear_archive_after_install():
+                            if (
+                                _archive_use_count[_def_archive] == 0
+                                and load_clear_archive_after_install()
+                                and _def_archive not in _external_archive_paths
+                            ):
                                 try:
                                     delete_archive_and_sidecar(Path(_def_archive))
                                 except Exception:
@@ -3945,7 +4011,7 @@ class CollectionDetailDialog(tk.Frame):
                 pass
 
     def _on_cancel_install(self):
-        """Ask for confirmation then cancel the install, wipe the download cache and delete the profile."""
+        """Ask for confirmation then cancel the install and delete the profile."""
         slug = self._collection.slug or ""
         state = _ACTIVE_INSTALLS.get(slug)
         if state is None:
@@ -3955,14 +4021,17 @@ class CollectionDetailDialog(tk.Frame):
         app_root = getattr(self, "_app_root", None)
         alert_parent = app_root if app_root is not None else self
 
+        _body = (
+            "Are you sure you want to cancel?\n\n"
+            "This will stop the install and delete the collection profile."
+        )
+        if load_clear_archive_after_install():
+            _body += " The download cache will also be cleared."
+
         alert = CTkAlert(
             state="warning",
             title="Cancel Install",
-            body_text=(
-                "Are you sure you want to cancel?\n\n"
-                "This will stop the install, clear the download cache, "
-                "and delete the collection profile."
-            ),
+            body_text=_body,
             btn1="Cancel Install",
             btn2="Keep Going",
             parent=alert_parent,
@@ -4027,21 +4096,22 @@ class CollectionDetailDialog(tk.Frame):
             except Exception as exc:
                 self._log(f"Cancel: failed to delete profile dir: {exc}")
 
-        # Clear the download cache
-        try:
-            cache_dir = get_download_cache_dir()
-            if cache_dir and cache_dir.is_dir():
-                for item in cache_dir.iterdir():
-                    try:
-                        if item.is_file() or item.is_symlink():
-                            item.unlink()
-                        elif item.is_dir():
-                            _shutil_cancel.rmtree(str(item), ignore_errors=True)
-                    except Exception:
-                        pass
-                self._log("Cancel: cleared download cache")
-        except Exception as exc:
-            self._log(f"Cancel: failed to clear download cache: {exc}")
+        # Clear the download cache — only if the user has "remove archive after install" enabled.
+        if load_clear_archive_after_install():
+            try:
+                cache_dir = get_download_cache_dir()
+                if cache_dir and cache_dir.is_dir():
+                    for item in cache_dir.iterdir():
+                        try:
+                            if item.is_file() or item.is_symlink():
+                                item.unlink()
+                            elif item.is_dir():
+                                _shutil_cancel.rmtree(str(item), ignore_errors=True)
+                        except Exception:
+                            pass
+                    self._log("Cancel: cleared download cache")
+            except Exception as exc:
+                self._log(f"Cancel: failed to clear download cache: {exc}")
 
         # Switch topbar back to default profile
         try:
