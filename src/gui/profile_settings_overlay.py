@@ -412,15 +412,21 @@ class ProfileSettingsOverlay(tk.Frame):
         if profile_dir.is_dir():
             from gui.game_helpers import profile_uses_specific_mods
             if profile_uses_specific_mods(profile_dir):
-                preserve = {profile_dir / "mods", profile_dir / "modlist.txt"}
-                for child in list(profile_dir.iterdir()):
-                    if child not in preserve:
-                        if child.is_dir():
-                            shutil.rmtree(child)
-                        else:
-                            child.unlink()
-            else:
-                shutil.rmtree(profile_dir)
+                confirm = CTkAlert(
+                    state="warning",
+                    title="Remove Profile",
+                    body_text=(
+                        f"The '{profile}' profile has profile-specific mods.\n\n"
+                        "Removing it will permanently delete its installed mods "
+                        "and modlist. Continue?"
+                    ),
+                    btn1="Remove",
+                    btn2="Cancel",
+                    parent=self.winfo_toplevel(),
+                )
+                if confirm.get() != "Remove":
+                    return
+            shutil.rmtree(profile_dir)
 
         self._log(f"Profile '{profile}' removed.")
 

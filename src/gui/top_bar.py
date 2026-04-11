@@ -616,19 +616,21 @@ class TopBar(ctk.CTkFrame):
         if profile_dir.is_dir():
             from gui.game_helpers import profile_uses_specific_mods
             if profile_uses_specific_mods(profile_dir):
-                # Preserve the profile-specific mods folder and modlist so the
-                # user's installed mods are not lost.
-                preserve = {profile_dir / "mods", profile_dir / "modlist.txt"}
-                for child in list(profile_dir.iterdir()):
-                    if child not in preserve:
-                        if child.is_dir():
-                            shutil.rmtree(child)
-                        else:
-                            child.unlink()
-                # Leave the (now-empty) profile dir itself in place since it
-                # still contains the preserved mods/modlist.
-            else:
-                shutil.rmtree(profile_dir)
+                confirm = CTkAlert(
+                    state="warning",
+                    title="Remove Profile",
+                    body_text=(
+                        f"The '{profile}' profile has profile-specific mods.\n\n"
+                        "Removing it will permanently delete its installed mods "
+                        "and modlist. Continue?"
+                    ),
+                    btn1="Remove",
+                    btn2="Cancel",
+                    parent=self.winfo_toplevel(),
+                )
+                if confirm.get() != "Remove":
+                    return
+            shutil.rmtree(profile_dir)
         self._log(f"Profile '{profile}' removed.")
         profiles = _profiles_for_game(game_name)
         self._profile_menu.configure(values=profiles)
