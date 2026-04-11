@@ -571,6 +571,16 @@ class BaseGame(ABC):
         return False
 
     @property
+    def supports_esl_flag(self) -> bool:
+        """
+        Whether this game supports the ESL (light plugin) flag in TES4 plugin headers.
+        ESL plugins occupy their own FormID space and don't count against the 255‑plugin limit.
+        Supported by: Fallout 4, Fallout 4 VR, Skyrim SE/AE, Skyrim VR, Enderal SE, Starfield.
+        NOT supported by: Fallout 3, Fallout NV, Oblivion, Skyrim LE, Enderal LE, Morrowind.
+        """
+        return False
+
+    @property
     def loot_sort_enabled(self) -> bool:
         """
         Whether LOOT plugin sorting is supported for this game.

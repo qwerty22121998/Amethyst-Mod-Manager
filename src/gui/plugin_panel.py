@@ -69,7 +69,7 @@ from Utils.plugins import (
     sync_plugins_from_filemap,
     prune_plugins_from_filemap,
 )
-from Utils.plugin_parser import check_missing_masters, check_late_masters, check_version_mismatched_masters, read_masters
+from Utils.plugin_parser import check_missing_masters, check_late_masters, check_version_mismatched_masters, read_masters, is_esl_flagged, set_esl_flag, check_esl_eligible
 from LOOT.loot_sorter import sort_plugins as loot_sort, is_available as loot_available
 from Nexus.nexus_meta import write_meta, read_meta
 
@@ -245,6 +245,8 @@ class PluginPanel(ctk.CTkFrame):
         self._pool_lock_rects: list[int] = []
         self._pool_lock_marks: list[int] = []
         self._pool_ul_dot: list[int] = []
+        self._pool_esl_badge: list[int] = []
+        self._esl_flagged_plugins: set[str] = set()  # lowercase plugin names with ESL flag set
         self._userlist_plugins: set[str] = set()
         self._plugin_group_map: dict[str, str] = {}  # plugin name lower → group name
         self._predraw_after_id: str | None = None
@@ -3062,6 +3064,12 @@ class PluginPanel(ctk.CTkFrame):
                                    fill="white", outline="", state="hidden")
             self._pool_ul_dot.append(ul_dot)
 
+            esl_badge = c.create_text(0, -200, text="L", anchor="center",
+                                      fill="#7ec8e3",
+                                      font=(_theme.FONT_FAMILY, _theme.FS9, "bold"),
+                                      state="hidden")
+            self._pool_esl_badge.append(esl_badge)
+
             def _lk_release(e, slot=s):
                 self._on_pool_lock_toggle(slot)
                 return "break"
@@ -3693,9 +3701,10 @@ class PluginPanel(ctk.CTkFrame):
                 has_late = entry.name in self._late_masters
                 has_vmm = entry.name in self._version_mismatch_masters
                 has_ul = entry.name.lower() in self._userlist_plugins
+                has_esl = entry.name.lower() in self._esl_flagged_plugins
                 flags_x0 = self._pcol_x[2]
                 flags_x1 = self._pcol_x[3]
-                active_flags = [f for f in [has_missing, has_late, has_vmm, has_ul] if f]
+                active_flags = [f for f in [has_missing, has_late, has_vmm, has_ul, has_esl] if f]
                 n_flags = len(active_flags)
                 flags_step = (flags_x1 - flags_x0) // (n_flags + 1) if n_flags else 0
                 _flag_pos = iter(
@@ -3735,6 +3744,14 @@ class PluginPanel(ctk.CTkFrame):
                         c.itemconfigure(ul_dot_id, state="normal")
                     else:
                         c.itemconfigure(ul_dot_id, state="hidden")
+
+                esl_badge_id = self._pool_esl_badge[s] if s < len(self._pool_esl_badge) else None
+                if esl_badge_id is not None:
+                    if has_esl:
+                        c.coords(esl_badge_id, next(_flag_pos), y_mid)
+                        c.itemconfigure(esl_badge_id, state="normal")
+                    else:
+                        c.itemconfigure(esl_badge_id, state="hidden")
 
                 self._pool_data_idx[s] = actual_idx
 
@@ -3781,6 +3798,8 @@ class PluginPanel(ctk.CTkFrame):
                     c.itemconfigure(self._pool_vmm_warn[s], state="hidden")
                 if s < len(self._pool_ul_dot):
                     c.itemconfigure(self._pool_ul_dot[s], state="hidden")
+                if s < len(self._pool_esl_badge):
+                    c.itemconfigure(self._pool_esl_badge[s], state="hidden")
                 c.itemconfigure(self._pool_check_rects[s], state="hidden")
                 c.itemconfigure(self._pool_check_marks[s], state="hidden")
                 c.itemconfigure(self._pool_lock_rects[s], state="hidden")
@@ -3936,7 +3955,34 @@ class PluginPanel(ctk.CTkFrame):
             self._version_mismatch_masters = check_version_mismatched_masters(
                 plugin_names, plugin_paths, self._data_dir
             )
+        self._load_esl_flags(plugin_paths)
 
+
+    # ------------------------------------------------------------------
+    # ESL flag helpers
+    # ------------------------------------------------------------------
+
+    def _load_esl_flags(self, plugin_paths: "dict[str, Path]") -> None:
+        """Populate _esl_flagged_plugins from the plugin files on disk.
+
+        Only .esp and .esm files are checked — .esl files are always light
+        by extension and handled separately by the engine.
+        """
+        flagged: set[str] = set()
+        for entry in self._plugin_entries:
+            name_lower = entry.name.lower()
+            # .esl files are always treated as light by the game engine
+            if name_lower.endswith(".esl"):
+                flagged.add(name_lower)
+                continue
+            path = plugin_paths.get(name_lower)
+            if path and path.is_file():
+                try:
+                    if is_esl_flagged(path):
+                        flagged.add(name_lower)
+                except Exception:
+                    pass
+        self._esl_flagged_plugins = flagged
 
     # ------------------------------------------------------------------
     # Tooltip for missing masters
@@ -4578,6 +4624,10 @@ class PluginPanel(ctk.CTkFrame):
 
         count = len(toggleable)
         items = []
+
+        # Check if the current game supports the ESL flag
+        _game_supports_esl = getattr(self._game, "supports_esl_flag", False)
+
         if count == 1:
             items.append(("Enable plugin",
                            lambda idxs=toggleable: self._enable_selected_plugins(idxs)))
@@ -4585,6 +4635,27 @@ class PluginPanel(ctk.CTkFrame):
                            lambda idxs=toggleable: self._disable_selected_plugins(idxs)))
             plugin_name = self._plugin_entries[toggleable[0]].name
             plugin_idx = toggleable[0]
+            # ESL flag toggle — only for .esp/.esm; .esl files are always light
+            if _game_supports_esl and not plugin_name.lower().endswith(".esl"):
+                is_esl = plugin_name.lower() in self._esl_flagged_plugins
+                if is_esl:
+                    items.append(("Remove ESL flag (un-light)",
+                                   lambda idxs=toggleable: self._toggle_esl_flag(idxs, False)))
+                else:
+                    path = self._plugin_paths.get(plugin_name.lower())
+                    if path and path.is_file():
+                        _eligible, _max_obj = check_esl_eligible(path)
+                    else:
+                        _eligible, _max_obj = False, -1
+                    if _eligible:
+                        items.append(("Mark as Light (ESL)",
+                                       lambda idxs=toggleable: self._toggle_esl_flag(idxs, True)))
+                    else:
+                        if _max_obj >= 0:
+                            _reason = f"Not ESL-safe (max ID 0x{_max_obj:X} > 0xFFF — compact in xEdit first)"
+                        else:
+                            _reason = "Not ESL-safe (file unreadable or not a TES4 plugin)"
+                        items.append((_reason, None))
             if plugin_name.lower() not in self._userlist_plugins:
                 items.append(("Add to userlist...",
                                lambda n=plugin_name, i=plugin_idx: self._add_plugin_to_userlist(n, i)))
@@ -4599,6 +4670,42 @@ class PluginPanel(ctk.CTkFrame):
             items.append((f"Disable selected ({count})",
                            lambda idxs=toggleable: self._disable_selected_plugins(idxs)))
             names = [self._plugin_entries[i].name for i in toggleable]
+            # ESL flag toggle for multiple plugins — skip pure .esl files
+            if _game_supports_esl:
+                esl_eligible_idxs = [
+                    i for i in toggleable
+                    if not self._plugin_entries[i].name.lower().endswith(".esl")
+                ]
+                if esl_eligible_idxs:
+                    already_esl = [
+                        i for i in esl_eligible_idxs
+                        if self._plugin_entries[i].name.lower() in self._esl_flagged_plugins
+                    ]
+                    not_esl_raw = [
+                        i for i in esl_eligible_idxs
+                        if self._plugin_entries[i].name.lower() not in self._esl_flagged_plugins
+                    ]
+                    not_esl = []
+                    ineligible_count = 0
+                    for _i in not_esl_raw:
+                        _p = self._plugin_paths.get(self._plugin_entries[_i].name.lower())
+                        if _p and _p.is_file():
+                            _el, _ = check_esl_eligible(_p)
+                            if _el:
+                                not_esl.append(_i)
+                            else:
+                                ineligible_count += 1
+                        else:
+                            ineligible_count += 1
+                    if not_esl:
+                        _suffix = f" ({ineligible_count} ineligible skipped)" if ineligible_count else ""
+                        items.append((f"Mark selected as Light (ESL) ({len(not_esl)}){_suffix}",
+                                       lambda idxs=not_esl: self._toggle_esl_flag(idxs, True)))
+                    elif ineligible_count:
+                        items.append((f"Mark as Light (ESL) — none eligible ({ineligible_count} need xEdit compact)", None))
+                    if already_esl:
+                        items.append((f"Remove ESL flag from selected ({len(already_esl)})",
+                                       lambda idxs=already_esl: self._toggle_esl_flag(idxs, False)))
             items.append(("Add selected to group...",
                            lambda ns=names: self._add_plugins_to_group(ns)))
             if any(n.lower() in self._userlist_plugins for n in names):
@@ -4606,16 +4713,25 @@ class PluginPanel(ctk.CTkFrame):
                                lambda ns=names: self._remove_plugins_from_userlist(ns)))
 
         for label, cmd in items:
-            btn = tk.Label(
-                inner, text=label, anchor="w",
-                bg=BG_PANEL, fg=TEXT_MAIN,
-                font=(_theme.FONT_FAMILY, _theme.FS11),
-                padx=12, pady=5, cursor="hand2",
-            )
-            btn.pack(fill="x")
-            btn.bind("<ButtonRelease-1>", lambda _e, c=cmd: _pick(c))
-            btn.bind("<Enter>", lambda _e, b=btn: b.configure(bg=BG_SELECT))
-            btn.bind("<Leave>", lambda _e, b=btn: b.configure(bg=BG_PANEL))
+            if cmd is None:
+                btn = tk.Label(
+                    inner, text=label, anchor="w",
+                    bg=BG_PANEL, fg=TEXT_DIM,
+                    font=(_theme.FONT_FAMILY, _theme.FS11),
+                    padx=12, pady=5,
+                )
+                btn.pack(fill="x")
+            else:
+                btn = tk.Label(
+                    inner, text=label, anchor="w",
+                    bg=BG_PANEL, fg=TEXT_MAIN,
+                    font=(_theme.FONT_FAMILY, _theme.FS11),
+                    padx=12, pady=5, cursor="hand2",
+                )
+                btn.pack(fill="x")
+                btn.bind("<ButtonRelease-1>", lambda _e, c=cmd: _pick(c))
+                btn.bind("<Enter>", lambda _e, b=btn: b.configure(bg=BG_SELECT))
+                btn.bind("<Leave>", lambda _e, b=btn: b.configure(bg=BG_PANEL))
 
         popup.update_idletasks()
         popup.bind("<Escape>", _dismiss)
@@ -4647,6 +4763,47 @@ class PluginPanel(ctk.CTkFrame):
         self._save_plugins()
         self._check_all_masters()
         self._predraw()
+
+    def _toggle_esl_flag(self, indices: list[int], enable: bool) -> None:
+        """Set or clear the ESL (light plugin) flag for the plugins at *indices*.
+
+        For each plugin:
+        * Skips .esl files (always light by extension — no header change needed).
+        * Skips plugins whose file path is unknown.
+        * When *enable* is True, first checks whether the plugin is ESL-eligible
+          (all new FormIDs ≤ 0xFFF).  If not eligible, logs a warning but still
+          applies the flag if the user has already confirmed — the check is
+          advisory only; the user may know their plugin is safe.
+        """
+        changed = 0
+        for i in indices:
+            if not (0 <= i < len(self._plugin_entries)):
+                continue
+            name = self._plugin_entries[i].name
+            name_lower = name.lower()
+            if name_lower.endswith(".esl"):
+                continue  # .esl files are always light — nothing to toggle
+            path = self._plugin_paths.get(name_lower)
+            if path is None or not path.is_file():
+                self._log(f"  ESL: cannot find file for {name} — skipped.")
+                continue
+            if enable:
+                eligible, max_obj = check_esl_eligible(path)
+                if not eligible:
+                    self._log(f"  ESL: skipped {name} — not eligible (max new object ID 0x{max_obj:X} > 0xFFF, compact in xEdit first).")
+                    continue
+            ok = set_esl_flag(path, enable)
+            if ok:
+                changed += 1
+            else:
+                self._log(f"  ESL: failed to write {name} — file may be read-only.")
+
+        action = "set" if enable else "cleared"
+        if changed:
+            self._log(f"ESL flag {action} for {changed} plugin(s).")
+        if changed:
+            self._check_all_masters()
+            self._predraw()
 
     def _on_pmouse_release(self, event):
         if self._drag_idx >= 0 and self._drag_moved:

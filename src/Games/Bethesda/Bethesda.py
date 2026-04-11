@@ -767,6 +767,8 @@ class Fallout_NV(Fallout_3):
 
 class Fallout_4(Fallout_3):
 
+    supports_esl_flag = True
+
     @property
     def reshade_dll(self) -> str:
         return "dxgi.dll"
@@ -849,6 +851,8 @@ class Fallout_4(Fallout_3):
 
 
 class Fallout_4VR(Fallout_3):
+
+    supports_esl_flag = True
 
     @property
     def reshade_dll(self) -> str:
@@ -1111,6 +1115,8 @@ class Skyrim(Fallout_3):
 
 class SkyrimVR(Fallout_3):
 
+    supports_esl_flag = True
+
     @property
     def reshade_dll(self) -> str:
         return "dxgi.dll"
@@ -1187,6 +1193,8 @@ class SkyrimVR(Fallout_3):
 
 
 class Starfield(Fallout_3):
+
+    supports_esl_flag = True
 
     @property
     def reshade_dll(self) -> str:
@@ -1355,6 +1363,8 @@ class Enderal(Fallout_3):
         ]
 
 class EnderalSE(Fallout_3):
+
+    supports_esl_flag = True
 
     @property
     def name(self) -> str:

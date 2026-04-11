@@ -161,6 +161,134 @@ def read_masters_with_sizes(plugin_path: Path) -> dict[str, int]:
         return {}
 
 
+# ---------------------------------------------------------------------------
+# ESL (Light Master) flag helpers
+# ---------------------------------------------------------------------------
+
+# Bit in the TES4 record header flags field that marks a plugin as "light".
+# Introduced in Fallout 4; also supported by Skyrim SE/VR, Starfield, Enderal SE.
+TES4_FLAG_ESL = 0x0200
+
+# Games that fully support the ESL flag (set by the game panel via supports_esl_flag).
+# This constant is informational — the authoritative gate is the game property.
+_ESL_SUPPORTED_GAME_IDS: frozenset[str] = frozenset({
+    "Fallout4", "Fallout4VR",
+    "SkyrimSE", "SkyrimAE", "skyrimvr",
+    "Starfield",
+    "enderalse",
+})
+
+
+def read_plugin_header_flags(plugin_path: Path) -> int | None:
+    """Return the 32-bit flags from the TES4 record header (bytes 8–11).
+
+    Returns ``None`` on any error or if the file is not a TES4-format plugin.
+    """
+    try:
+        with plugin_path.open("rb") as f:
+            hdr = f.read(12)
+            if len(hdr) < 12 or hdr[0:4] != b"TES4":
+                return None
+            return struct.unpack_from("<I", hdr, 8)[0]
+    except OSError:
+        return None
+
+
+def is_esl_flagged(plugin_path: Path) -> bool:
+    """Return ``True`` if the plugin has the ESL (light) bit set in its TES4 header."""
+    flags = read_plugin_header_flags(plugin_path)
+    return bool(flags is not None and (flags & TES4_FLAG_ESL))
+
+
+def set_esl_flag(plugin_path: Path, enable: bool) -> bool:
+    """Set or clear the ESL flag bit (``0x200``) in a TES4 plugin's header.
+
+    Writes in-place — the plugin file must be writable.  Returns ``True`` on
+    success, ``False`` if the file could not be opened/written or is not a
+    TES4 plugin.
+    """
+    try:
+        with plugin_path.open("r+b") as f:
+            hdr = f.read(12)
+            if len(hdr) < 12 or hdr[0:4] != b"TES4":
+                return False
+            flags = struct.unpack_from("<I", hdr, 8)[0]
+            new_flags = (flags | TES4_FLAG_ESL) if enable else (flags & ~TES4_FLAG_ESL)
+            if new_flags == flags:
+                return True  # Nothing to do
+            f.seek(8)
+            f.write(struct.pack("<I", new_flags))
+        return True
+    except OSError:
+        return False
+
+
+def check_esl_eligible(plugin_path: Path) -> tuple[bool, int]:
+    """Scan a TES4 plugin to determine whether it can safely be ESL-flagged.
+
+    A plugin is ESL-eligible when every record it **defines** (i.e. whose
+    FormID upper byte equals the plugin's own file-index in its master list)
+    has an object-ID (lower 24 bits) of at most ``0xFFF``.  Records that
+    *override* existing masters are always safe because their FormIDs belong
+    to a different file-index slot.
+
+    The scan uses a simple linear traversal of all records in the file:
+
+    * **GRUP** records (24-byte header, ``group_size`` *includes* the header)
+      are never skipped — their children follow immediately in the byte stream.
+    * **Regular** records (24-byte header, ``data_size`` *excludes* the header)
+      yield their FormID and then their data is skipped.
+
+    Returns
+    -------
+    (eligible, max_new_object_id)
+        *eligible*:         ``True`` if the plugin can safely be ESL-flagged.
+        *max_new_object_id*: highest new object-ID found (useful for reporting).
+        Returns ``(False, -1)`` on parse errors or non-TES4 plugins.
+    """
+    try:
+        masters = read_masters(plugin_path)
+        plugin_file_idx = len(masters)
+
+        max_obj_id = 0
+        with plugin_path.open("rb") as f:
+            # Skip the TES4 record entirely:
+            # 8 bytes already read for type + data_size, then 16 more bytes of
+            # header (flags, formID, vc-info) plus `tes4_data_size` bytes of data.
+            hdr = f.read(8)
+            if len(hdr) < 8 or hdr[0:4] != b"TES4":
+                return False, -1
+            tes4_data_size = struct.unpack_from("<I", hdr, 4)[0]
+            f.seek(16 + tes4_data_size, 1)  # skip remaining header bytes + subrecord block
+
+            # Linear scan of all subsequent records.
+            while True:
+                rec_hdr = f.read(24)
+                if len(rec_hdr) < 24:
+                    break
+                rec_type = rec_hdr[0:4]
+                size_field = struct.unpack_from("<I", rec_hdr, 4)[0]
+
+                if rec_type == b"GRUP":
+                    # GRUP: size_field is the TOTAL group size including this 24-byte
+                    # header.  Children follow immediately — do not seek past them.
+                    pass
+                else:
+                    # Regular record: FormID at bytes 12-15, data follows.
+                    form_id = struct.unpack_from("<I", rec_hdr, 12)[0]
+                    if (form_id >> 24) & 0xFF == plugin_file_idx:
+                        obj_id = form_id & 0x00FFFFFF
+                        if obj_id > max_obj_id:
+                            max_obj_id = obj_id
+                    # Skip this record's data block (size_field bytes).
+                    if size_field:
+                        f.seek(size_field, 1)
+
+        return max_obj_id <= 0xFFF, max_obj_id
+    except (OSError, struct.error):
+        return False, -1
+
+
 def check_version_mismatched_masters(
     plugin_names: list[str],
     plugin_paths: dict[str, Path],

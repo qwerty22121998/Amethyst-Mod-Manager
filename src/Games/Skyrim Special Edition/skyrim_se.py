@@ -18,6 +18,8 @@ from Utils.modlist import read_modlist
 
 class SkyrimSE(Fallout_3):
 
+    supports_esl_flag = True
+
     # -----------------------------------------------------------------------
     # Identity
     # -----------------------------------------------------------------------
