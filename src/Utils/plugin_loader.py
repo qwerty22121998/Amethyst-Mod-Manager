@@ -46,14 +46,15 @@ _REQUIRED_KEYS = {"id", "label", "dialog_class"}
 # Discovery
 # ---------------------------------------------------------------------------
 
-def discover_plugins() -> list[dict]:
+def discover_plugins(*, force: bool = False) -> list[dict]:
     """Scan the Plugins directory and return validated plugin descriptors.
 
     Each descriptor is the plugin's ``PLUGIN_INFO`` dict augmented with:
       - ``_resolved_class``: the actual dialog class object
       - ``_source_file``:    path to the ``.py`` file
 
-    Results are cached and only re-scanned when the directory's mtime changes.
+    Results are cached and only re-scanned when the directory's mtime changes,
+    unless *force* is ``True``.
     """
     global _plugins_cache, _plugins_dir_mtime
 
@@ -64,7 +65,7 @@ def discover_plugins() -> list[dict]:
     except OSError:
         return _plugins_cache
 
-    if current_mtime == _plugins_dir_mtime and _plugins_cache:
+    if not force and current_mtime == _plugins_dir_mtime and _plugins_cache:
         return _plugins_cache
 
     plugins: list[dict] = []
@@ -103,6 +104,8 @@ def _load_plugin_file(py_file: Path) -> dict | None:
     if spec is None or spec.loader is None:
         return None
 
+    # Remove previously cached module so updated files are re-executed
+    sys.modules.pop(module_name, None)
     module = importlib.util.module_from_spec(spec)
     sys.modules[module_name] = module
     spec.loader.exec_module(module)

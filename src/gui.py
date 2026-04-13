@@ -304,8 +304,9 @@ class App(ctk.CTk):
         self._handle_nxm_argv()
         # Check for app update after a short delay (non-blocking)
         self.after(2000, self._check_for_app_update)
-        # Silently sync all custom handlers from GitHub on startup
+        # Silently sync all custom handlers and plugins from GitHub on startup
         self.after(3000, self._sync_custom_handlers)
+        self.after(3500, self._sync_plugins)
         icon_path = Path(__file__).parent / "icons" / "title-bar.png"
         if icon_path.is_file():
             icon_img = tk.PhotoImage(file=str(icon_path))
@@ -1920,6 +1921,56 @@ class App(ctk.CTk):
                 panel.refresh()
             except Exception:
                 pass
+
+    def _sync_plugins(self):
+        """Background-download every wizard plugin from GitHub, overwriting stale copies."""
+        import json as _json
+        import urllib.request as _urllib
+        from Utils.config_paths import get_plugins_dir as _gpd
+
+        _PLUGINS_API_URL = (
+            "https://api.github.com/repos/ChrisDKN/Amethyst-Mod-Manager/contents/"
+            "Plugins?ref=main"
+        )
+
+        def _do():
+            try:
+                req = _urllib.Request(
+                    _PLUGINS_API_URL,
+                    headers={"Accept": "application/vnd.github.v3+json"},
+                )
+                with _urllib.urlopen(req, timeout=15) as resp:
+                    data = _json.loads(resp.read().decode("utf-8", errors="replace"))
+                plugins = [
+                    e for e in data
+                    if isinstance(e, dict) and e.get("name", "").endswith(".py")
+                ]
+                changed = False
+                for p in plugins:
+                    filename = p.get("name", "")
+                    download_url = p.get("download_url")
+                    if not download_url:
+                        continue
+                    try:
+                        r = _urllib.Request(
+                            download_url,
+                            headers={"User-Agent": "Amethyst-Mod-Manager"},
+                        )
+                        with _urllib.urlopen(r, timeout=10) as resp:
+                            raw = resp.read().decode("utf-8", errors="replace")
+                        dest = _gpd() / filename
+                        if not dest.is_file() or dest.read_text(encoding="utf-8") != raw:
+                            dest.write_text(raw, encoding="utf-8")
+                            changed = True
+                    except Exception:
+                        pass
+                if changed:
+                    from Utils.plugin_loader import discover_plugins
+                    discover_plugins(force=True)
+            except Exception:
+                pass
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _startup_log(self):
         from Utils.ui_config import get_ui_scale, get_screen_info
