@@ -209,6 +209,19 @@ def get_download_cache_dir() -> Path:
     return d
 
 
+def get_plugins_dir() -> Path:
+    """Return the directory where external wizard plugin scripts are stored.
+
+    Users drop Python scripts here to add custom wizard tools without modifying
+    the application source.
+
+    Result: ~/.config/AmethystModManager/Plugins/
+    """
+    d = get_config_dir() / "Plugins"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def get_download_locations_path() -> Path:
     """Return the path to the extra download scan locations config file.
 

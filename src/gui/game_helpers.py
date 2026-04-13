@@ -10,6 +10,7 @@ from pathlib import Path
 from Games.base_game import BaseGame
 from Utils.config_paths import get_config_dir, get_profiles_dir, get_last_game_path, get_loot_game_dir
 from Utils.game_loader import discover_games
+from Utils.plugin_loader import discover_plugins
 from Utils.profile_state import (
     merge_profile_settings,
     read_profile_settings,
@@ -121,6 +122,7 @@ def _load_games() -> list[str]:
     new_games = discover_games()
     _GAMES.clear()
     _GAMES.update(new_games)
+    discover_plugins()
     for game in _GAMES.values():
         if getattr(game, "loot_sort_enabled", False) and getattr(game, "game_id", None):
             get_loot_game_dir(game.game_id)

@@ -46,6 +46,7 @@ from gui.path_utils import pick_file_mod_archive, pick_files_mod_archive
 from gui.install_mod import install_mod_from_archive, _show_mod_notification
 from gui.add_game_dialog import AddGameDialog
 from gui.wizard_dialog import WizardDialog
+from Utils.plugin_loader import get_all_wizard_tools
 from Utils.config_paths import get_profiles_dir
 from Utils.deploy import deploy_root_folder, restore_root_folder, LinkMode, load_per_mod_strip_prefixes
 from Utils.filemap import build_filemap
@@ -404,7 +405,7 @@ class TopBar(ctk.CTkFrame):
         if game is None or not game.is_configured():
             self._log("Wizard: no configured game selected.")
             return
-        if not game.wizard_tools:
+        if not get_all_wizard_tools(game):
             self._log("Wizard: no tools available for this game.")
             return
         if self._show_wizard_panel_fn:
@@ -416,7 +417,7 @@ class TopBar(ctk.CTkFrame):
     def _update_wizard_visibility(self):
         """Show or hide the Wizard button based on the current game."""
         game = _gh._GAMES.get(self._game_var.get())
-        if game and game.wizard_tools:
+        if game and get_all_wizard_tools(game):
             # Ensure it's packed right after the Proton button
             try:
                 self._wizard_btn.pack(side="left", padx=(0, 8),

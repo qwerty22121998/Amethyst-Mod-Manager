@@ -16,6 +16,8 @@ import customtkinter as ctk
 if TYPE_CHECKING:
     from Games.base_game import BaseGame, WizardTool
 
+from Utils.plugin_loader import get_all_wizard_tools
+
 from gui.theme import (
     BG_DEEP,
     BG_PANEL,
@@ -129,7 +131,7 @@ class WizardDialog(ctk.CTkToplevel):
             text_color=TEXT_DIM,
         ).pack(pady=(0, 8))
 
-        tools = self._game.wizard_tools
+        tools = get_all_wizard_tools(self._game)
         if not tools:
             ctk.CTkLabel(
                 header,
@@ -169,7 +171,8 @@ class WizardDialog(ctk.CTkToplevel):
         log = self._log
         parent = self._parent
         path = tool.dialog_class_path
-        extra = tool.extra
+        extra = dict(tool.extra)
+        pre_resolved = extra.pop("_dialog_class", None)
 
         # Close the picker first
         try:
@@ -181,7 +184,7 @@ class WizardDialog(ctk.CTkToplevel):
         # Resolve and open the tool dialog on the next event-loop tick
         def _launch():
             try:
-                cls = _resolve_dialog_class(path)
+                cls = pre_resolved if pre_resolved is not None else _resolve_dialog_class(path)
                 dlg = cls(parent, game, log, **extra)
                 parent.wait_window(dlg)
             except Exception as exc:
@@ -234,7 +237,7 @@ class WizardPanel(ctk.CTkFrame):
             font=FONT_SMALL, text_color=TEXT_DIM,
         ).pack(pady=(12, 12), anchor="w", padx=16)
 
-        tools = self._game.wizard_tools
+        tools = get_all_wizard_tools(self._game)
         if not tools:
             ctk.CTkLabel(
                 body, text="No tools available for this game.",
@@ -264,14 +267,15 @@ class WizardPanel(ctk.CTkFrame):
         game = self._game
         log = self._log
         path = tool.dialog_class_path
-        extra = tool.extra
+        extra = dict(tool.extra)
+        pre_resolved = extra.pop("_dialog_class", None)
         on_open_tool = self._on_open_tool
 
         self._on_done(self)
 
         def _launch():
             try:
-                cls = _resolve_dialog_class(path)
+                cls = pre_resolved if pre_resolved is not None else _resolve_dialog_class(path)
                 if on_open_tool is not None:
                     on_open_tool(cls, game, log, extra)
                 else:
