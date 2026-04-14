@@ -1,0 +1,90 @@
+{
+  "name": "7 Days to Die",
+  "game_id": "7_Days_to_Die",
+  "exe_name": "test.exe",
+  "deploy_type": "standard",
+  "mod_data_path": "Mods",
+  "steam_id": "251570",
+  "editable": false,
+  "nexus_game_domain": "7daystodie",
+  "image_url": "https://cdn2.steamgriddb.com/icon/cab8961422e0f17f3795d82388e9204b/32/256x256.png",
+  "mod_folder_strip_prefixes": [
+    "Mods"
+  ],
+  "conflict_ignore_filenames": [
+    "*.txt"
+  ],
+  "mod_folder_strip_prefixes_post": [],
+  "mod_install_prefix": "",
+  "mod_required_top_level_folders": [],
+  "mod_auto_strip_until_required": false,
+  "mod_required_file_types": [],
+  "mod_install_as_is_if_no_match": false,
+  "restore_before_deploy": true,
+  "normalize_folder_case": true,
+  "wine_dll_overrides": {},
+  "custom_routing_rules": [
+    {
+      "dest": "",
+      "folders": [
+        "Data"
+      ]
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".mesh"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".ins"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".tts"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".xml"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".nim"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".jpg"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "Data/Prefabs",
+      "extensions": [
+        ".bak"
+      ],
+      "loose_only": true
+    },
+    {
+      "dest": "7DaysToDie_Data",
+      "extensions": [
+        ".assets"
+      ]
+    }
+  ],
+  "custom_frameworks": {}
+}
