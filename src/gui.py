@@ -314,9 +314,13 @@ class App(ctk.CTk):
 
         # Global click handler: defocus text entry widgets when clicking
         # outside of them, so search bars etc. don't stay focused.
-        # Runs after widget/class bindings (bindtag "all" order) so widgets
-        # that return "break" from their own ButtonPress still work.
+        # Runs on bindtag "all" (after widget/class/toplevel bindings). Widgets
+        # that return "break" from their own <Button-1> (e.g. canvas tag_bind
+        # checkboxes in the modlist) would suppress us — so we hook both press
+        # and release. Release rarely returns "break" in this codebase, so it
+        # catches the cases press misses.
         self.bind_all("<ButtonPress-1>", self._defocus_on_outside_click, add="+")
+        self.bind_all("<ButtonRelease-1>", self._defocus_on_outside_click, add="+")
 
         # Global keyboard shortcuts (F2 rename, Ctrl+D deploy, Ctrl+R restore,
         # Up/Down reorder selection).

@@ -2053,6 +2053,10 @@ class ModListPanel(ctk.CTkFrame):
             self._pool_cb_rect.append(rect_id)
             self._pool_cb_mark.append(mark_id)
             def _cb_press(e, slot=s):
+                # Canvas tag_bind fires before bindtag "all", so the global
+                # defocus handler in gui.App won't run here. Defocus manually
+                # so clicking a row checkbox blurs the search entry.
+                self._defocus_text_inputs()
                 return "break"
             def _cb_release(e, slot=s):
                 self._on_pool_check_toggle(slot)
@@ -2934,6 +2938,20 @@ class ModListPanel(ctk.CTkFrame):
             0, line_y, cw, line_y,
             fill=ACCENT, width=2, tags="drag_overlay",
         )
+
+    def _defocus_text_inputs(self):
+        """Blur any focused Entry/Text by moving focus to the toplevel.
+        Used by handlers that return "break" and so bypass the global
+        defocus hook in gui.App.
+        """
+        try:
+            focused = self.focus_get()
+            if focused is None:
+                return
+            if focused.winfo_class() in ("Entry", "TEntry", "Text", "TCombobox", "Spinbox", "TSpinbox"):
+                self.winfo_toplevel().focus_set()
+        except Exception:
+            pass
 
     def _on_search_change(self, _event=None):
         # Ignore key events that fire after focus has left the search entry
