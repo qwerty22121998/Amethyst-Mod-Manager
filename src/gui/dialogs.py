@@ -4,6 +4,7 @@ Uses theme, path_utils; does not import panels or App to avoid circular imports.
 """
 
 import colorsys
+from itertools import count
 import json
 import os
 import re
@@ -2157,7 +2158,7 @@ class _ExeConfigDialog(ctk.CTkToplevel):
                  deploy_before_launch: "bool | None" = None,
                  is_hidden: bool = False, proton_override: "str | None" = None,
                  is_data_folder_exe: bool = False, is_apps_exe: bool = False,
-                 log_fn=None):
+                 xwayland: bool = False, log_fn=None):
         super().__init__(parent, fg_color=BG_DEEP)
         self.title(f"Configure: {exe_path.name}")
         self.geometry("480x180" if launch_mode is not None else "640x460")
@@ -2173,6 +2174,7 @@ class _ExeConfigDialog(ctk.CTkToplevel):
         self.removed: bool = False
         self.proton_override: "str | None" = None
         self.data_folder_exe: "bool | None" = None
+        self.xwayland: bool = False
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -2186,6 +2188,7 @@ class _ExeConfigDialog(ctk.CTkToplevel):
             self.removed = panel.removed
             self.proton_override = panel.proton_override
             self.data_folder_exe = panel.data_folder_exe
+            self.xwayland = panel.xwayland
             self._on_close()
 
         self._panel = ExeConfigPanel(
@@ -2195,7 +2198,7 @@ class _ExeConfigDialog(ctk.CTkToplevel):
             deploy_before_launch=deploy_before_launch, is_hidden=is_hidden,
             on_done=_on_done, proton_override=proton_override,
             is_data_folder_exe=is_data_folder_exe, is_apps_exe=is_apps_exe,
-            log_fn=log_fn,
+            xwayland=xwayland, log_fn=log_fn,
         )
         self._panel.grid(row=0, column=0, sticky="nsew")
 
@@ -2231,7 +2234,7 @@ class ExeConfigPanel(ctk.CTkFrame):
                  deploy_before_launch: "bool | None" = None,
                  is_hidden: bool = False, on_done=None, proton_override: "str | None" = None,
                  is_data_folder_exe: bool = False, is_apps_exe: bool = False,
-                 log_fn=None):
+                 xwayland: bool = False, log_fn=None):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
         self._log = log_fn or print
 
@@ -2246,6 +2249,7 @@ class ExeConfigPanel(ctk.CTkFrame):
         )
         self._hide_var = tk.BooleanVar(value=is_hidden)
         self._data_folder_var = tk.BooleanVar(value=is_data_folder_exe)
+        self._xwayland_var = tk.BooleanVar(value=xwayland)
         self._is_apps_exe = is_apps_exe
         self._on_done = on_done or (lambda p: None)
         self.result: "str | None" = None
@@ -2255,8 +2259,7 @@ class ExeConfigPanel(ctk.CTkFrame):
         self.removed: bool = False
         self.proton_override: "str | None" = None
         self.data_folder_exe: "bool | None" = None
-
-        # Proton version dropdown (non-launcher exes only)
+        self.xwayland: bool = False
         from Utils.steam_finder import list_installed_proton
         self._proton_versions: list[str] = (
             ["Game default"] + [p.parent.name for p in list_installed_proton()]
@@ -2337,10 +2340,11 @@ class ExeConfigPanel(ctk.CTkFrame):
         body.grid_columnconfigure(0, weight=1)
 
         is_game_exe = self._initial_launch_mode is not None
+        main_total_row = count(start=0)
 
         if not is_game_exe:
             sec1 = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
-            sec1.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 4))
+            sec1.grid(row=next(main_total_row), column=0, sticky="ew", padx=12, pady=(12, 4))
             sec1.grid_columnconfigure(1, weight=1)
 
             ctk.CTkLabel(
@@ -2364,7 +2368,7 @@ class ExeConfigPanel(ctk.CTkFrame):
             ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 8))
 
             sec2 = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
-            sec2.grid(row=1, column=0, sticky="ew", padx=12, pady=4)
+            sec2.grid(row=next(main_total_row), column=0, sticky="ew", padx=12, pady=4)
             sec2.grid_columnconfigure(1, weight=1)
 
             ctk.CTkLabel(
@@ -2410,7 +2414,7 @@ class ExeConfigPanel(ctk.CTkFrame):
             self._mod_var.trace_add("write", self._on_mod_typed)
 
             sec3 = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
-            sec3.grid(row=2, column=0, sticky="ew", padx=12, pady=4)
+            sec3.grid(row=next(main_total_row), column=0, sticky="ew", padx=12, pady=4)
             sec3.grid_columnconfigure(0, weight=1)
 
             ctk.CTkLabel(
@@ -2425,9 +2429,30 @@ class ExeConfigPanel(ctk.CTkFrame):
             )
             self._final_box.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
 
-            # Proton version section
+            # Wayland compatible setion
+            sec_wayland = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
+            sec_wayland.grid(row=next(main_total_row), column=0, sticky="ew", padx=12, pady=4)
+            sec_wayland.grid_columnconfigure(1, weight=1)
+            ctk.CTkLabel(
+                sec_wayland, text="Wayland compatibility", font=FONT_BOLD,
+                text_color=TEXT_MAIN, anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=10, pady=(8, 4))
+            ctk.CTkCheckBox(
+                sec_wayland, text="Enable XWayland",
+                variable=self._xwayland_var,
+                font=FONT_SMALL, text_color=TEXT_MAIN,
+                fg_color=ACCENT, hover_color=ACCENT_HOV, border_color=BORDER,
+                checkmark_color=BG_DEEP,
+            ).grid(row=1, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 4))
+            ctk.CTkLabel(
+                sec_wayland,
+                text="May fix Wayland/Proton compatibility issues such as invisible dropdowns.",
+                font=FONT_SMALL, text_color=TEXT_DIM, anchor="w", justify="left",
+            ).grid(row=2, column=0, columnspan=2, sticky="ew", padx=10, pady=(0, 8))
+
+        # Proton version section
             sec_proton = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
-            sec_proton.grid(row=3, column=0, sticky="ew", padx=12, pady=4)
+            sec_proton.grid(row=next(main_total_row), column=0, sticky="ew", padx=12, pady=4)
             sec_proton.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(
                 sec_proton, text="Proton version", font=FONT_BOLD,
@@ -2464,7 +2489,7 @@ class ExeConfigPanel(ctk.CTkFrame):
 
         if is_game_exe:
             sec4 = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=6)
-            sec4.grid(row=0, column=0, sticky="ew", padx=12, pady=(12, 4))
+            sec4.grid(row=next(main_total_row), column=0, sticky="ew", padx=12, pady=(12, 4))
             sec4.grid_columnconfigure(1, weight=1)
             ctk.CTkLabel(
                 sec4, text="Launch via", font=FONT_BOLD,
@@ -2493,7 +2518,7 @@ class ExeConfigPanel(ctk.CTkFrame):
             ).grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 8))
 
         bar = ctk.CTkFrame(body, fg_color=BG_PANEL, corner_radius=0, height=48)
-        bar.grid(row=1 if is_game_exe else 4, column=0, sticky="ew")
+        bar.grid(row=next(main_total_row), column=0, sticky="ew")
         bar.grid_propagate(False)
         ctk.CTkFrame(bar, fg_color=BORDER, height=1, corner_radius=0).pack(
             side="top", fill="x"
@@ -2815,6 +2840,7 @@ class ExeConfigPanel(ctk.CTkFrame):
             self.proton_override = "" if selected == "Game default" else selected
             if not self._is_apps_exe:
                 self.data_folder_exe = self._data_folder_var.get()
+        self.xwayland = self._xwayland_var.get()
         self._on_done(self)
 
     def _on_remove(self):
@@ -5091,4 +5117,3 @@ class _UserlistEntryDialog(ctk.CTkToplevel):
 
     def _on_cancel(self):
         self.destroy()
-

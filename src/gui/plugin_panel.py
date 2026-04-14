@@ -719,6 +719,32 @@ class PluginPanel(ctk.CTkFrame):
         data["__deploy_before_launch"] = enabled
         p.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
+    def _load_xwayland(self, exe_name: str) -> bool:
+        """Return whether XWayland is enabled for exe_name (default False)."""
+        p = self._get_launch_mode_path()
+        if p is None or not p.is_file():
+            return False
+        try:
+            return bool(json.loads(p.read_text(encoding="utf-8")).get(f"__xwayland_{exe_name}", False))
+        except (OSError, ValueError):
+            return False
+
+    def _save_xwayland(self, exe_name: str, enabled: bool) -> None:
+        p = self._get_launch_mode_path()
+        if p is None:
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else {}
+        except (OSError, ValueError):
+            data = {}
+        key = f"__xwayland_{exe_name}"
+        if enabled:
+            data[key] = True
+        else:
+            data.pop(key, None)
+        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
     def _is_game_exe(self, exe_path: "Path") -> bool:
         """Return True if exe_path is this game's own launcher exe, preferred launch exe,
         or a framework executable (e.g. script extender) that should launch via Steam."""
@@ -936,6 +962,7 @@ class PluginPanel(ctk.CTkFrame):
         saved_launch_mode = self._load_launch_mode(exe_path.name) if is_game_exe else None
         deploy_before_launch = self._load_deploy_before_launch() if is_game_exe else None
         saved_proton_override = self._load_proton_override(exe_path.name) if not is_game_exe else None
+        xwayland = self._load_xwayland(exe_path.name)
         # Determine current hidden state from user filter (builtin filter names
         # are always hidden and can't be toggled, so we only look at the user list).
         user_filter = {n.lower() for n in self._load_exe_filter()}
@@ -976,6 +1003,7 @@ class PluginPanel(ctk.CTkFrame):
             if r.data_folder_exe is not None:
                 self._save_data_folder_exe(exe_path.name, r.data_folder_exe)
                 self.refresh_exe_list()
+            self._save_xwayland(exe_path.name, r.xwayland)
 
         app = self.winfo_toplevel()
         show_fn = getattr(app, "show_exe_config_panel", None)
@@ -986,7 +1014,7 @@ class PluginPanel(ctk.CTkFrame):
                 deploy_before_launch=deploy_before_launch, is_hidden=is_hidden,
                 proton_override=saved_proton_override,
                 is_data_folder_exe=is_data_folder_exe, is_apps_exe=_is_apps,
-                log_fn=self._log,
+                xwayland=xwayland, log_fn=self._log,
                 on_done=_handle_result,
             )
         else:
@@ -1002,6 +1030,7 @@ class PluginPanel(ctk.CTkFrame):
                 proton_override=saved_proton_override,
                 is_data_folder_exe=is_data_folder_exe,
                 is_apps_exe=_is_apps,
+                xwayland=xwayland,
                 log_fn=self._log,
             )
             self.winfo_toplevel().wait_window(dialog)
@@ -1269,6 +1298,8 @@ class PluginPanel(ctk.CTkFrame):
         env = os.environ.copy()
         env["STEAM_COMPAT_DATA_PATH"] = str(compat_data)
         env["STEAM_COMPAT_CLIENT_INSTALL_PATH"] = str(steam_root)
+        env["PROTON_ENABLE_WAYLAND"] = "1" if self._load_xwayland(exe_path.name) else "0"
+
         # Proton expects these to locate the game install and per-game shader/compat caches.
         # Without them GE-Proton (and others) fall back to app ID 0 / skip library detection.
         game_path = game.get_game_path() if hasattr(game, "get_game_path") else None
