@@ -705,16 +705,19 @@ def build_filemap(
     _excluded: dict[str, set[str]] = excluded_mod_files or {}
 
     # Single-pass merge: priority order (low→high) so later mods overwrite earlier ones.
-    # Simultaneously builds filemap_winner, filemap, overrides/overridden_by, win_count.
+    # Root-flagged mods get their own independent winner namespace (they deploy to
+    # the game root, not Data/, so they should conflict only among themselves).
+    # Both namespaces share priority_order, overrides/overridden_by, and win_count
+    # so the UI still shows conflicts for root-flagged mods.
     filemap_winner: dict[str, str] = {}
     filemap: dict[str, tuple[str, str]] = {}
-    filemap_root: dict[str, tuple[str, str]] = {}   # root-destined files (root_folder_mods)
+    filemap_root_winner: dict[str, str] = {}
+    filemap_root: dict[str, tuple[str, str]] = {}
     overrides:     dict[str, set[str]] = {s: set() for s in priority_order}
     overridden_by: dict[str, set[str]] = {s: set() for s in priority_order}
     win_count: dict[str, int] = {}
-    # Track which mods had at least one active file (for conflict status "no files" check).
     mods_with_files: set[str] = set()
-    # Separate winner dict keyed by the effective deploy path (for conflict detection).
+    # Effective-deploy-path winner dict (only used for normal/Data/ namespace).
     # When conflict_key_fn is provided (e.g. UE5 routing), two staged paths that land
     # at the same game location are treated as conflicting even if their staged keys differ.
     conflict_winner: dict[str, str] = {}
@@ -739,42 +742,35 @@ def build_filemap(
             continue
         exc = _excluded.get(name)
         had_file = False
+        _is_root_mod = bool(root_folder_mods and name in root_folder_mods)
+        # Pick which namespace this mod writes into.
+        _winner_ns = filemap_root_winner if _is_root_mod else filemap_winner
+        _map_ns    = filemap_root        if _is_root_mod else filemap
         for rel_key, rel_str in normal.items():
             if exc and rel_key in exc:
                 continue
             if _is_ignored(rel_key):
                 continue
             had_file = True
-            # Root-flagged mods deploy to game root instead of Data/.
-            _is_root_mod = root_folder_mods and name in root_folder_mods
-            if _is_root_mod:
-                filemap_root[rel_key] = (rel_str, name)
-                win_count[name] = win_count.get(name, 0) + 1
-                continue
-            prev = filemap_winner.get(rel_key)
+            prev = _winner_ns.get(rel_key)
             if prev is not None:
                 win_count[prev] = win_count.get(prev, 0) - 1
-                # conflict tracking (staged-key level)
                 overrides[name].add(prev)
                 overridden_by[prev].add(name)
-            filemap_winner[rel_key] = name
-            filemap[rel_key] = (rel_str, name)
+            _winner_ns[rel_key] = name
+            _map_ns[rel_key] = (rel_str, name)
             win_count[name] = win_count.get(name, 0) + 1
-            # Conflict detection on effective deploy path when a key transform is provided.
-            # Two mods whose staged paths differ but resolve to the same game location
-            # are treated as conflicting; the lower-priority entry is removed from the
-            # filemap so the data tab and deploy both reflect the actual winner.
-            if conflict_key_fn is not None:
+            # Effective-deploy-path conflict detection only applies to normal mods.
+            # Root-flagged mods deploy verbatim to game_root, no conflict_key_fn transform.
+            if not _is_root_mod and conflict_key_fn is not None:
                 ck = conflict_key_fn(rel_key).lower()
                 prev_ck = conflict_winner.get(ck)
                 if prev_ck is not None and prev_ck != name:
-                    # Find the staged key the previous winner used for this deploy path
                     prev_staged = next(
                         (k for k, v in filemap_winner.items() if v == prev_ck and conflict_key_fn(k) == ck),
                         None,
                     )
                     if prev_staged is not None and prev_staged != rel_key:
-                        # Remove the lower-priority entry so only one file lands at this dest
                         filemap_winner.pop(prev_staged, None)
                         filemap.pop(prev_staged, None)
                         win_count[prev_ck] = win_count.get(prev_ck, 0) - 1

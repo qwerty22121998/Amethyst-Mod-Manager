@@ -1216,15 +1216,22 @@ def deploy_root_flagged_mods(
         dst = _resolve_root_path(game_root, Path(rel_str), _dir_cache)
         rel_posix = str(Path(rel_str)).replace("\\", "/")
 
-        # Track newly-created top-level directories (for full cleanup on restore)
-        if len(Path(rel_str).parts) > 1:
-            top = dst.relative_to(game_root).parts[0]
-            if not (game_root / top).exists():
-                created_dirs.add(top)
-
         # Skip if already placed by a previous call (avoid double-backup)
         if rel_posix in existing_placed_set:
             continue
+
+        # Record whether the top-level dir existed *before* we transferred,
+        # so restore knows whether to remove it. Only meaningful for nested paths.
+        _top_preexisted = True
+        _top_name: str | None = None
+        _rel_parts = Path(rel_str).parts
+        if len(_rel_parts) > 1:
+            try:
+                _top_name = dst.relative_to(game_root).parts[0]
+            except ValueError:
+                _top_name = None
+            if _top_name:
+                _top_preexisted = (game_root / _top_name).exists()
 
         # Back up any pre-existing file
         if dst.exists() and not dst.is_symlink():
@@ -1238,6 +1245,8 @@ def deploy_root_flagged_mods(
         try:
             _transfer(src, dst, mode)
             placed.append(rel_posix)
+            if _top_name and not _top_preexisted:
+                created_dirs.add(_top_name)
         except OSError as e:
             _log(f"  WARN: could not transfer root-flagged file {rel_str}: {e}")
 

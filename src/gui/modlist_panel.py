@@ -4674,6 +4674,13 @@ class ModListPanel(ctk.CTkFrame):
         if is_separator and not is_synthetic and not _is_bundle_sep:
             menu.add_command("Rename separator", lambda: self._rename_separator(idx))
 
+        # Root Folder install toggle (Disable/Enable)
+        if not is_separator and not _is_locked and not _is_multi:
+            _is_rf = _mod_name in self._root_folder_mods
+            _rf_label = "Disable Root Folder install" if _is_rf else "Enable Root Folder install"
+            menu.add_command(_rf_label,
+                lambda mn=_mod_name: self._toggle_root_folder_flag(mn))
+
         # Separator settings…
         if is_separator and not is_synthetic and not _is_bundle_sep:
             menu.add_command("Separator settings…", lambda: self._show_sep_settings(idx))
@@ -4682,13 +4689,6 @@ class ModListPanel(ctk.CTkFrame):
         if not is_separator and not _is_locked and mod_folder is not None and not _is_multi:
             menu.add_command("Set deployment paths…",
                 lambda: self._show_mod_strip_dialog(_mod_name, mod_folder))
-
-        # Toggle Root Folder install (engine-level)
-        if not is_separator and not _is_locked and not _is_multi:
-            _is_rf = _mod_name in self._root_folder_mods
-            _rf_label = "Disable Root Folder install" if _is_rf else "Enable Root Folder install"
-            menu.add_command(_rf_label,
-                lambda mn=_mod_name: self._toggle_root_folder_flag(mn))
 
         # Set priority…
         if not is_separator and not _is_locked and not _is_bundle_var and not _is_multi:

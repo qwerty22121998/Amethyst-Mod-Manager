@@ -298,6 +298,34 @@ def scan_installed_mods(staging_root: Path) -> list[NexusModMeta]:
     return results
 
 
+def collect_root_flagged_mods(modlist_path: Path, staging_root: Path,
+                              log_fn=None) -> set[str]:
+    """Return the set of enabled mods in *modlist_path* whose meta.ini sets
+    rootFolder=true. Malformed meta.ini files are logged (if *log_fn* is
+    provided) and skipped."""
+    from Utils.modlist import read_modlist
+
+    flagged: set[str] = set()
+    if not modlist_path.is_file():
+        return flagged
+
+    for entry in read_modlist(modlist_path):
+        if entry.is_separator or not entry.enabled:
+            continue
+        meta_path = staging_root / entry.name / "meta.ini"
+        if not meta_path.is_file():
+            continue
+        try:
+            if read_meta(meta_path).root_folder:
+                flagged.add(entry.name)
+        except Exception as e:
+            if log_fn is not None:
+                log_fn(f"  WARN: could not read meta.ini for '{entry.name}': {e}")
+            else:
+                app_log(f"collect_root_flagged_mods: meta.ini unreadable for '{entry.name}': {e}")
+    return flagged
+
+
 # ---------------------------------------------------------------------------
 # Filename parsing
 # ---------------------------------------------------------------------------

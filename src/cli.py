@@ -135,21 +135,10 @@ def cmd_deploy(games: dict, key: str, profile: str):
     if modlist_path.is_file():
         try:
             from Utils.profile_state import read_excluded_mod_files as _read_exc
-            from Utils.modlist import read_modlist as _read_modlist
-            from Nexus.nexus_meta import read_meta as _read_meta
+            from Nexus.nexus_meta import collect_root_flagged_mods as _collect_rf
             _exc_raw = _read_exc(profile_dir, None)
             _exc = {k: set(v) for k, v in _exc_raw.items()} if _exc_raw else None
-            _rf_mods: set[str] = set()
-            for _e in _read_modlist(modlist_path):
-                if _e.is_separator or not _e.enabled:
-                    continue
-                _mp = staging / _e.name / "meta.ini"
-                if _mp.is_file():
-                    try:
-                        if _read_meta(_mp).root_folder:
-                            _rf_mods.add(_e.name)
-                    except Exception:
-                        pass
+            _rf_mods = _collect_rf(modlist_path, staging, log_fn=_log)
             build_filemap(
                 modlist_path, staging, filemap_out,
                 strip_prefixes=game.mod_folder_strip_prefixes or None,
