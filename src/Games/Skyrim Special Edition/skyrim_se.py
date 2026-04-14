@@ -100,6 +100,8 @@ class SkyrimSE(Fallout_3):
         return [
             CustomRule(dest="", filenames=["d3dx9_42.dll"]),
             CustomRule(dest="", filenames=["skse64_1_6_1170.dll"]),
+            CustomRule(dest="", filenames=["skse64_1_6_1179.dll"]),
+            CustomRule(dest="", filenames=["skse64_1_5_97.dll"]),
             CustomRule(dest="", filenames=["skse64_loader.exe"]),
             CustomRule(dest="", filenames=["d3dcompiler_47.dll"]),
             CustomRule(dest="Data/SKSE/Plugins/CharGen/Presets", extensions=[".jslot"]),
@@ -163,8 +165,25 @@ class SkyrimSE(Fallout_3):
                 description="Download and install SKSE64 into the game folder.",
                 dialog_class_path="wizards.script_extender.ScriptExtenderWizard",
                 extra={
-                    "github_api_url": "https://api.github.com/repos/ianpatt/skse64/releases/latest",
-                    "archive_keywords": ["skse64"],
+                    "versions": [
+                        {
+                            "label": "Skyrim SE 1.6.1170 (Steam, current)",
+                            "description": "Latest SKSE64 release from GitHub. Use this for up-to-date Steam installs.",
+                            "github_api_url": "https://api.github.com/repos/ianpatt/skse64/releases/latest",
+                            "archive_keywords": ["skse64"],
+                        },
+                        {
+                            "label": "Skyrim SE GOG 1.6.1179",
+                            "description": "GOG build of SKSE64 (skse64_2_02_06_gog.7z). Not available on GitHub.",
+                            "direct_download_url": "https://skse.silverlock.org/beta/skse64_2_02_06_gog.7z",
+                        },
+                        {
+                            "label": "Skyrim SE 1.5.97 (legacy)",
+                            "description": "SKSE64 2.0.20 for older 1.5.97 installs (Special Edition pre-AE).",
+                            "github_api_url": "https://api.github.com/repos/ianpatt/skse64/releases/tags/v2.0.20",
+                            "archive_keywords": ["skse64"],
+                        },
+                    ],
                 },
             ),
             WizardTool(

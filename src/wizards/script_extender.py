@@ -189,6 +189,8 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         github_api_url: str = "",
         download_url: str = "",
         archive_keywords: list[str] | None = None,
+        direct_download_url: str = "",
+        versions: list[dict] | None = None,
     ):
         super().__init__(parent, fg_color=BG_DEEP, corner_radius=0)
         self._on_close_cb = on_close or (lambda: None)
@@ -198,7 +200,9 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         self._parent_widget = parent
         self._github_api_url = github_api_url
         self._fallback_download_url = download_url
+        self._direct_download_url = direct_download_url
         self._archive_keywords = [kw.lower() for kw in (archive_keywords or [])]
+        self._versions = versions or []
         self._archive_path: Path | None = None
         self._resolved_download_url: str | None = None
         self._game_root: Path | None = game.get_game_path()
@@ -220,7 +224,10 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         self._body = ctk.CTkFrame(self, fg_color=BG_DEEP)
         self._body.pack(fill="both", expand=True, padx=20, pady=20)
 
-        self._show_step_download()
+        if self._versions:
+            self._show_step_version_select()
+        else:
+            self._show_step_download()
 
     def _on_cancel(self):
         self._on_close_cb()
@@ -234,10 +241,64 @@ class ScriptExtenderWizard(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def _show_step_download(self):
-        if self._github_api_url:
+        if self._github_api_url or self._direct_download_url:
             self._show_step_download_github()
         else:
             self._show_step_download_manual()
+
+    # ------------------------------------------------------------------
+    # Step 0 — Version selection (optional)
+    # ------------------------------------------------------------------
+
+    def _show_step_version_select(self):
+        self._clear_body()
+
+        ctk.CTkLabel(
+            self._body, text="Select Script Extender Version",
+            font=FONT_BOLD, text_color=TEXT_MAIN,
+        ).pack(pady=(0, 12))
+
+        ctk.CTkLabel(
+            self._body,
+            text="Pick the version that matches your game build.",
+            font=FONT_NORMAL, text_color=TEXT_DIM, justify="center",
+            wraplength=460,
+        ).pack(pady=(0, 16))
+
+        for version in self._versions:
+            label = version.get("label", "Unknown")
+            description = version.get("description", "")
+            row = ctk.CTkFrame(self._body, fg_color=BG_PANEL, corner_radius=6)
+            row.pack(fill="x", pady=(0, 8))
+
+            text_frame = ctk.CTkFrame(row, fg_color="transparent")
+            text_frame.pack(side="left", fill="x", expand=True, padx=12, pady=10)
+
+            ctk.CTkLabel(
+                text_frame, text=label,
+                font=FONT_BOLD, text_color=TEXT_MAIN, anchor="w",
+            ).pack(anchor="w")
+
+            if description:
+                ctk.CTkLabel(
+                    text_frame, text=description,
+                    font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
+                    wraplength=320, justify="left",
+                ).pack(anchor="w")
+
+            ctk.CTkButton(
+                row, text="Select", width=80, height=30, font=FONT_BOLD,
+                fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
+                command=lambda v=version: self._on_version_selected(v),
+            ).pack(side="right", padx=12, pady=10)
+
+    def _on_version_selected(self, version: dict):
+        self._github_api_url = version.get("github_api_url", "") or ""
+        self._direct_download_url = version.get("direct_download_url", "") or ""
+        self._fallback_download_url = version.get("download_url", "") or ""
+        kws = version.get("archive_keywords") or []
+        self._archive_keywords = [kw.lower() for kw in kws]
+        self._show_step_download()
 
     # --- GitHub auto-download path ---
 
@@ -291,10 +352,14 @@ class ScriptExtenderWizard(ctk.CTkFrame):
 
     def _do_fetch_and_download(self):
         try:
-            if not self._github_api_url:
-                raise RuntimeError("GitHub API URL not configured.")
-            self._set_dl_status("Fetching latest release from GitHub\u2026")
-            tag, url = _fetch_latest_github_asset(self._github_api_url, self._archive_keywords)
+            if self._github_api_url:
+                self._set_dl_status("Fetching release from GitHub\u2026")
+                tag, url = _fetch_latest_github_asset(self._github_api_url, self._archive_keywords)
+            elif self._direct_download_url:
+                tag = "selected version"
+                url = self._direct_download_url
+            else:
+                raise RuntimeError("No download URL configured.")
             self._resolved_download_url = url
             filename = url.split("/")[-1]
             dest = _get_downloads_dir() / filename
