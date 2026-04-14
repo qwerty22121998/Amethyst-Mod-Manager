@@ -3,9 +3,13 @@ Global keyboard shortcuts for the Mod Manager main window.
 
 Bindings:
     F2              Rename the selected mod or separator (modlist panel)
+    F5              Refresh the modlist (with notification)
     Delete          Remove selected mod(s) (modlist panel)
+    Return          Toggle enable/disable for selected mods (modlist panel)
     Home            Scroll active list panel to the top
     End             Scroll active list panel to the bottom
+    Ctrl+F          Focus the search bar of the active list panel
+    Ctrl+A          Select all mods within the active separator (modlist panel)
     Ctrl+D          Deploy
     Ctrl+R          Restore
     Alt+Up          Move selected mods/plugins/separators up
@@ -183,6 +187,160 @@ def _toggle_filters(app):
         panel._toggle_plugin_filter_panel()
 
 
+def _focus_search(app):
+    """Focus the search bar of the active list panel.
+
+    When the plugin panel was last interacted with and its Plugins tab is
+    active, focus the plugin search. Otherwise fall back to the modlist
+    search bar.
+    """
+    kind, panel = _active_list_panel(app)
+    entry = None
+    if kind == "plugin" and panel is not None:
+        try:
+            current_tab = panel._tabs.get() if hasattr(panel, "_tabs") else ""
+        except Exception:
+            current_tab = ""
+        if current_tab == "Plugins":
+            entry = getattr(panel, "_plugin_search_entry", None)
+        elif current_tab == "Ini Files":
+            entry = getattr(panel, "_ini_search_entry", None)
+    if entry is None:
+        mod_panel = getattr(app, "_mod_panel", None)
+        if mod_panel is not None:
+            entry = getattr(mod_panel, "_search_entry", None)
+    if entry is None:
+        return
+    try:
+        entry.focus_set()
+        entry.select_range(0, "end")
+        entry.icursor("end")
+    except Exception:
+        pass
+
+
+def _select_all_in_separator(app):
+    """Select all mods under the active separator.
+
+    - If a mod is selected, select every mod in the same separator.
+    - If a separator is selected, select every mod in that separator.
+    - If there are no separators (other than the synthetic Overwrite /
+      Root_Folder rows), select every normal mod.
+    """
+    kind, panel = _active_list_panel(app)
+    if kind != "mod" or panel is None:
+        return
+    entries = getattr(panel, "_entries", None)
+    if not entries:
+        return
+
+    # Locate the separator row containing the current selection.
+    anchor_idx = -1
+    sel_set = getattr(panel, "_sel_set", set())
+    sel_idx = getattr(panel, "_sel_idx", -1)
+    if sel_set:
+        anchor_idx = min(sel_set)
+    elif sel_idx >= 0:
+        anchor_idx = sel_idx
+
+    sep_idx = -1
+    if anchor_idx >= 0 and anchor_idx < len(entries):
+        e = entries[anchor_idx]
+        if e.is_separator:
+            sep_idx = anchor_idx
+        else:
+            for i in range(anchor_idx - 1, -1, -1):
+                if entries[i].is_separator:
+                    sep_idx = i
+                    break
+
+    if sep_idx >= 0:
+        start = sep_idx + 1
+    else:
+        start = 0
+    end = len(entries)
+    for i in range(start, len(entries)):
+        if entries[i].is_separator:
+            end = i
+            break
+
+    new_sel = {i for i in range(start, end) if not entries[i].is_separator}
+    if not new_sel:
+        return
+    panel._sel_set = new_sel
+    panel._sel_idx = min(new_sel)
+    if hasattr(panel, "_redraw"):
+        panel._redraw()
+
+
+def _refresh_modlist(app):
+    mod_panel = getattr(app, "_mod_panel", None)
+    if mod_panel is None or not hasattr(mod_panel, "_reload"):
+        return
+    mod_panel._reload()
+    try:
+        from gui.install_mod import _show_mod_notification
+        _show_mod_notification(app, "Modlist Refreshed", state="info")
+    except Exception:
+        pass
+
+
+def _toggle_selected(app):
+    """Toggle enable/disable on all selected non-separator mods.
+
+    Flips all mods in one batch, then performs the expensive save / filemap
+    rebuild / redraw steps once (mirrors the bulk separator-toggle path).
+    """
+    kind, panel = _active_list_panel(app)
+    if kind != "mod" or panel is None:
+        return
+    if getattr(panel, "_modlist_path", None) is None:
+        return
+    entries = getattr(panel, "_entries", None)
+    check_vars = getattr(panel, "_check_vars", None)
+    if not entries or not check_vars:
+        return
+    sel = sorted(panel._sel_set) if panel._sel_set else (
+        [panel._sel_idx] if panel._sel_idx >= 0 else []
+    )
+    toggle_indices: list[int] = []
+    for idx in sel:
+        if not (0 <= idx < len(entries)):
+            continue
+        entry = entries[idx]
+        if entry.is_separator:
+            continue
+        if getattr(entry, "locked", False):
+            continue
+        if idx >= len(check_vars) or check_vars[idx] is None:
+            continue
+        toggle_indices.append(idx)
+    if not toggle_indices:
+        return
+
+    pool_data_idx = getattr(panel, "_pool_data_idx", [])
+    pool_check_vars = getattr(panel, "_pool_check_vars", [])
+    for idx in toggle_indices:
+        var = check_vars[idx]
+        new_state = not var.get()
+        var.set(new_state)
+        entries[idx].enabled = new_state
+        for s, di in enumerate(pool_data_idx):
+            if di == idx and s < len(pool_check_vars):
+                pool_check_vars[s].set(new_state)
+                break
+        panel._sync_plugins_for_toggle(entries[idx].name, new_state)
+
+    panel._vis_dirty = True
+    panel._save_modlist()
+    panel._rebuild_filemap()
+    panel._scan_missing_reqs_flags()
+    if hasattr(panel, "_update_enable_disable_all_btn"):
+        panel._update_enable_disable_all_btn()
+    panel._redraw()
+    panel._update_info()
+
+
 def register_shortcuts(app) -> None:
     """Install the global keyboard shortcuts on the main App window."""
     app._last_list_panel = "mod"
@@ -195,14 +353,28 @@ def register_shortcuts(app) -> None:
             return "break"
         return _handler
 
+    def _unguarded(fn):
+        """Variant of _guard that fires even when a text input has focus."""
+        def _handler(event=None):
+            fn(app)
+            return "break"
+        return _handler
+
     app.bind_all("<F2>",           _guard(_rename_selected), add="+")
+    app.bind_all("<F5>",           _unguarded(_refresh_modlist), add="+")
     app.bind_all("<Control-d>",    _guard(_deploy),          add="+")
     app.bind_all("<Control-D>",    _guard(_deploy),          add="+")
     app.bind_all("<Control-r>",    _guard(_restore),         add="+")
     app.bind_all("<Control-R>",    _guard(_restore),         add="+")
+    app.bind_all("<Control-f>",    _unguarded(_focus_search), add="+")
+    app.bind_all("<Control-F>",    _unguarded(_focus_search), add="+")
+    app.bind_all("<Control-a>",    _guard(_select_all_in_separator), add="+")
+    app.bind_all("<Control-A>",    _guard(_select_all_in_separator), add="+")
     app.bind_all("<Alt-Up>",       _guard(_move_up),         add="+")
     app.bind_all("<Alt-Down>",     _guard(_move_down),       add="+")
     app.bind_all("<Delete>",       _guard(_delete_selected), add="+")
+    app.bind_all("<Return>",       _guard(_toggle_selected), add="+")
+    app.bind_all("<KP_Enter>",     _guard(_toggle_selected), add="+")
     app.bind_all("<Home>",         _guard(_scroll_to_top),    add="+")
     app.bind_all("<End>",          _guard(_scroll_to_bottom), add="+")
     app.bind_all("<Shift-E>",      _guard(_toggle_all_seps),  add="+")
