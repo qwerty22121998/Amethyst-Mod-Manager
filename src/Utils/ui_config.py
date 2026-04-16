@@ -87,6 +87,7 @@ def load_ui_scale() -> float:
     if not path.is_file():
         _ui_scale = detect_hidpi_scale()
         _write_ini(path, _INI_AUTO)
+        _seed_first_run_defaults(path)
         return _ui_scale
     try:
         parser = configparser.ConfigParser()
@@ -115,6 +116,30 @@ def _write_ini(path: Path, scale_str: str) -> None:
     parser[_INI_SECTION][_INI_OPTION] = scale_str
     with path.open("w") as f:
         parser.write(f)
+
+
+def _seed_first_run_defaults(path: Path) -> None:
+    """Write first-run-only defaults for collections and hidden columns.
+
+    Called exactly once, when the INI file is first created. Existing installs
+    never run this code path so their behaviour is unchanged.
+    """
+    try:
+        parser = configparser.ConfigParser()
+        if path.is_file():
+            parser.read(path)
+        if _COLLECTIONS_SECTION not in parser:
+            parser[_COLLECTIONS_SECTION] = {}
+        parser[_COLLECTIONS_SECTION]["download_order"] = _FIRST_RUN_DOWNLOAD_ORDER
+        parser[_COLLECTIONS_SECTION]["max_concurrent"] = str(_FIRST_RUN_MAX_CONCURRENT)
+        parser[_COLLECTIONS_SECTION]["max_extract_workers"] = str(_FIRST_RUN_MAX_EXTRACT_WORKERS)
+        if _COLUMNS_SECTION not in parser:
+            parser[_COLUMNS_SECTION] = {}
+        parser[_COLUMNS_SECTION]["hidden"] = ",".join(str(x) for x in _FIRST_RUN_HIDDEN_COLUMNS)
+        with path.open("w") as f:
+            parser.write(f)
+    except Exception:
+        pass
 
 
 def save_ui_scale(scale: float | str) -> None:
@@ -183,6 +208,14 @@ _COLLECTIONS_SECTION = "collections"
 _DEFAULT_DOWNLOAD_ORDER = "largest"   # "largest" | "smallest"
 _DEFAULT_MAX_CONCURRENT = 3
 _DEFAULT_MAX_EXTRACT_WORKERS = 4
+
+# First-run defaults — written to the INI only when it is being created for
+# the first time (see load_ui_scale). Existing installs keep whatever defaults
+# they had even if they have never saved these settings explicitly.
+_FIRST_RUN_DOWNLOAD_ORDER = "smallest"
+_FIRST_RUN_MAX_CONCURRENT = 8
+_FIRST_RUN_MAX_EXTRACT_WORKERS = 8
+_FIRST_RUN_HIDDEN_COLUMNS = [2, 5]  # category, installed
 
 
 def load_collection_settings() -> dict:
