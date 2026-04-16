@@ -97,6 +97,20 @@ def _file_exists_ci(base: Path, rel: Path) -> bool:
     return current.is_file()
 
 
+def _resolve_compat_data(prefix_path: Path) -> Path:
+    """Return the STEAM_COMPAT_DATA_PATH for a given user-selected pfx/ folder.
+
+    Steam layout: compatdata/<id>/pfx/ → compat_data = prefix_path.parent.
+    Heroic layout: <prefix>/pfx is a symlink to "." → compat_data = prefix_path
+    itself (config_info lives alongside the pfx symlink, not one level up)."""
+    if (prefix_path / "config_info").is_file():
+        return prefix_path
+    parent = prefix_path.parent
+    if (parent / "config_info").is_file():
+        return parent
+    return parent
+
+
 def _read_prefix_runner(compat_data: Path) -> str:
     """Read the Proton runner name from <compat_data>/config_info (first line).
     Returns an empty string if the file is absent or unreadable."""
@@ -1373,7 +1387,7 @@ class PluginPanel(ctk.CTkFrame):
                 self._log("Run EXE: Proton prefix not configured for this game.")
                 return
 
-            compat_data = prefix_path.parent
+            compat_data = _resolve_compat_data(prefix_path)
 
             steam_id = getattr(game, "steam_id", "")
             proton_script = find_proton_for_game(steam_id) if steam_id else None
@@ -1448,6 +1462,23 @@ class PluginPanel(ctk.CTkFrame):
                 if _pgp_saved:
                     _pgp_output_mod = staging_path / _pgp_saved
             _bootstrap_pgpatcher_settings(exe_path, game_path, staging_path, self._log, update=True, output_mod=_pgp_output_mod)
+
+        if exe_path.name == "Pandora Behaviour Engine+.exe":
+            from Utils.exe_args_builder import _bootstrap_pandora_settings
+            staging_path = (
+                game.get_effective_mod_staging_path()
+                if hasattr(game, "get_effective_mod_staging_path") else None
+            )
+            _bootstrap_pandora_settings(
+                getattr(game, "game_id", None),
+                game_path,
+                staging_path,
+                compat_data,
+                self._log,
+            )
+            env.pop("DOTNET_ROOT", None)
+            env.pop("DOTNET_BUNDLE_EXTRACT_BASE_DIR", None)
+            env["PROTON_USE_WINED3D"] = "1"
 
         if exe_path.name == "Wrye Bash.exe":
             game_path = game.get_game_path() if hasattr(game, "get_game_path") else None
