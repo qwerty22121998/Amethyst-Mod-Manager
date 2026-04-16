@@ -28,8 +28,14 @@ if not os.environ.get("MOD_MANAGER_GAMES"):
             continue
         break
 
-# Override Xft.dpi to 96 before Tk initialises so font rasterisation ignores
-# the OS global scaling setting (e.g. 200% sets Xft.dpi=192, doubling fonts).
+# Load UI scale before the Xft.dpi override so scale detection reads the real
+# system DPI.  The override only affects font rasterisation in the main window.
+from Utils.ui_config import load_ui_scale, get_ui_scale, load_window_geometry, save_window_geometry
+_UI_SCALE = load_ui_scale()
+
+# Override Xft.dpi to 96 before the main Tk window is created so font
+# rasterisation ignores the OS global scaling setting (e.g. 200% sets
+# Xft.dpi=192, doubling fonts).
 try:
     subprocess.run(
         ["xrdb", "-merge"],
@@ -43,10 +49,6 @@ except Exception:
 
 import customtkinter as ctk
 
-# Load UI scale from config and apply before any widgets are created.
-# Stored in ~/.config/AmethystModManager/amethyst.ini [ui] scale=...
-from Utils.ui_config import load_ui_scale, get_ui_scale, load_window_geometry, save_window_geometry
-_UI_SCALE = load_ui_scale()
 ctk.set_widget_scaling(_UI_SCALE)
 ctk.set_window_scaling(_UI_SCALE)
 

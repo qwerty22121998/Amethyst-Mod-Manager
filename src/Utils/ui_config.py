@@ -29,6 +29,93 @@ def get_ui_config_path() -> Path:
     return get_config_dir() / "amethyst.ini"
 
 
+def _get_compositor_scale() -> float:
+    """Return the display compositor's global scale factor (>1.0 on HiDPI).
+
+    Tries, in order:
+      1. kscreen-doctor  (KDE Plasma 6 — per-output scale from compositor)
+      2. gsettings       (GNOME — integer scaling-factor)
+      3. GDK_SCALE / QT_SCALE_FACTOR environment variables
+
+    Returns 1.0 if nothing is detected or all sources fail.
+    """
+    import re as _re
+    import subprocess
+
+    # KDE Plasma 6: per-output scale lives in the compositor; kscreen-doctor
+    # exposes it.  Output contains ANSI colour codes so strip those first.
+    try:
+        r = subprocess.run(
+            ["kscreen-doctor", "-o"],
+            capture_output=True, text=True, timeout=3,
+        )
+        clean = _re.sub(r"\x1b\[[0-9;]*m", "", r.stdout)
+        scales = [float(m.group(1)) for m in _re.finditer(r"Scale:\s*([\d.]+)", clean)]
+        if scales:
+            return max(1.0, max(scales))
+    except Exception:
+        pass
+
+    # GNOME: integer scaling-factor (fractional scaling is not exposed here,
+    # but integer scaling is still better than nothing)
+    try:
+        r = subprocess.run(
+            ["gsettings", "get", "org.gnome.desktop.interface", "scaling-factor"],
+            capture_output=True, text=True, timeout=2,
+        )
+        val = r.stdout.strip().lstrip("uint32").strip()
+        if val and int(val) > 1:
+            return float(int(val))
+    except Exception:
+        pass
+
+    # Environment variables set by some DEs / launch wrappers
+    for var in ("GDK_SCALE", "QT_SCALE_FACTOR"):
+        try:
+            v = os.environ.get(var, "").strip()
+            if v:
+                f = float(v)
+                if f > 1.0:
+                    return f
+        except Exception:
+            pass
+
+    return 1.0
+
+
+def _get_primary_monitor_size() -> tuple[int, int]:
+    """Return (width, height) of the primary monitor via xrandr.
+
+    On multi-monitor setups winfo_screenwidth/height returns the combined
+    virtual desktop size, which inflates the auto-detected UI scale.  xrandr
+    lets us find the monitor marked 'primary' (or the first connected one).
+    Returns (0, 0) if xrandr is unavailable or parsing fails.
+    """
+    import re
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["xrandr", "--current"],
+            capture_output=True, text=True, timeout=3,
+        )
+    except Exception:
+        return 0, 0
+    lines = result.stdout.splitlines()
+    # Prefer the monitor explicitly marked "primary"
+    for line in lines:
+        if " connected " in line and "primary" in line:
+            m = re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    # Fall back to the first connected monitor with a geometry
+    for line in lines:
+        if " connected " in line:
+            m = re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
+            if m:
+                return int(m.group(1)), int(m.group(2))
+    return 0, 0
+
+
 def get_screen_info() -> tuple[int, int, float]:
     """Return (screen_width, screen_height, detected_scale) for the primary display."""
     try:
@@ -38,9 +125,8 @@ def get_screen_info() -> tuple[int, int, float]:
         root.update_idletasks()
         w = root.winfo_screenwidth()
         h = root.winfo_screenheight()
-        # Detect if the DE/compositor is applying its own scaling.
-        # Tk reports 96 DPI as default; higher values mean the DE is scaling.
-        # winfo_fpixels('1i') returns pixels-per-inch as seen by Tk.
+        # winfo_fpixels('1i') returns pixels-per-inch as seen by Tk; higher
+        # than 96 means the DE is applying its own scaling.
         try:
             dpi = root.winfo_fpixels('1i')
             de_scale = dpi / 96.0 if dpi > 96 else 1.0
@@ -51,9 +137,20 @@ def get_screen_info() -> tuple[int, int, float]:
         return 0, 0, _DEFAULT_SCALE
     if w <= 0 or h <= 0:
         return w, h, _DEFAULT_SCALE
-    # On scaled desktops, winfo_screenheight may report the virtual (scaled)
-    # resolution rather than physical pixels. Divide out the DE scale to get
-    # the true physical height for our scaling heuristic.
+
+    # Xft.dpi may already have been overridden to 96 (by a previous launch),
+    # hiding the true compositor scale.  Read it directly from the DE and use
+    # whichever value is larger.
+    de_scale = max(de_scale, _get_compositor_scale())
+
+    # On multi-monitor setups winfo_screenwidth/height is the combined virtual
+    # desktop — use xrandr to get just the primary monitor's physical size.
+    pm_w, pm_h = _get_primary_monitor_size()
+    if pm_h > 0:
+        w, h = pm_w, pm_h
+
+    # Divide out compositor scaling to get the true physical pixel height,
+    # then map to a UI scale relative to the 1080p design baseline.
     physical_h = h / de_scale if de_scale > 1.0 else h
     # UI designed for Steam Deck (1280x800). Use height only; 800–1080 = 1.0.
     if physical_h <= 800:
@@ -61,7 +158,7 @@ def get_screen_info() -> tuple[int, int, float]:
     elif physical_h >= 1080:
         scale = min(2.0, physical_h / 1080)
     else:
-        scale = 1.0  # plateau: 800–1080 all use 1.0
+        scale = 1.0  # plateau: 800–1080 px all use 1.0
     scale = round(scale * 20) / 20  # Snap to nearest 0.05
     return w, h, scale
 
