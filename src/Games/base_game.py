@@ -1092,6 +1092,28 @@ class BaseGame(ABC):
             f"{self.__class__.__name__} must implement set_game_path()"
         )
 
+    def set_heroic_app_name(self, app_name: str | None) -> None:
+        """Persist a discovered Heroic app name into paths.json.
+
+        Used by the Add Game dialog so GOG/Epic titles keep a record of
+        which Heroic library entry they resolved to. Launch code still
+        prefers live detection via installed.json, so this field is an
+        informational fallback rather than the source of truth.
+        """
+        try:
+            self.save_paths()
+        except Exception:
+            pass
+        try:
+            data: dict = {}
+            if self._paths_file.is_file():
+                data = json.loads(self._paths_file.read_text(encoding="utf-8")) or {}
+            data["heroic_app_name"] = app_name or ""
+            self._paths_file.parent.mkdir(parents=True, exist_ok=True)
+            self._paths_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except (OSError, json.JSONDecodeError):
+            pass
+
     def _validate_staging(self) -> None:
         """Check that a custom staging path still exists on disk.
 

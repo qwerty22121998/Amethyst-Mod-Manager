@@ -1549,9 +1549,26 @@ class PluginPanel(ctk.CTkFrame):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _get_heroic_app_names_for_launch(self, game) -> list:
-        """Return heroic app names for launch: from game.heroic_app_names, then from paths.json.
-        Since we no longer store appname in handlers, paths.json is the source when discovered via exe."""
-        names = list(getattr(game, "heroic_app_names", []) or [])
+        """Return heroic app names for launch.
+
+        Detected at runtime by scanning Heroic's installed.json for the
+        game's exe — same mechanism used by Add Game. Falls back to the
+        legacy handler property / saved paths.json field for compatibility
+        with older configs."""
+        names: list[str] = []
+        from Utils.heroic_finder import find_heroic_app_name_by_exe
+        exe_names = [getattr(game, "exe_name", None)]
+        exe_names += list(getattr(game, "exe_name_alts", []) or [])
+        for exe in [e for e in exe_names if e]:
+            try:
+                found = find_heroic_app_name_by_exe(exe)
+            except Exception:
+                found = None
+            if found and found not in names:
+                names.append(found)
+
+        names.extend(n for n in (getattr(game, "heroic_app_names", []) or []) if n not in names)
+
         if not names and hasattr(game, "name"):
             try:
                 paths_file = get_game_config_path(game.name)
