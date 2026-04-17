@@ -143,13 +143,16 @@ def get_screen_info() -> tuple[int, int, float]:
 
     # On multi-monitor setups winfo_screenwidth/height is the combined virtual
     # desktop — use xrandr to get just the primary monitor's physical size.
+    # xrandr reports unscaled physical pixels, so we divide by de_scale.
+    # When xrandr is unavailable (e.g. Flatpak sandbox without host xrandr),
+    # Tk's winfo_screenheight on Wayland/XWayland typically reports the
+    # logical (already-scaled) size, so dividing again would halve the scale.
     pm_w, pm_h = _get_primary_monitor_size()
     if pm_h > 0:
         w, h = pm_w, pm_h
-
-    # Divide out compositor scaling to get the true physical pixel height,
-    # then map to a UI scale relative to the 1080p design baseline.
-    physical_h = h / de_scale if de_scale > 1.0 else h
+        physical_h = h / de_scale if de_scale > 1.0 else h
+    else:
+        physical_h = h
     # UI designed for Steam Deck (1280x800). Use height only; 800–1080 = 1.0.
     if physical_h <= 800:
         scale = max(_MIN_SCALE, physical_h / 800)
