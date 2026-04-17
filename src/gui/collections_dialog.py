@@ -2778,8 +2778,11 @@ class CollectionDetailDialog(tk.Frame):
         # Skipped when appending into an existing profile — the user's
         # existing load order is preserved; new mods are added by
         # install_mod_from_archive via ensure_mod_preserving_position.
+        # Also skipped when paused — the remaining mods haven't been
+        # installed yet, so writing load order / running LOOT now would
+        # produce an incomplete result. These steps run on Resume instead.
         # ------------------------------------------------------------------
-        if overwrite_existing is None:
+        if overwrite_existing is None and not _col_pause.is_set():
             install_order.sort(key=lambda x: x[0])
             modlist_entries = [
                 ModEntry(name=folder, enabled=True, locked=False)
@@ -2831,9 +2834,11 @@ class CollectionDetailDialog(tk.Frame):
         #      LOOT's full sorted result becomes the final load order.
         #   3. Fallback (LOOT unavailable): vanilla prefix (alphabetical) +
         #      author's flat plugin list.
+        # Skipped when paused — plugins.txt / LOOT sort will run on Resume
+        # once all mods have actually been installed.
         # ------------------------------------------------------------------
         schema_plugins: list[dict] = collection_schema.get("plugins", [])
-        if schema_plugins and overwrite_existing is None:
+        if schema_plugins and overwrite_existing is None and not _col_pause.is_set():
             try:
                 author_entries = [
                     PluginEntry(name=p.get("name", ""), enabled=p.get("enabled", True))
@@ -2922,8 +2927,10 @@ class CollectionDetailDialog(tk.Frame):
         # Final reconciliation: ensure every mod in modlist.txt is enabled
         # and in collection-defined order.  This runs unconditionally so a
         # crash-restart (any mode) always ends in a clean, ordered state.
+        # Skipped on pause — reconciliation will run on Resume once all
+        # mods are actually installed.
         # ------------------------------------------------------------------
-        if install_order and modlist_path.is_file():
+        if install_order and modlist_path.is_file() and not _col_pause.is_set():
             try:
                 _folder_to_key: dict[str, int] = {
                     folder: key for key, folder in install_order
