@@ -2125,6 +2125,19 @@ class CollectionDetailDialog(tk.Frame):
         _install_results: dict[int, str] = {}  # file_id → installed folder name
         _fomod_deferred: list = []  # (mod, result, effective_domain) tuples deferred for post-install
 
+        def _extracting_push(fid: int, name: str):
+            try:
+                self.after(0, lambda f=fid, n=name:
+                           self._overlay_extracting_add(f, n))
+            except Exception:
+                pass
+
+        def _extracting_pop(fid: int):
+            try:
+                self.after(0, lambda f=fid: self._overlay_extracting_remove(f))
+            except Exception:
+                pass
+
         # Bounded queue: download producers → install consumers.
         # Items are (mod, DownloadResult, effective_domain) or _DONE_SENTINEL.
         _install_queue: _queue.Queue = _queue.Queue(maxsize=_PIPELINE_QUEUE_SIZE)
@@ -2142,13 +2155,27 @@ class CollectionDetailDialog(tk.Frame):
                 _install_queue.put((mod, None, self._game_domain))
                 return
 
-            def _progress_cb(cur: int, tot: int, _fid=mod.file_id):
+            def _progress_cb(cur: int, tot: int, _fid=mod.file_id, _mod=mod):
                 nonlocal _dl_bytes_done
                 with _dl_lock:
                     prev = _per_mod_prev.get(_fid, 0)
                     delta = max(cur - prev, 0)
                     _per_mod_prev[_fid] = cur
                     _dl_bytes_done += delta
+                    is_first = prev == 0 and cur > 0
+                if is_first:
+                    _nm = _mod.mod_name or _mod.file_name or ""
+                    _sz = getattr(_mod, "size_bytes", 0) or 0
+                    try:
+                        self.after(0, lambda f=_fid, n=_nm, s=_sz:
+                                   self._overlay_dl_mod_start(f, n, s))
+                    except Exception:
+                        pass
+                try:
+                    self.after(0, lambda f=_fid, c=cur, t=tot:
+                               self._overlay_dl_mod_update(f, c, t))
+                except Exception:
+                    pass
 
             # Enderal can use Skyrim mods; Enderal SE can use Skyrim SE mods.
             _ENDERAL_FALLBACKS = {"enderal": "skyrim", "enderalspecialedition": "skyrimspecialedition"}
@@ -2262,6 +2289,12 @@ class CollectionDetailDialog(tk.Frame):
                 _inst_done = _install_counters["done"]
             _set_status(f"Downloaded {done}/{_dl_total}, installed {_inst_done}/{_dl_total}\u2026")
 
+            # Remove this mod's per-mod download row from the overlay.
+            try:
+                self.after(0, lambda f=mod.file_id: self._overlay_dl_mod_finish(f))
+            except Exception:
+                pass
+
             # Push onto the bounded install queue (blocks if queue is full,
             # providing back-pressure so archives don't pile up on disk).
             _install_queue.put((mod, result, effective_domain))
@@ -2337,6 +2370,8 @@ class CollectionDetailDialog(tk.Frame):
             _fomod_flag = {"value": False}
             def _capture_fomod(is_fomod: bool = False):
                 _fomod_flag["value"] = is_fomod
+            _extract_display = _preferred or (mod.mod_name or mod.file_name or "")
+            _extracting_push(mod.file_id, _extract_display)
             try:
                 folder_name = install_mod_from_archive(
                     archive_path, self, self._log, self._game,
@@ -2352,6 +2387,7 @@ class CollectionDetailDialog(tk.Frame):
                 )
             finally:
                 _mem_budget.release(_extract_est)
+                _extracting_pop(mod.file_id)
             _installed_was_fomod = _fomod_flag["value"]
 
             if folder_name == FOMOD_DEFERRED:
@@ -3057,7 +3093,53 @@ class CollectionDetailDialog(tk.Frame):
         dl_bar.set(0)
         # Not packed yet — shown when download starts via _show_overlay_download
 
-        # Button row — always packed last so dl_bar can be inserted before it
+        # Per-mod download rows: pre-allocate MAX_DL_SLOTS fixed rows so the
+        # overlay never resizes as mods start/finish downloading.  Empty rows
+        # remain invisible (blank label + zeroed bar) but reserve their space.
+        MAX_DL_SLOTS = 8
+        per_mod_frame = tk.Frame(inner, bg="#2b2b2b", bd=0, highlightthickness=0)
+        dl_slot_widgets: list = []
+        for _i in range(MAX_DL_SLOTS):
+            _row = tk.Frame(per_mod_frame, bg="#2b2b2b", bd=0, highlightthickness=0)
+            _row.pack(fill="x", pady=(1, 1))
+            _name = tk.Label(
+                _row, text=" ", bg="#2b2b2b", fg="#dddddd",
+                font=font_sized_px(FONT_FAMILY, 9), anchor="w",
+                bd=0, highlightthickness=0,
+            )
+            _name.pack(fill="x")
+            _bar = ctk.CTkProgressBar(
+                _row, height=4, progress_color=ACCENT,
+                fg_color=BG_PANEL, corner_radius=2,
+            )
+            _bar.set(0)
+            _bar.pack(fill="x", pady=(1, 0))
+            dl_slot_widgets.append({"frame": _row, "name_lbl": _name, "bar": _bar})
+        # Not packed yet — revealed together with extracting_frame when the
+        # first download starts, so the overlay resizes at most once.
+
+        # Extracting rows: up to MAX_EXTRACT_SLOTS concurrent extractions can
+        # be displayed simultaneously.  Pre-allocated for fixed height.
+        MAX_EXTRACT_SLOTS = 8
+        extracting_frame = tk.Frame(inner, bg="#2b2b2b", bd=0, highlightthickness=0)
+        extracting_header = tk.Label(
+            extracting_frame, text="Extracting", bg="#2b2b2b", fg="#888888",
+            font=font_sized_px(FONT_FAMILY, 9, "bold"), anchor="w",
+            bd=0, highlightthickness=0,
+        )
+        extracting_header.pack(fill="x")
+        extracting_slot_labels: list = []
+        for _i in range(MAX_EXTRACT_SLOTS):
+            _lbl = tk.Label(
+                extracting_frame, text=" ", bg="#2b2b2b", fg="#cccccc",
+                font=font_sized_px(FONT_FAMILY, 10), anchor="w",
+                bd=0, highlightthickness=0,
+            )
+            _lbl.pack(fill="x")
+            extracting_slot_labels.append(_lbl)
+        # Not packed yet — revealed together with per_mod_frame on first download.
+
+        # Button row — always packed last so other sections can be inserted before it
         btn_row = tk.Frame(inner, bg="#2b2b2b")
         btn_row.pack(pady=(8, 16))
 
@@ -3087,6 +3169,14 @@ class CollectionDetailDialog(tk.Frame):
         self._install_overlay_dl_bar = dl_bar
         self._install_overlay_pause_btn = pause_btn
         self._install_overlay_btn_row = btn_row
+        self._install_overlay_per_mod_frame = per_mod_frame
+        self._install_overlay_dl_slots = dl_slot_widgets
+        # file_id → slot_index in dl_slot_widgets (for active downloads only)
+        self._install_overlay_dl_slot_map: dict = {}
+        self._install_overlay_extracting_frame = extracting_frame
+        self._install_overlay_extracting_slots = extracting_slot_labels
+        # Ordered list of (file_id, name) currently extracting
+        self._install_overlay_extracting_active: list = []
 
     def _show_overlay_download(self, label: str):
         """Show the download progress section inside the install overlay."""
@@ -3120,14 +3210,133 @@ class CollectionDetailDialog(tk.Frame):
             lbl.configure(text=f"{cur_u:.2f} / {tot_u:.2f} {unit}  ({pct}%){speed_str}")
 
     def _hide_overlay_download(self):
-        """Hide the download progress section in the overlay."""
-        for w in (getattr(self, "_install_overlay_dl_msg", None),
-                  getattr(self, "_install_overlay_dl_bar", None)):
-            if w is not None:
+        """Called when all downloads finish.  The overlay keeps its fixed
+        size, so we don't pack_forget anything — we just reset the per-mod
+        slots to blank.  The aggregate download bar is left showing 100%
+        and the extracting frame continues to update as installs finish."""
+        for slot in getattr(self, "_install_overlay_dl_slots", []) or []:
+            try:
+                slot["name_lbl"].configure(text=" ")
+                slot["bar"].set(0)
+            except Exception:
+                pass
+        slot_map = getattr(self, "_install_overlay_dl_slot_map", None)
+        if slot_map is not None:
+            slot_map.clear()
+
+    def _overlay_reveal_dl_frame(self):
+        """Reveal the download + extracting sections together so the overlay
+        resizes at most once during a collection install."""
+        frame = getattr(self, "_install_overlay_per_mod_frame", None)
+        extract_frame = getattr(self, "_install_overlay_extracting_frame", None)
+        btn_row = getattr(self, "_install_overlay_btn_row", None)
+        if frame is not None and not frame.winfo_ismapped():
+            pack_kw = {"before": btn_row} if btn_row is not None else {}
+            frame.pack(fill="x", padx=16, pady=(2, 2), **pack_kw)
+        if extract_frame is not None and not extract_frame.winfo_ismapped():
+            pack_kw = {"before": btn_row} if btn_row is not None else {}
+            extract_frame.pack(fill="x", padx=16, pady=(4, 2), **pack_kw)
+
+    def _overlay_dl_mod_start(self, file_id: int, mod_name: str, size_bytes: int):
+        """Assign the next free slot to a mod that just started downloading."""
+        slots = getattr(self, "_install_overlay_dl_slots", None)
+        slot_map = getattr(self, "_install_overlay_dl_slot_map", None)
+        if not slots or slot_map is None:
+            return
+        self._overlay_reveal_dl_frame()
+        if file_id in slot_map:
+            idx = slot_map[file_id]
+            try:
+                slots[idx]["name_lbl"].configure(text=mod_name or "(unnamed)")
+                slots[idx]["size"] = max(size_bytes, 0)
+            except Exception:
+                pass
+            return
+        used = set(slot_map.values())
+        free = next((i for i in range(len(slots)) if i not in used), None)
+        if free is None:
+            return
+        slot_map[file_id] = free
+        slot = slots[free]
+        try:
+            slot["name_lbl"].configure(text=mod_name or "(unnamed)")
+            slot["bar"].set(0)
+            slot["size"] = max(size_bytes, 0)
+        except Exception:
+            pass
+
+    def _overlay_dl_mod_update(self, file_id: int, cur: int, tot: int):
+        """Update the progress bar for a single downloading mod."""
+        slots = getattr(self, "_install_overlay_dl_slots", None)
+        slot_map = getattr(self, "_install_overlay_dl_slot_map", None)
+        if not slots or slot_map is None:
+            return
+        idx = slot_map.get(file_id)
+        if idx is None:
+            return
+        slot = slots[idx]
+        total = tot if tot > 0 else slot.get("size", 0)
+        if total > 0:
+            frac = min(max(cur / total, 0.0), 1.0)
+            try:
+                slot["bar"].set(frac)
+            except Exception:
+                pass
+
+    def _overlay_dl_mod_finish(self, file_id: int):
+        """Free the slot for a mod that has finished downloading."""
+        slots = getattr(self, "_install_overlay_dl_slots", None)
+        slot_map = getattr(self, "_install_overlay_dl_slot_map", None)
+        if not slots or slot_map is None:
+            return
+        idx = slot_map.pop(file_id, None)
+        if idx is None:
+            return
+        try:
+            slots[idx]["name_lbl"].configure(text=" ")
+            slots[idx]["bar"].set(0)
+            slots[idx]["size"] = 0
+        except Exception:
+            pass
+
+    def _overlay_refresh_extracting(self):
+        """Repaint all extraction slot labels from the active list."""
+        slots = getattr(self, "_install_overlay_extracting_slots", None)
+        active = getattr(self, "_install_overlay_extracting_active", None)
+        if slots is None or active is None:
+            return
+        for i, lbl in enumerate(slots):
+            if i < len(active):
+                name = active[i][1] or "(unnamed)"
                 try:
-                    w.pack_forget()
+                    lbl.configure(text=f"  • {name}")
                 except Exception:
                     pass
+            else:
+                try:
+                    lbl.configure(text=" ")
+                except Exception:
+                    pass
+
+    def _overlay_extracting_add(self, file_id: int, mod_name: str):
+        active = getattr(self, "_install_overlay_extracting_active", None)
+        if active is None:
+            return
+        for fid, _ in active:
+            if fid == file_id:
+                return
+        active.append((file_id, mod_name))
+        self._overlay_refresh_extracting()
+
+    def _overlay_extracting_remove(self, file_id: int):
+        active = getattr(self, "_install_overlay_extracting_active", None)
+        if not active:
+            return
+        for i in range(len(active) - 1, -1, -1):
+            if active[i][0] == file_id:
+                active.pop(i)
+                break
+        self._overlay_refresh_extracting()
 
     def _dismiss_install_overlay(self):
         """Remove the install overlay."""
@@ -3144,6 +3353,12 @@ class CollectionDetailDialog(tk.Frame):
         self._install_overlay_dl_bar = None
         self._install_overlay_pause_btn = None
         self._install_overlay_btn_row = None
+        self._install_overlay_per_mod_frame = None
+        self._install_overlay_dl_slots = []
+        self._install_overlay_dl_slot_map = {}
+        self._install_overlay_extracting_frame = None
+        self._install_overlay_extracting_slots = []
+        self._install_overlay_extracting_active = []
 
     # ------------------------------------------------------------------
     # Manual (non-premium) install overlay + flow
