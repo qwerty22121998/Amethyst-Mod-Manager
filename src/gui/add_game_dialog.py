@@ -1015,9 +1015,11 @@ class ReconfigureGamePanel(ctk.CTkFrame):
             )
             return
         chosen = Path(os.path.expanduser(raw))
+        if chosen.name == "mods":
+            chosen = chosen.parent
         from Utils.config_paths import get_profiles_dir
-        default_path = get_profiles_dir() / self._game.name / "mods"
-        if chosen == default_path:
+        default_root = get_profiles_dir() / self._game.name
+        if chosen == default_root:
             self._custom_staging = None
             self._staging_status_label.configure(
                 text="Default location will be used.", text_color=TEXT_DIM
