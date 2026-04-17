@@ -6,6 +6,9 @@ Set scale=auto to use automatic scaling based on screen size.
 """
 
 import configparser
+import os
+import re as _re
+import subprocess
 from pathlib import Path
 
 from Utils.config_paths import get_config_dir
@@ -39,9 +42,6 @@ def _get_compositor_scale() -> float:
 
     Returns 1.0 if nothing is detected or all sources fail.
     """
-    import re as _re
-    import subprocess
-
     # KDE Plasma 6: per-output scale lives in the compositor; kscreen-doctor
     # exposes it.  Output contains ANSI colour codes so strip those first.
     try:
@@ -63,9 +63,9 @@ def _get_compositor_scale() -> float:
             ["gsettings", "get", "org.gnome.desktop.interface", "scaling-factor"],
             capture_output=True, text=True, timeout=2,
         )
-        val = r.stdout.strip().lstrip("uint32").strip()
-        if val and int(val) > 1:
-            return float(int(val))
+        m = _re.search(r"\d+", r.stdout)
+        if m and int(m.group(0)) > 1:
+            return float(int(m.group(0)))
     except Exception:
         pass
 
@@ -91,8 +91,6 @@ def _get_primary_monitor_size() -> tuple[int, int]:
     lets us find the monitor marked 'primary' (or the first connected one).
     Returns (0, 0) if xrandr is unavailable or parsing fails.
     """
-    import re
-    import subprocess
     try:
         result = subprocess.run(
             ["xrandr", "--current"],
@@ -104,13 +102,13 @@ def _get_primary_monitor_size() -> tuple[int, int]:
     # Prefer the monitor explicitly marked "primary"
     for line in lines:
         if " connected " in line and "primary" in line:
-            m = re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
+            m = _re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
             if m:
                 return int(m.group(1)), int(m.group(2))
     # Fall back to the first connected monitor with a geometry
     for line in lines:
         if " connected " in line:
-            m = re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
+            m = _re.search(r"(\d+)x(\d+)\+\d+\+\d+", line)
             if m:
                 return int(m.group(1)), int(m.group(2))
     return 0, 0
@@ -857,8 +855,6 @@ def save_default_staging_path(value: str) -> None:
 # ---------------------------------------------------------------------------
 # Theme colours
 # ---------------------------------------------------------------------------
-import re as _re
-
 _THEME_SECTION = "theme"
 
 THEME_DEFAULTS: dict[str, str] = {
