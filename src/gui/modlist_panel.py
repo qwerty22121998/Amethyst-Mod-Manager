@@ -306,7 +306,7 @@ class ModListPanel(ctk.CTkFrame):
 
         # Endorsed mod tick icon
         self._icon_endorsed: ImageTk.PhotoImage | None = None
-        _tick_path = _ICONS_DIR / "tick.png"
+        _tick_path = _ICONS_DIR / "endorsed.png"
         if _tick_path.is_file():
             self._icon_endorsed = ImageTk.PhotoImage(
                 PilImage.open(_tick_path).convert("RGBA").resize((_icon_sz, _icon_sz), PilImage.LANCZOS))
@@ -4518,6 +4518,8 @@ class ModListPanel(ctk.CTkFrame):
                                    if missing else "Missing requirements")
                         elif _kind == "update":
                             tip = "Update available on Nexus Mods"
+                        elif _kind == "endorsed":
+                            tip = "Endorsed"
                         elif _kind == "prertx":
                             tip = "Pre-RTX mod"
                         elif _kind == "disabled_files":
