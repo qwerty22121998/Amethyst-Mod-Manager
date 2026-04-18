@@ -2988,7 +2988,9 @@ class _ReplaceModDialog(ctk.CTkToplevel):
     _WIDTH = 480
     _HEIGHT = 180
 
-    def __init__(self, parent, mod_name: str):
+    def __init__(self, parent, mod_name: str,
+                 suggestions: list[str] | None = None,
+                 rename_conflict: str | None = None):
         self._parent_ref = parent
         super().__init__(master=parent)
         self.old_x = None
@@ -3003,6 +3005,15 @@ class _ReplaceModDialog(ctk.CTkToplevel):
         self.selected_files: set[str] | None = None
         self.new_name: str | None = None
         self._mod_name = mod_name
+        # De-dup while preserving order; drop the current mod_name since it's
+        # what the user is replacing.
+        _seen: set[str] = set()
+        self._suggestions: list[str] = []
+        for s in (suggestions or []):
+            s = (s or "").strip()
+            if s and s != mod_name and s not in _seen:
+                _seen.add(s)
+                self._suggestions.append(s)
 
         self.transparent_color = self._apply_appearance_mode(self.cget("fg_color"))
         if sys.platform.startswith("win"):
@@ -3046,9 +3057,19 @@ class _ReplaceModDialog(ctk.CTkToplevel):
         ).grid(row=0, column=1, sticky="ne", padx=10, pady=10)
 
         # Body text
+        if rename_conflict:
+            body_text = (
+                f"'{rename_conflict}' is also already installed.\n"
+                f"Pick a different name, or choose another option."
+            )
+        else:
+            body_text = (
+                f"'{mod_name}' is already installed.\n"
+                f"How would you like to handle the existing mod?"
+            )
         ctk.CTkLabel(
             self._frame,
-            text=f"'{mod_name}' is already installed.\nHow would you like to handle the existing mod?",
+            text=body_text,
             justify="left", anchor="w",
             wraplength=self._WIDTH - 40,
         ).grid(row=1, column=0, padx=(20, 10), pady=(0, 6), sticky="new", columnspan=2)
@@ -3059,7 +3080,13 @@ class _ReplaceModDialog(ctk.CTkToplevel):
         self._rename_frame.grid_columnconfigure(0, weight=1)
         self._rename_frame.grid_remove()
 
-        self._rename_var = tk.StringVar(value=mod_name)
+        if rename_conflict:
+            initial_name = rename_conflict
+        elif self._suggestions:
+            initial_name = self._suggestions[0]
+        else:
+            initial_name = mod_name
+        self._rename_var = tk.StringVar(value=initial_name)
         rename_entry = ctk.CTkEntry(
             self._rename_frame, textvariable=self._rename_var,
             font=FONT_NORMAL, fg_color=BG_PANEL, text_color=TEXT_MAIN,
@@ -3074,6 +3101,19 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="white",
             command=self._on_rename_confirm,
         ).grid(row=0, column=1)
+
+        if self._suggestions:
+            ctk.CTkLabel(
+                self._rename_frame, text="Or choose a suggestion:",
+                font=FONT_SMALL, text_color=TEXT_DIM, anchor="w",
+            ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(6, 2))
+            ctk.CTkOptionMenu(
+                self._rename_frame, values=self._suggestions,
+                font=FONT_SMALL, fg_color=BG_PANEL, text_color=TEXT_MAIN,
+                button_color=BG_HEADER, button_hover_color=BG_HOVER,
+                dropdown_fg_color=BG_PANEL, dropdown_text_color=TEXT_MAIN,
+                command=lambda v: self._rename_var.set(v),
+            ).grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 4))
 
         # Button row
         btn_frame = ctk.CTkFrame(self._frame, fg_color="transparent")
@@ -3098,6 +3138,8 @@ class _ReplaceModDialog(ctk.CTkToplevel):
 
         self.bind("<Escape>", lambda _e: self._on_cancel())
         self._center_and_show()
+        if rename_conflict:
+            self.after(60, self._on_rename)
 
     def _center_and_show(self):
         parent = self._parent_ref
