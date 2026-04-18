@@ -4666,10 +4666,24 @@ class CollectionDetailDialog(tk.Frame):
         inner = tk.Frame(canvas, bg=BG_PANEL)
         canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
 
+        _state = {"sr": None, "w": None, "syncing": False}
+
         def _on_inner_configure(_e=None):
-            canvas.configure(scrollregion=canvas.bbox("all"))
+            if _state["syncing"]:
+                return
+            _state["syncing"] = True
+            try:
+                bb = canvas.bbox("all")
+                if bb and bb != _state["sr"]:
+                    canvas.configure(scrollregion=bb)
+                    _state["sr"] = bb
+            finally:
+                _state["syncing"] = False
 
         def _on_canvas_configure(e):
+            if _state["w"] == e.width:
+                return
+            _state["w"] = e.width
             canvas.itemconfig(canvas_window, width=e.width)
 
         inner.bind("<Configure>", _on_inner_configure)
@@ -5313,9 +5327,16 @@ class CollectionsDialog(tk.Frame):
     # ------------------------------------------------------------------
 
     def _on_inner_configure(self, _event=None):
-        self._canvas.configure(scrollregion=(
-            0, 0, self._inner.winfo_reqwidth(), self._inner.winfo_reqheight(),
-        ))
+        if getattr(self, "_inner_sr_syncing", False):
+            return
+        self._inner_sr_syncing = True
+        try:
+            new_sr = (0, 0, self._inner.winfo_reqwidth(), self._inner.winfo_reqheight())
+            if new_sr != getattr(self, "_inner_sr_applied", None):
+                self._canvas.configure(scrollregion=new_sr)
+                self._inner_sr_applied = new_sr
+        finally:
+            self._inner_sr_syncing = False
 
     def _on_canvas_configure(self, event):
         if hasattr(self, '_regrid_after_id') and self._regrid_after_id:

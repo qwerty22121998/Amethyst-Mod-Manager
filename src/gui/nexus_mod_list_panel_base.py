@@ -183,9 +183,16 @@ class _NexusModListPanel:
     # ------------------------------------------------------------------
 
     def _on_inner_configure(self, _event=None):
-        self._canvas.configure(scrollregion=(
-            0, 0, self._inner.winfo_reqwidth(), self._inner.winfo_reqheight(),
-        ))
+        if getattr(self, "_inner_sr_syncing", False):
+            return
+        self._inner_sr_syncing = True
+        try:
+            new_sr = (0, 0, self._inner.winfo_reqwidth(), self._inner.winfo_reqheight())
+            if new_sr != getattr(self, "_inner_sr_applied", None):
+                self._canvas.configure(scrollregion=new_sr)
+                self._inner_sr_applied = new_sr
+        finally:
+            self._inner_sr_syncing = False
 
     def _on_canvas_configure(self, event):
         if self._regrid_after_id:

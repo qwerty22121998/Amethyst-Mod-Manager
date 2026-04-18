@@ -206,10 +206,30 @@ class LootPluginRulesOverlay(tk.Frame):
 
         self._rules_inner = tk.Frame(self._rules_canvas, bg=BG_PANEL)
         self._rules_inner_id = self._rules_canvas.create_window((0, 0), window=self._rules_inner, anchor="nw")
-        self._rules_inner.bind("<Configure>", lambda e: self._rules_canvas.configure(
-            scrollregion=self._rules_canvas.bbox("all")))
-        self._rules_canvas.bind("<Configure>", lambda e: self._rules_canvas.itemconfigure(
-            self._rules_inner_id, width=e.width))
+        self._rules_sr_applied: tuple | None = None
+        self._rules_width_applied: int | None = None
+        self._rules_sr_syncing = False
+
+        def _on_inner_cfg(_e):
+            if self._rules_sr_syncing:
+                return
+            self._rules_sr_syncing = True
+            try:
+                bb = self._rules_canvas.bbox("all")
+                if bb and bb != self._rules_sr_applied:
+                    self._rules_canvas.configure(scrollregion=bb)
+                    self._rules_sr_applied = bb
+            finally:
+                self._rules_sr_syncing = False
+
+        def _on_canvas_cfg(e):
+            if self._rules_width_applied == e.width:
+                return
+            self._rules_width_applied = e.width
+            self._rules_canvas.itemconfigure(self._rules_inner_id, width=e.width)
+
+        self._rules_inner.bind("<Configure>", _on_inner_cfg)
+        self._rules_canvas.bind("<Configure>", _on_canvas_cfg)
 
         # Accept drops on the canvas and inner frame
         for w in (self._rules_canvas, self._rules_inner, rules_outer):

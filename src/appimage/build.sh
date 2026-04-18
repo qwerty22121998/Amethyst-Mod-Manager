@@ -24,6 +24,7 @@ OUTPUT_APPIMAGE="AmethystModManager-${VERSION}-x86_64.AppImage"
 # URLs — update these if newer versions are available
 PYTHON_APPIMAGE_URL="https://github.com/niess/python-appimage/releases/download/python3.13/python3.13.9-cp313-cp313-manylinux_2_28_x86_64.AppImage"
 APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+APPIMAGE_RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64"
 
 # ── Clean previous build ─────────────────────────────────────────────
 echo "=== Cleaning previous build ==="
@@ -247,12 +248,23 @@ chmod +x "$APPDIR/AppRun"
 # ── Step 9: Build the AppImage ───────────────────────────────────────
 echo "=== Downloading appimagetool ==="
 APPIMAGETOOL="${BUILD_DIR}/appimagetool"
-wget -O "$APPIMAGETOOL" "$APPIMAGETOOL_URL"
+wget --tries=5 --waitretry=5 --retry-connrefused -O "$APPIMAGETOOL" "$APPIMAGETOOL_URL"
 chmod +x "$APPIMAGETOOL"
+
+# Pre-download the AppImage runtime separately so transient 504s from
+# GitHub don't abort the whole build.  appimagetool would otherwise fetch
+# this itself with no retries.
+echo "=== Downloading AppImage runtime ==="
+APPIMAGE_RUNTIME="${BUILD_DIR}/runtime-x86_64"
+wget --tries=5 --waitretry=5 --retry-connrefused \
+     --retry-on-http-error=429,500,502,503,504 \
+     -O "$APPIMAGE_RUNTIME" "$APPIMAGE_RUNTIME_URL"
 
 echo "=== Building AppImage ==="
 cd "$BUILD_DIR"
-ARCH=x86_64 "$APPIMAGETOOL" --no-appstream "$APPDIR" "$OUTPUT_APPIMAGE"
+ARCH=x86_64 "$APPIMAGETOOL" --no-appstream \
+    --runtime-file "$APPIMAGE_RUNTIME" \
+    "$APPDIR" "$OUTPUT_APPIMAGE"
 
 # ── Done ─────────────────────────────────────────────────────────────
 echo ""

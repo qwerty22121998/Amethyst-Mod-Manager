@@ -452,15 +452,23 @@ class GamePickerPanel(tk.Frame):
     # ------------------------------------------------------------------
 
     def _on_inner_configure(self, _event=None):
-        bbox = self._canvas.bbox("all")
-        if bbox:
-            x1, y1, x2, y2 = bbox
-            cw = self._canvas.winfo_width() or 1
-            ch = self._canvas.winfo_height() or 1
-            # scr_w must extend to x2 so full content is scrollable when narrowed
-            scr_w = max(x2, cw + 1)
-            scr_h = max(y2 - y1, ch + 1)
-            self._canvas.configure(scrollregion=(0, 0, scr_w, scr_h))
+        if getattr(self, "_inner_sr_syncing", False):
+            return
+        self._inner_sr_syncing = True
+        try:
+            bbox = self._canvas.bbox("all")
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                cw = self._canvas.winfo_width() or 1
+                ch = self._canvas.winfo_height() or 1
+                scr_w = max(x2, cw + 1)
+                scr_h = max(y2 - y1, ch + 1)
+                new_sr = (0, 0, scr_w, scr_h)
+                if new_sr != getattr(self, "_inner_sr_applied", None):
+                    self._canvas.configure(scrollregion=new_sr)
+                    self._inner_sr_applied = new_sr
+        finally:
+            self._inner_sr_syncing = False
 
     def _on_canvas_configure(self, event):
         if hasattr(self, '_regrid_after_id') and self._regrid_after_id:

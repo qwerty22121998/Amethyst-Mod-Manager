@@ -991,6 +991,7 @@ class App(ctk.CTk):
             self.grid_columnconfigure(2, minsize=new_w, weight=4)
             self._plugin_panel_container.configure(width=new_w)
             self._plugin_panel_saved_w = new_w
+            self._col2_min_applied = new_w
 
     def _ensure_plugin_panel_visible(self) -> None:
         if not self._plugin_panel_visible:
@@ -1002,6 +1003,7 @@ class App(ctk.CTk):
             self._plugin_panel_container.grid()
             self.grid_columnconfigure(2, weight=4, minsize=self._plugin_panel_saved_w)
             self._plugin_panel_container.configure(width=self._plugin_panel_saved_w)
+            self._col2_min_applied = self._plugin_panel_saved_w
             self._col_drag_handle.configure(cursor="sb_h_double_arrow")
             self._col_drag_handle.itemconfigure("arrow", text="▶")
         else:
@@ -1037,24 +1039,39 @@ class App(ctk.CTk):
         window), col 2 is shrunk toward ``scaled(480)`` and col 0 capped so
         both fit — otherwise col 2 pins at its saved width and squashes
         the modlist column."""
-        required = self._mod_col_required_width()
-        win_w = self.winfo_width()
-        if win_w > 1 and self._plugin_panel_visible:
-            sep_w = self._col_drag_handle.winfo_reqwidth() or scaled(14)
-            plugin_min = scaled(480)
-            saved = max(plugin_min, self._plugin_panel_saved_w)
-            # How wide can the plugin panel be without overflowing?
-            max_plugin = max(plugin_min, win_w - required - sep_w)
-            plugin_w = min(saved, max_plugin)
-            self.grid_columnconfigure(2, weight=4, minsize=plugin_w)
-            try:
-                if abs(self._plugin_panel_container.winfo_width() - plugin_w) > 1:
-                    self._plugin_panel_container.configure(width=plugin_w)
-            except Exception:
-                pass
-            if required + sep_w + plugin_w > win_w:
-                required = max(scaled(320), win_w - sep_w - plugin_w)
-        self.grid_columnconfigure(0, weight=5, minsize=required)
+        # Re-entrancy guard: our own grid_columnconfigure calls can trigger a
+        # <Configure> on the root (on fractional-scaled Wayland / tiling WMs
+        # that contest the requested size), which would re-enter this sync
+        # and oscillate the layout between two states.
+        if getattr(self, "_syncing_col_minsize", False):
+            return
+        self._syncing_col_minsize = True
+        try:
+            required = self._mod_col_required_width()
+            win_w = self.winfo_width()
+            new_col2_min: int | None = None
+            if win_w > 1 and self._plugin_panel_visible:
+                sep_w = self._col_drag_handle.winfo_reqwidth() or scaled(14)
+                plugin_min = scaled(480)
+                saved = max(plugin_min, self._plugin_panel_saved_w)
+                # How wide can the plugin panel be without overflowing?
+                max_plugin = max(plugin_min, win_w - required - sep_w)
+                plugin_w = min(saved, max_plugin)
+                new_col2_min = plugin_w
+                if required + sep_w + plugin_w > win_w:
+                    required = max(scaled(320), win_w - sep_w - plugin_w)
+            # Only reconfigure when the value actually changed — each call can
+            # emit a <Configure> even when the value is identical. Drop the
+            # direct container.configure(width=...) entirely: grid_propagate
+            # is False and the grid column's minsize drives the container.
+            if new_col2_min is not None and new_col2_min != getattr(self, "_col2_min_applied", None):
+                self.grid_columnconfigure(2, weight=4, minsize=new_col2_min)
+                self._col2_min_applied = new_col2_min
+            if required != getattr(self, "_col0_min_applied", None):
+                self.grid_columnconfigure(0, weight=5, minsize=required)
+                self._col0_min_applied = required
+        finally:
+            self._syncing_col_minsize = False
 
     def _col_max_plugin_width(self) -> int:
         return self.winfo_width() - self._mod_col_required_width() - self._col_drag_handle.winfo_width()
