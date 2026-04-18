@@ -14,6 +14,7 @@ from typing import Callable, Optional
 
 import customtkinter as ctk
 
+import gui.theme as _theme
 from gui.theme import (
     ACCENT,
     ACCENT_HOV,
@@ -23,7 +24,6 @@ from gui.theme import (
     BG_PANEL,
     BG_ROW,
     BG_ROW_ALT,
-    BG_SEP,
     BORDER,
     FONT_BOLD,
     FONT_NORMAL,
@@ -146,7 +146,7 @@ class LootGroupsOverlay(tk.Frame):
         )
         vsb = tk.Scrollbar(list_frame, orient="vertical",
                            command=self._groups_listbox.yview,
-                           bg=BG_SEP, troughcolor=BG_DEEP,
+                           bg=_theme.BG_SEP, troughcolor=BG_DEEP,
                            activebackground=ACCENT, highlightthickness=0, bd=0)
         self._groups_listbox.configure(yscrollcommand=vsb.set)
         self._groups_listbox.grid(row=0, column=0, sticky="nsew")
@@ -245,7 +245,7 @@ class LootGroupsOverlay(tk.Frame):
                                        highlightthickness=0, yscrollincrement=1)
         rules_vsb = tk.Scrollbar(rules_frame, orient="vertical",
                                  command=self._rules_canvas.yview,
-                                 bg=BG_SEP, troughcolor=BG_DEEP,
+                                 bg=_theme.BG_SEP, troughcolor=BG_DEEP,
                                  activebackground=ACCENT, highlightthickness=0, bd=0)
         self._rules_canvas.configure(yscrollcommand=rules_vsb.set)
         self._rules_canvas.grid(row=0, column=0, sticky="nsew")

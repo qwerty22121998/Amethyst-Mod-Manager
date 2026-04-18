@@ -96,9 +96,9 @@ BG_SEP             = get_theme_color("separator_bg")
 def refresh_theme_colors() -> None:
     """Re-read theme colours from amethyst.ini and rebind the module globals.
 
-    Callers that captured names via `from gui.theme import X` will still see
-    their old binding — rendering sites should use `theme.X` attribute access
-    for the values to update live.
+    Rendering sites must use `theme.X` attribute access for values to update
+    live — callers that captured names via `from gui.theme import X` will see
+    their old (startup) binding only.
     """
     global plugin_separator, plugin_mod, conflict_separator, conflict_higher, conflict_lower, BG_SEP
     load_theme_colors()

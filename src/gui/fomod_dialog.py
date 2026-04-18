@@ -25,7 +25,6 @@ from gui.theme import (
     BG_PANEL,
     BG_HEADER,
     BG_ROW,
-    BG_SEP,
     BG_HOVER,
     BG_SELECT,
     ACCENT,

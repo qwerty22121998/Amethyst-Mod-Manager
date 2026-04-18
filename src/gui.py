@@ -2205,8 +2205,14 @@ if __name__ == "__main__":
     atexit.register(_run_shutdown)
 
     def _on_signal(signum, _frame):
-        _run_shutdown()
-        # Re-raise default behaviour so the process actually exits.
+        # Tk is not signal-safe — don't touch widgets here. Defer shutdown
+        # onto the main loop and let Tk exit gracefully. If the loop isn't
+        # running or can't schedule, fall back to a bare exit.
+        try:
+            app.after(0, _on_app_close)
+            return
+        except Exception:
+            pass
         try:
             signal.signal(signum, signal.SIG_DFL)
             os.kill(os.getpid(), signum)

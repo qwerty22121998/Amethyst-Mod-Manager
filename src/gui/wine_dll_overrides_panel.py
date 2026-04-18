@@ -29,7 +29,6 @@ from gui.theme import (
     BG_PANEL,
     BG_ROW,
     BG_ROW_ALT,
-    BG_SEP,
     BORDER,
     FONT_BOLD,
     FONT_NORMAL,

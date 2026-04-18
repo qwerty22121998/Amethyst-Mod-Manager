@@ -510,10 +510,18 @@ class NexusAPI:
             self._rate.daily_limit = int(h["x-rl-daily-limit"])
 
     def _log_response(self, method: str, path: str, resp: requests.Response) -> None:
-        """Log request and response to the app log (status + body, truncated). Redacts sensitive fields (key, email, etc.)."""
+        """Log request and response status to the app log.
+
+        Full response bodies are only dumped on non-OK responses; successful
+        200 bodies can contain mod descriptions with words like "error" or
+        "failed" that would trip the status-bar classifier and generate
+        spurious user-visible errors. On success we log just the status line.
+        Redacts sensitive fields (key, email, etc.) in any body we do log.
+        """
         try:
-            status_msg = f"Nexus API {method} {path} → {resp.status_code}"
-            app_log(status_msg)
+            app_log(f"Nexus API {method} {path} → {resp.status_code}")
+            if resp.ok:
+                return
             body_str = resp.text if resp.text is not None else "(empty)"
             body_str = _redact_sensitive_response(body_str)
             if len(body_str) > 1200:
@@ -1332,11 +1340,28 @@ class NexusAPI:
                 json={"query": f'{{ game(domainName: "{game_domain}") {{ id }} }}'},
                 timeout=self._timeout,
             )
+            if not gid_resp.ok:
+                app_log(
+                    f"GraphQL modFilesBatch: game ID lookup HTTP {gid_resp.status_code} "
+                    f"for {game_domain!r} — falling back to REST"
+                )
+                return {}
+            gid_payload = gid_resp.json()
+            if "errors" in gid_payload:
+                app_log(
+                    f"GraphQL modFilesBatch: game ID lookup errors for {game_domain!r}: "
+                    f"{gid_payload['errors']} — falling back to REST"
+                )
+                return {}
             game_id = int(
-                ((gid_resp.json().get("data") or {}).get("game") or {}).get("id") or 0
+                ((gid_payload.get("data") or {}).get("game") or {}).get("id") or 0
             )
-        except Exception:
-            game_id = 0
+        except Exception as exc:
+            app_log(
+                f"GraphQL modFilesBatch: game ID lookup raised for {game_domain!r}: "
+                f"{exc} — falling back to REST"
+            )
+            return {}
         if not game_id:
             app_log(f"GraphQL modFilesBatch: could not resolve game ID for {game_domain!r}")
             return {}

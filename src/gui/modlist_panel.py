@@ -31,7 +31,6 @@ from gui.theme import (
     BG_PANEL,
     BG_ROW,
     BG_ROW_ALT,
-    BG_SEP,
     BG_SELECT,
     BORDER,
     TEXT_DIM,
@@ -3087,7 +3086,7 @@ class ModListPanel(ctk.CTkFrame):
             gy_top = ghost_top + offset * gh
             gy_mid = gy_top + gh // 2
             is_sep = entry.is_separator
-            bg = BG_SEP if is_sep else BG_SELECT
+            bg = _theme.BG_SEP if is_sep else BG_SELECT
             outline = ACCENT if offset == 0 else BORDER
             self._canvas.create_rectangle(
                 2, gy_top, cw - 2, gy_top + gh,
@@ -5690,7 +5689,7 @@ class ModListPanel(ctk.CTkFrame):
             canvas = tk.Canvas(outer, bg=BG_PANEL, bd=0, highlightthickness=0,
                                width=popup_w, height=popup_h)
             vsb = tk.Scrollbar(outer, orient="vertical", command=canvas.yview,
-                               bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+                               bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
                                highlightthickness=0, bd=0)
             canvas.configure(yscrollcommand=vsb.set)
             canvas.pack(side="left", fill="both", expand=True)
@@ -8249,7 +8248,7 @@ class ModListPanel(ctk.CTkFrame):
                 y1 = max(0, y2 - 8)
             c.create_rectangle(
                 0, y1, strip_w, y2,
-                fill=BG_SEP, outline="", stipple="gray50", tags="thumb",
+                fill=_theme.BG_SEP, outline="", stipple="gray50", tags="thumb",
             )
 
     def _scroll_set(self, first: str, last: str) -> None:
@@ -8284,7 +8283,7 @@ class ModListPanel(ctk.CTkFrame):
             y1 = max(0, y2 - 8)
         c.create_rectangle(
             0, y1, strip_w, y2,
-            fill=BG_SEP, outline="", stipple="gray50", tags="thumb",
+            fill=_theme.BG_SEP, outline="", stipple="gray50", tags="thumb",
         )
 
     def _on_scrollbar_press(self, event):

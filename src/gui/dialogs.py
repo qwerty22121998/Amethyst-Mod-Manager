@@ -43,7 +43,6 @@ from gui.theme import (
     TEXT_MAIN,
     TEXT_SEP,
     BG_SELECT,
-    BG_SEP,
     BG_ROW_ALT,
 )
 import gui.theme as _theme
@@ -1783,7 +1782,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tv.bind("<Configure>", _resize_cols)
 
         vsb = tk.Scrollbar(tree_frame, orient="vertical", command=tv.yview,
-                           bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+                           bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
                            highlightthickness=0, bd=0)
         tv.configure(yscrollcommand=vsb.set)
         tv.grid(row=0, column=0, sticky="nsew")
@@ -1840,7 +1839,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tv.tag_configure("bsa", foreground="#56d8e4")
 
         vsb = tk.Scrollbar(tree_frame, orient="vertical", command=tv.yview,
-                           bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+                           bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
                            highlightthickness=0, bd=0)
         tv.configure(yscrollcommand=vsb.set)
         tv.grid(row=0, column=0, sticky="nsew")
@@ -4826,7 +4825,7 @@ class MissingReqsPanel(ctk.CTkFrame):
             yscrollincrement=1, takefocus=0,
         )
         vsb = tk.Scrollbar(list_frame, orient="vertical", command=self._canvas.yview,
-                           bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+                           bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
                            highlightthickness=0, bd=0)
         self._canvas.configure(yscrollcommand=vsb.set)
         self._canvas.grid(row=0, column=0, sticky="nsew")

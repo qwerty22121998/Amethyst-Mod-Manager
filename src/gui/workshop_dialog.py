@@ -26,12 +26,12 @@ from Utils.config_paths import get_fomod_selections_path
 from Utils.plugins import read_plugins
 from Utils.portal_filechooser import pick_save_file
 from gui.ctk_components import CTkAlert
+import gui.theme as _theme
 from gui.theme import (
     BG_DEEP,
     BG_HEADER,
     BG_PANEL,
     BG_ROW,
-    BG_SEP,
     BG_HOVER,
     ACCENT,
     ACCENT_HOV,
@@ -164,7 +164,7 @@ class VersionPickerOverlay(tk.Frame):
 
         sb = tk.Scrollbar(
             body, orient="vertical", command=self._canvas.yview,
-            bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+            bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
             highlightthickness=0, bd=0,
         )
         sb.pack(side="right", fill="y")
@@ -619,7 +619,7 @@ class WorkshopDialog(tk.Frame):
 
         sb = tk.Scrollbar(
             body, orient="vertical", command=self._canvas.yview,
-            bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+            bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
             highlightthickness=0, bd=0,
         )
         sb.grid(row=0, column=1, sticky="ns")
@@ -1098,7 +1098,7 @@ class WorkshopDialog(tk.Frame):
             cbm  = c.create_text(0, OFF, text="✓", anchor="center", fill=ACCENT, font=FN, state="hidden")
             fmr  = c.create_rectangle(0, OFF, 0, OFF, outline=BORDER, fill="", state="hidden")
             fmm  = c.create_text(0, OFF, text="✓", anchor="center", fill=ACCENT, font=FN, state="hidden")
-            sbtn = c.create_rectangle(0, OFF, 0, OFF, fill=BG_SEP, outline="", state="hidden")
+            sbtn = c.create_rectangle(0, OFF, 0, OFF, fill=_theme.BG_SEP, outline="", state="hidden")
             slbl = c.create_text(0, OFF, text="", anchor="center", fill=TEXT_MAIN, font=FS, state="hidden")
 
             self._pool_bg.append(bg)

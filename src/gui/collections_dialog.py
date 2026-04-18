@@ -58,12 +58,12 @@ _COLL_COLS  = 5
 _COLL_W     = 220  # 200 was too narrow at 1.25x–1.5x scale; extra width avoids clipping
 _COLL_IMG_W = 210
 _COLL_IMG_H = 240
+import gui.theme as _theme
 from gui.theme import (
     BG_DEEP,
     BG_PANEL,
     BG_HEADER,
     BG_ROW,
-    BG_SEP,
     BG_HOVER,
     ACCENT,
     ACCENT_HOV,
@@ -845,7 +845,7 @@ class CollectionDetailDialog(tk.Frame):
             height=scaled(26),
             fg_color=BG_PANEL,
             hover_color=BG_HOVER,
-            border_color=BG_SEP,
+            border_color=_theme.BG_SEP,
             border_width=1,
             text_color=TEXT_MAIN,
             text_color_disabled=TEXT_DIM,
@@ -881,12 +881,12 @@ class CollectionDetailDialog(tk.Frame):
 
         vsb = tk.Scrollbar(
             tree_frame, orient="vertical",
-            bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+            bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
             highlightthickness=0, bd=0,
         )
         hsb = tk.Scrollbar(
             tree_frame, orient="horizontal",
-            bg=BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
+            bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
             highlightthickness=0, bd=0,
         )
 
@@ -894,7 +894,6 @@ class CollectionDetailDialog(tk.Frame):
         # Do NOT call theme_use() here — it changes the global ttk theme and
         # breaks every other ttk widget in the application.
         style = ttk.Style()
-        import gui.theme as _theme
         style.configure(
             "CollDetail.Treeview",
             background=BG_PANEL, foreground=TEXT_MAIN,
@@ -1130,7 +1129,7 @@ class CollectionDetailDialog(tk.Frame):
         inner = tk.Frame(popup, bg=BG_PANEL, bd=0, highlightthickness=0)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
 
-        sb = tk.Scrollbar(inner, orient="vertical", bg=BG_SEP, troughcolor=BG_DEEP,
+        sb = tk.Scrollbar(inner, orient="vertical", bg=_theme.BG_SEP, troughcolor=BG_DEEP,
                           activebackground=ACCENT, highlightthickness=0, bd=0, width=scaled(10))
         lb = tk.Listbox(
             inner,
@@ -4655,7 +4654,7 @@ class CollectionDetailDialog(tk.Frame):
         rows_frame.pack_propagate(False)
 
         canvas = tk.Canvas(rows_frame, bg=BG_PANEL, highlightthickness=0, bd=0)
-        sb = tk.Scrollbar(rows_frame, orient="vertical", bg=BG_SEP, troughcolor=BG_DEEP,
+        sb = tk.Scrollbar(rows_frame, orient="vertical", bg=_theme.BG_SEP, troughcolor=BG_DEEP,
                           activebackground=ACCENT, highlightthickness=0, bd=0, width=scaled(10))
         canvas.configure(yscrollcommand=sb.set)
         sb.config(command=canvas.yview)

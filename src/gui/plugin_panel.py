@@ -27,7 +27,6 @@ from gui.theme import (
     BG_PANEL,
     BG_ROW,
     BG_ROW_ALT,
-    BG_SEP,
     BG_SELECT,
     BORDER,
     TEXT_DIM,
@@ -4806,9 +4805,9 @@ class PluginPanel(ctk.CTkFrame):
             staged file, or enabled Nexus mod
           - an incompatibility counts only if the conflicting plugin is enabled
 
-        enabled_lower is built once per plugin_entries identity and cached on
-        self so that calling this method 60+ times per _predraw doesn't
-        recompute the 1300-plugin lowercase set over and over.
+        enabled_lower is cached keyed on the tuple of enabled flags so that
+        calling this method 60+ times per _predraw doesn't recompute the
+        1300-plugin lowercase set; in-place toggles invalidate the cache.
         """
         info = self._loot_info.get(plugin_name.lower())
         if not info:
@@ -4816,12 +4815,12 @@ class PluginPanel(ctk.CTkFrame):
         if info.get("messages"):
             return True
 
-        cached_id = getattr(self, "_enabled_lower_cache_id", None)
-        if cached_id is not id(self._plugin_entries):
+        sig = (len(self._plugin_entries), tuple(e.enabled for e in self._plugin_entries))
+        if getattr(self, "_enabled_lower_cache_sig", None) != sig:
             self._enabled_lower_cache = {
                 e.name.lower() for e in self._plugin_entries if e.enabled
             }
-            self._enabled_lower_cache_id = id(self._plugin_entries)
+            self._enabled_lower_cache_sig = sig
         enabled_lower = self._enabled_lower_cache
         enabled_mod_ids: set[int] | None = None
         staged_paths: set[str] | None = None
@@ -5581,6 +5580,7 @@ class PluginPanel(ctk.CTkFrame):
             n,
             strip_h,
             strip_w,
+            tuple(e.name for e in entries),
             frozenset(self._missing_masters),
             frozenset(self._highlighted_plugins),
             frozenset(self._master_highlights),
@@ -5674,7 +5674,7 @@ class PluginPanel(ctk.CTkFrame):
             y1 = max(0, y2 - 8)
         c.create_rectangle(
             0, y1, strip_w, y2,
-            fill=BG_SEP, outline="", stipple="gray50", tags="thumb",
+            fill=_theme.BG_SEP, outline="", stipple="gray50", tags="thumb",
         )
 
     def _pscroll_set(self, first: str, last: str) -> None:
