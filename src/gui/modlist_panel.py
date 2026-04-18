@@ -2034,9 +2034,15 @@ class ModListPanel(ctk.CTkFrame):
                                    font=(_theme.FONT_FAMILY, _theme.FS10), state="hidden")
             # Separator collapse icon
             sep_icon_id = c.create_image(0, -200, anchor="center", state="hidden")
-            # Separator decorative lines (left and right of label)
+            # Separator decorative lines (left and right of label).
+            # Lowered to sit just above the row background so flag/conflict
+            # icons stack on top of them when columns overlap.
             sep_line_l = c.create_line(0, -200, 0, -200, fill="", width=1, state="hidden")
             sep_line_r = c.create_line(0, -200, 0, -200, fill="", width=1, state="hidden")
+            c.tag_raise(sep_line_l, bg_id)
+            c.tag_raise(sep_line_r, bg_id)
+            c.tag_lower(sep_line_l, flag_id)
+            c.tag_lower(sep_line_r, flag_id)
             # Custom deploy path badge (shown right of label on separators with override)
             sep_badge_id = c.create_text(0, -200, text="", anchor="w", fill="",
                                          font=(_theme.FONT_FAMILY, _theme.FS9), state="hidden")
@@ -2337,10 +2343,7 @@ class ModListPanel(ctk.CTkFrame):
                         txt_col = _theme.contrasting_text_color(_theme.plugin_separator)
                         row_bg = _theme.hover_tint(_theme.plugin_separator) if _is_hover_sep else _theme.plugin_separator
                     elif _is_hover_sep:
-                        if custom_color:
-                            row_bg = _theme.hover_tint(base_bg)
-                        else:
-                            row_bg = BG_HOVER_ROW
+                        row_bg = _theme.hover_tint(base_bg)
                     else:
                         row_bg = base_bg
 
@@ -2401,7 +2404,7 @@ class ModListPanel(ctk.CTkFrame):
                         text_pad     = scaled(6)
                         label_hw     = len(label) * scaled(4) + text_pad
                         right_edge   = cw - lock_w - scaled(8)
-                        sep_line_col = txt_col if (custom_color if not is_synthetic else False) else BORDER
+                        sep_line_col = _theme.hover_tint(base_bg, 35)
                         c.coords(self._pool_sep_line_l[s],
                                  left_edge, y_mid, mid_x - label_hw, y_mid)
                         c.itemconfigure(self._pool_sep_line_l[s], fill=sep_line_col, state="normal")
