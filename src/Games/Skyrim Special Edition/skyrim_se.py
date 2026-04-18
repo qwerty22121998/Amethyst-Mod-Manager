@@ -130,10 +130,6 @@ class SkyrimSE(Fallout_3):
             ]),
             CustomRule(dest="", folders=["enbseries"]),
         ]
-    
-    @property
-    def winetricks_components(self) -> list[str]:
-        return ["d3dcompiler_47"]
 
     @property
     def wizard_tools(self) -> list[WizardTool]:
