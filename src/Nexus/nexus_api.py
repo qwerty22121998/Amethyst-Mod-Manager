@@ -1310,6 +1310,111 @@ class NexusAPI:
                 app_log(f"GraphQL batch update check error: {exc}")
         return results
 
+    def graphql_mod_files_batch(
+        self,
+        game_domain: str,
+        mod_ids: list[int],
+    ) -> dict[int, list["NexusModFile"]]:
+        """
+        Fetch the file list for a batch of mods via aliased GraphQL modFiles
+        queries. Rate-limit-free (GraphQL does not consume the REST hourly limit).
+
+        Returns a dict mapping mod_id → list of NexusModFile. Mods that fail
+        (or are missing from the response) are simply absent from the dict;
+        callers should fall back to REST get_mod_files for those.
+        """
+        if not mod_ids:
+            return {}
+
+        try:
+            gid_resp = self._session.post(
+                GRAPHQL_BASE,
+                json={"query": f'{{ game(domainName: "{game_domain}") {{ id }} }}'},
+                timeout=self._timeout,
+            )
+            game_id = int(
+                ((gid_resp.json().get("data") or {}).get("game") or {}).get("id") or 0
+            )
+        except Exception:
+            game_id = 0
+        if not game_id:
+            app_log(f"GraphQL modFilesBatch: could not resolve game ID for {game_domain!r}")
+            return {}
+
+        results: dict[int, list[NexusModFile]] = {}
+        unique_mods = list(dict.fromkeys(mod_ids))
+        batch_size = self._GRAPHQL_FILE_BATCH
+        for i in range(0, len(unique_mods), batch_size):
+            batch = unique_mods[i: i + batch_size]
+            aliases = "\n".join(
+                f"    m{mid}: modFiles(gameId: {game_id}, modId: {mid}) {{\n"
+                f"        fileId name version description\n"
+                f"        categoryId category\n"
+                f"        sizeInBytes date uri\n"
+                f"    }}"
+                for mid in batch
+            )
+            query = f"query ModFilesBatch {{\n{aliases}\n}}"
+            try:
+                resp = self._session.post(
+                    GRAPHQL_BASE,
+                    json={"query": query},
+                    timeout=self._timeout,
+                )
+                self._log_response("POST", "GraphQL modFilesBatch", resp)
+                if not resp.ok:
+                    app_log(f"GraphQL modFilesBatch failed: {resp.status_code}")
+                    continue
+                payload = resp.json()
+                if "errors" in payload:
+                    app_log(f"GraphQL modFilesBatch errors: {payload['errors']}")
+                data = (payload.get("data") or {})
+                for mid in batch:
+                    entries = data.get(f"m{mid}")
+                    if not entries:
+                        continue
+                    files: list[NexusModFile] = []
+                    for entry in entries:
+                        try:
+                            fid = int(entry.get("fileId") or 0)
+                        except (TypeError, ValueError):
+                            fid = 0
+                        if not fid:
+                            continue
+                        cat_raw = entry.get("category")
+                        if isinstance(cat_raw, dict):
+                            cat_name = (cat_raw.get("name") or "").strip()
+                        elif isinstance(cat_raw, str):
+                            cat_name = cat_raw.strip()
+                        else:
+                            cat_name = ""
+                        try:
+                            ts = int(entry.get("date") or 0)
+                        except (TypeError, ValueError):
+                            ts = 0
+                        try:
+                            sz = int(entry.get("sizeInBytes") or 0)
+                        except (TypeError, ValueError):
+                            sz = 0
+                        files.append(NexusModFile(
+                            file_id=fid,
+                            name=entry.get("name", "") or "",
+                            version=entry.get("version", "") or "",
+                            category_name=cat_name,
+                            file_name=entry.get("uri", "") or "",
+                            size_in_bytes=sz or None,
+                            size_kb=(sz // 1024) if sz else 0,
+                            mod_version="",
+                            description=entry.get("description", "") or "",
+                            uploaded_timestamp=ts,
+                        ))
+                    if files:
+                        results[mid] = files
+            except Exception as exc:
+                app_log(f"GraphQL modFilesBatch error: {exc}")
+
+        return results
+
     def graphql_mod_info_batch(
         self,
         ids: list[tuple[str, int]],

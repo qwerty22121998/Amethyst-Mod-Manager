@@ -261,6 +261,44 @@ def check_for_updates(
     gql_ids = [(game_domain, mod_id) for mod_id in by_mod_id]
     gql_info: dict[int, NexusModUpdateInfo] = api.graphql_mod_update_info_batch(gql_ids)
 
+    # -------------------------------------------------------------------
+    # Fetch per-mod file lists via GraphQL (rate-limit-free) for any mod
+    # that has a file_id — needed to (a) discover the installed file's
+    # category when meta.ini doesn't record it, and (b) compare against
+    # files in the same category as the installed file so non-MAIN
+    # installs don't false-positive off a newer MAIN upload.
+    # -------------------------------------------------------------------
+    mods_needing_files = [
+        mod_id for mod_id, metas in by_mod_id.items()
+        if any(m.file_id > 0 for m in metas)
+    ]
+    if mods_needing_files:
+        _log(f"Fetching file lists for {len(mods_needing_files)} mod(s) via GraphQL...")
+        try:
+            gql_files = api.graphql_mod_files_batch(game_domain, mods_needing_files)
+        except Exception as exc:
+            _log(f"  GraphQL modFilesBatch failed ({exc}); will use REST fallback.")
+            gql_files = {}
+        category_backfilled = 0
+        for mod_id, files in gql_files.items():
+            info = gql_info.get(mod_id)
+            if info is not None:
+                info.files = files
+            by_fid = {f.file_id: f for f in files}
+            for meta in by_mod_id.get(mod_id, []):
+                if meta.file_id <= 0:
+                    continue
+                f = by_fid.get(meta.file_id)
+                if f is None or not f.category_name:
+                    continue
+                if meta.file_category != f.category_name:
+                    meta.file_category = f.category_name
+                    if save_results:
+                        write_meta(staging_root / meta.mod_name / "meta.ini", meta)
+                    category_backfilled += 1
+        if category_backfilled:
+            _log(f"  File category backfilled for {category_backfilled} mod(s).")
+
     # Sync endorsement state via a single REST call — get_endorsements()
     # returns every endorsement the user has across all games in one request,
     # so the cost is exactly 1 rate-limit call regardless of mod count.
@@ -289,18 +327,15 @@ def check_for_updates(
             _log(f"  Endorsement sync skipped ({exc})")
 
     # -----------------------------------------------------------------------
-    # 3. Classify each mod.  Priority order (matches user spec):
-    #    A. viewerUpdateAvailable == True  → trusted update, no REST.
-    #    B. meta.version present           → version-compare vs GraphQL
-    #                                        info.version, no REST.
-    #    C. meta.version missing, file_id  → REST to look up the installed
-    #                                        file's version, backfill
-    #                                        meta.version, then version-compare.
-    #    D. meta.version + file_id missing → date compare (GraphQL updatedAt
-    #                                        vs install_date), no REST.
-    #    E. nothing usable                 → skip.
-    #
-    # Only path C makes a REST call.
+    # 3. Classify each mod.
+    #    - file_id known → file-level check (installed file's actual
+    #      version vs latest-in-same-category; authoritative and not
+    #      affected by meta-page version drift or stale meta.ini strings).
+    #    - file_id missing (legacy MO2 imports):
+    #        Path A  viewerUpdateAvailable == True  → trusted update
+    #        Path B  meta.version + gql.version     → version-compare
+    #        Path D  meta.version absent + date     → date-compare
+    #        else skip.
     # -----------------------------------------------------------------------
     rest_fallback: dict[int, list[NexusModMeta]] = {}
 
@@ -312,16 +347,17 @@ def check_for_updates(
             has_update: bool
             gql_version_backfilled = False
 
-            # --- Category gate: GraphQL returns only the mod-page version
-            # which typically tracks the latest MAIN file.  For mods
-            # installed from a different category (OPTIONAL, UPDATE, etc.)
-            # we need the file-level REST check so we can compare against
-            # files in the same category only.
-            if (
-                meta.file_category
-                and meta.file_category.upper() != "MAIN"
-                and meta.file_id > 0
-            ):
+            fcat = (meta.file_category or "").strip().upper()
+
+            # --- File-level check whenever we can identify the installed
+            # file: the file record is authoritative for both version and
+            # category, so we compare installed_file.version to the latest
+            # file in the same category. This avoids (1) false positives
+            # from non-MAIN installs being compared against a newer MAIN
+            # upload, and (2) stale `meta.version` strings from install-
+            # time filename parsing (e.g. "Mod-3-0-1" but real version is
+            # 3.0.2) producing phantom updates.
+            if meta.file_id > 0:
                 rest_fallback.setdefault(mod_id, []).append(meta)
                 continue
 
@@ -384,7 +420,7 @@ def check_for_updates(
     if not gql_info:
         _log("  GraphQL returned no results — falling back to REST for all mods.")
     else:
-        _log(f"  GraphQL check complete. {len(rest_fallback)} mod(s) need file-level check.")
+        _log(f"  {len(rest_fallback)} mod(s) will be compared at file level.")
 
     # -----------------------------------------------------------------------
     # 4. File-level check — use batch files when available, REST only when
@@ -424,18 +460,33 @@ def check_for_updates(
                 # Pick comparison target — only consider files in the
                 # same category (MAIN, OPTIONAL, etc.) so that e.g. a
                 # newer OPTIONAL file doesn't flag a MAIN install.
-                target_cat = (
+                #
+                # Special case: if the installed file has been moved to
+                # OLD_VERSION / ARCHIVED / REMOVED, the author has
+                # superseded it. We don't know which category the user
+                # originally installed from (MAIN vs OPTIONAL), so
+                # compare against the newest non-superseded file of any
+                # current category — any of those could be the intended
+                # replacement.
+                installed_cat = (
                     installed_file.category_name
                     if installed_file
                     else meta.file_category or ""
-                )
-                if target_cat:
+                ).strip().upper()
+                _SUPERSEDED = {"OLD_VERSION", "ARCHIVED", "REMOVED"}
+                if installed_cat in _SUPERSEDED:
+                    target_cat = ""
                     cat_matches = [
                         f for f in files
-                        if f.category_name == target_cat
+                        if (f.category_name or "").strip().upper()
+                        not in _SUPERSEDED
                     ]
                 else:
-                    cat_matches = []
+                    target_cat = installed_cat
+                    cat_matches = (
+                        [f for f in files if (f.category_name or "").strip().upper() == target_cat]
+                        if target_cat else []
+                    )
 
                 if cat_matches:
                     latest = max(cat_matches, key=lambda f: f.uploaded_timestamp)
@@ -486,6 +537,8 @@ def check_for_updates(
                 rest_only[mid] = metas
 
         if rest_only:
+            _log(f"  Falling back to REST get_mod_files for {len(rest_only)} mod(s) "
+                 "(GraphQL returned no file list).")
             def _check_rest(mod_id: int, metas: list[NexusModMeta]) -> None:
                 try:
                     files_resp = api.get_mod_files(game_domain, mod_id)
