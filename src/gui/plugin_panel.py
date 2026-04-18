@@ -462,6 +462,11 @@ class PluginPanel(ctk.CTkFrame):
         # filemap change, so they are only rebuilt when their tab is selected.
         self._data_tab_dirty: bool = False
         self._ini_files_tab_dirty: bool = False
+        self._data_filemap_entries: list[tuple[str, str]] = []
+        self._data_filemap_casefold: list[tuple[str, str]] = []
+        self._data_search_prev_query: str = ""
+        self._data_search_prev_indices: list[int] | None = None
+        self._data_search_after_id: str | None = None
         self._archive_tab_dirty: bool = False
 
         self._build_plugins_tab()
@@ -3142,6 +3147,9 @@ class PluginPanel(ctk.CTkFrame):
         self._data_tab_dirty = False
         self._data_tree.delete(*self._data_tree.get_children())
         self._data_filemap_entries = []
+        self._data_filemap_casefold = []
+        self._data_search_prev_query = ""
+        self._data_search_prev_indices = None
         filemap_path_str = self._get_filemap_path()
         if filemap_path_str is None:
             self._data_tree.insert("", "end",
@@ -3171,6 +3179,10 @@ class PluginPanel(ctk.CTkFrame):
         if custom_deploy_mods:
             raw_entries = [(p, m) for p, m in raw_entries if m not in custom_deploy_mods]
         self._data_filemap_entries = self._resolve_data_entries(raw_entries)
+        self._data_filemap_casefold = [
+            (rp.casefold(), mn.casefold())
+            for rp, mn in self._data_filemap_entries
+        ]
 
         # Build contested_keys from the shared conflict cache.
         contested_keys, _ = self._get_conflict_cache(None)
@@ -3553,19 +3565,44 @@ class PluginPanel(ctk.CTkFrame):
             self._on_plugin_selected_cb(mod_name)
 
     def _on_data_search_changed(self, *_):
-        """Filter the Data tree based on the search query."""
+        """Debounced filter of the Data tree based on the search query."""
+        if self._data_search_after_id is not None:
+            try:
+                self.after_cancel(self._data_search_after_id)
+            except Exception:
+                pass
+        self._data_search_after_id = self.after(150, self._apply_data_search)
+
+    def _apply_data_search(self):
+        """Apply the current search query to the Data tree."""
+        self._data_search_after_id = None
         query = self._data_search_var.get().casefold()
-        if not hasattr(self, "_data_filemap_entries") or not self._data_filemap_entries:
+        if not self._data_filemap_entries:
             return
         _ck = getattr(self, "_data_contested_keys", None)
         if not query:
+            self._data_search_prev_query = ""
+            self._data_search_prev_indices = None
             self._build_data_tree_from_entries(self._data_filemap_entries, _ck)
             return
-        filtered = [
-            (rel_path, mod_name)
-            for rel_path, mod_name in self._data_filemap_entries
-            if query in rel_path.casefold() or query in mod_name.casefold()
+
+        cf = self._data_filemap_casefold
+        entries = self._data_filemap_entries
+        prev_q = self._data_search_prev_query
+        prev_idx = self._data_search_prev_indices
+        if prev_q and prev_idx is not None and query.startswith(prev_q):
+            source = prev_idx
+        else:
+            source = range(len(entries))
+
+        matched: list[int] = [
+            i for i in source
+            if query in cf[i][0] or query in cf[i][1]
         ]
+        self._data_search_prev_query = query
+        self._data_search_prev_indices = matched
+
+        filtered = [entries[i] for i in matched]
         self._build_data_tree_from_entries(filtered, _ck)
         # Expand all nodes so filtered results are visible
         for item in self._data_tree.get_children():
