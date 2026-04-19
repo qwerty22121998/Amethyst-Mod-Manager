@@ -1476,16 +1476,15 @@ class ModListPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
     def _show_column_menu(self) -> None:
         """Popup menu to toggle column visibility. Persists to amethyst.ini."""
-        # Close any previous instance so rapid clicks don't leak popups.
-        prev = self._col_menu_popup
-        if prev is not None:
-            try:
-                prev.destroy()
-            except Exception:
-                pass
-            self._col_menu_popup = None
-        menu = CTkPopupMenu(self.winfo_toplevel(), width=200, title="")
-        self._col_menu_popup = menu
+        # Reuse a single popup instance — recreating it leaks <FocusOut>/click
+        # bindings on the app toplevel (added with add="+") which then cause
+        # the menu to instantly dismiss on subsequent opens.
+        menu = self._col_menu_popup
+        if menu is None or not menu.winfo_exists():
+            menu = CTkPopupMenu(self.winfo_toplevel(), width=200, title="")
+            self._col_menu_popup = menu
+        else:
+            menu.clear()
         # Columns in current display order (2..7), name col (1) is never hideable.
         for dc in self._col_order:
             title = self._DATA_COL_TITLES.get(dc, f"Col {dc}")
