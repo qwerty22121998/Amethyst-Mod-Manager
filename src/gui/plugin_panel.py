@@ -3558,7 +3558,25 @@ class PluginPanel(ctk.CTkFrame):
 
         from Utils.bsa_filemap import read_bsa_index
         bsa_index = read_bsa_index(bsa_path) or {}
-        my_archives = bsa_index.get(mod_name) if mod_name else None
+
+        enabled_mods: set[str] = set()
+        profile_dir = getattr(self._game, "_active_profile_dir", None)
+        modlist_path = (profile_dir / "modlist.txt") if profile_dir else None
+        if modlist_path and modlist_path.is_file():
+            try:
+                from Utils.modlist import read_modlist
+                enabled_mods = {
+                    e.name for e in read_modlist(modlist_path)
+                    if not e.is_separator and e.enabled
+                }
+            except Exception:
+                enabled_mods = set()
+
+        my_archives = (
+            bsa_index.get(mod_name)
+            if mod_name and mod_name in enabled_mods
+            else None
+        )
 
         bsa_winner, loose_winner, contested = self._get_bsa_conflict_cache()
 
@@ -3591,7 +3609,10 @@ class PluginPanel(ctk.CTkFrame):
             render_units = [(mod_name, my_archives)]
             show_owner = False
         else:
-            all_mods = [m for m in bsa_index if bsa_index.get(m)]
+            all_mods = [
+                m for m in bsa_index
+                if bsa_index.get(m) and m in enabled_mods
+            ]
             all_mods.sort(key=str.casefold)
             render_units = [(m, bsa_index[m]) for m in all_mods]
             show_owner = True
