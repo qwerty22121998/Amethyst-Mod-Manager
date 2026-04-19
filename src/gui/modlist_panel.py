@@ -6982,13 +6982,15 @@ class ModListPanel(ctk.CTkFrame):
             else:
                 no_conflict_mods.append(entry)
 
-        # --- Step 4: Group non-conflict mods by category (preserve order within group) ---
+        # --- Step 4: Group non-conflict mods by category (sorted alphabetically within group) ---
         cat_groups: dict[str, list[ModEntry]] = {}
         for entry in no_conflict_mods:
             cat = self._category_names.get(entry.name, "") or "Uncategorized"
             if cat not in cat_groups:
                 cat_groups[cat] = []
             cat_groups[cat].append(entry)
+        for mods in cat_groups.values():
+            mods.sort(key=lambda e: e.name.casefold())
 
         # --- Step 5: Build the new entries list ---
         # Keep: synthetic Overwrite + all existing separator blocks (untouched)
