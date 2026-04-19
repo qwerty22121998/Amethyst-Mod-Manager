@@ -248,7 +248,7 @@ class NameModDialog(ctk.CTkToplevel):
             border_color=BORDER
         )
         entry.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
-        entry.bind("<Return>", lambda _e: self._on_ok())
+        entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         if len(suggestions) > 1:
             ctk.CTkLabel(
@@ -349,7 +349,7 @@ class _SeparatorNameDialog(ctk.CTkToplevel):
             fg_color=BG_PANEL, text_color=TEXT_MAIN, border_color=BORDER
         )
         self._entry.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        self._entry.bind("<Return>", lambda _e: self._on_ok())
+        self._entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=44)
         bar.grid(row=2, column=0, sticky="ew")
@@ -422,7 +422,7 @@ class _ModNameDialog(ctk.CTkToplevel):
             fg_color=BG_PANEL, text_color=TEXT_MAIN, border_color=BORDER
         )
         self._entry.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        self._entry.bind("<Return>", lambda _e: self._on_ok())
+        self._entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=44)
         bar.grid(row=2, column=0, sticky="ew")
@@ -492,7 +492,7 @@ class _RenameDialog(ctk.CTkToplevel):
             fg_color=BG_PANEL, text_color=TEXT_MAIN, border_color=BORDER
         )
         self._entry.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        self._entry.bind("<Return>", lambda _e: self._on_ok())
+        self._entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=44)
         bar.grid(row=2, column=0, sticky="ew")
@@ -574,7 +574,7 @@ class _RenameAfterInstallDialog(ctk.CTkToplevel):
             fg_color=BG_PANEL, text_color=TEXT_MAIN, border_color=BORDER,
         )
         self._entry.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
-        self._entry.bind("<Return>", lambda _e: self._on_ok())
+        self._entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         ctk.CTkLabel(
             self, text="Suggestions:", font=FONT_SMALL,
@@ -744,7 +744,7 @@ class _PriorityDialog(ctk.CTkToplevel):
             border_color=BORDER,
         )
         self._entry.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
-        self._entry.bind("<Return>", lambda _e: self._on_ok())
+        self._entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         bar = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0, height=44)
         bar.grid(row=3, column=0, sticky="ew")
@@ -1303,7 +1303,7 @@ class _ProfileNameDialog(ctk.CTkToplevel):
             fg_color=BG_PANEL, text_color=TEXT_MAIN, border_color=BORDER
         )
         self._entry.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        self._entry.bind("<Return>", lambda _e: self._on_ok())
+        self._entry.bind("<Return>", lambda _e: (self._on_ok(), "break")[1])
 
         self._specific_mods_var = tk.BooleanVar(value=False)
         _specific_cb = ctk.CTkCheckBox(
@@ -3097,7 +3097,7 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             border_color=BORDER,
         )
         rename_entry.grid(row=0, column=0, sticky="ew", padx=(0, 8))
-        rename_entry.bind("<Return>", lambda _e: self._on_rename_confirm())
+        rename_entry.bind("<Return>", lambda _e: (self._on_rename_confirm(), "break")[1])
         self._rename_entry = rename_entry
 
         ctk.CTkButton(
@@ -4286,7 +4286,7 @@ class ExeFilterPanel(ctk.CTkFrame):
         ctk.CTkFrame(self, fg_color=BORDER, height=1, corner_radius=0).pack(fill="x")
 
         self._build()
-        self.bind("<Return>", lambda _: self._on_add())
+        self.bind("<Return>", lambda _: (self._on_add(), "break")[1])
 
     def _build(self):
         ctk.CTkLabel(

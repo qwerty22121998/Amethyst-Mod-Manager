@@ -50,6 +50,26 @@ def _focus_is_text_input(app) -> bool:
         return False
 
 
+def _focus_is_in_dialog(app) -> bool:
+    """True when focus is inside a Toplevel other than the main app window.
+
+    Used to suppress bind_all shortcuts (Return, Delete, etc.) while a modal
+    dialog is open, so pressing Enter to confirm a dialog doesn't also trigger
+    the modlist toggle behind it.
+    """
+    try:
+        w = app.focus_get()
+    except Exception:
+        return False
+    if w is None:
+        return False
+    try:
+        top = w.winfo_toplevel()
+    except Exception:
+        return False
+    return top is not app
+
+
 def _active_list_panel(app):
     """Return ("mod", panel) or ("plugin", panel) based on last-interacted panel.
 
@@ -356,6 +376,8 @@ def register_shortcuts(app) -> None:
     def _guard(fn):
         def _handler(event=None):
             if _focus_is_text_input(app):
+                return
+            if _focus_is_in_dialog(app):
                 return
             fn(app)
             return "break"
