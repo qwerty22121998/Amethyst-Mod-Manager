@@ -4582,13 +4582,14 @@ class IniFileEditorPanel(ctk.CTkFrame):
     Shows a text editor with Save and Cancel. Calls on_done(panel) on close."""
 
     def __init__(self, parent, file_path: str, rel_path: str, mod_name: str,
-                 on_done=None):
+                 on_done=None, highlight: "str | None" = None):
         super().__init__(parent, fg_color=BG_PANEL, corner_radius=0)
         self._file_path = Path(file_path)
         self._rel_path = rel_path
         self._mod_name = mod_name
         self._on_done = on_done or (lambda p: None)
         self._original_content: str | None = None
+        self._highlight: "str | None" = highlight or None
 
         # Title bar
         title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=36)
@@ -4638,6 +4639,47 @@ class IniFileEditorPanel(ctk.CTkFrame):
             self._original_content = ""
         self._textbox.delete("0.0", "end")
         self._textbox.insert("0.0", self._original_content)
+        if self._highlight:
+            self._apply_highlight(self._highlight)
+
+    def _apply_highlight(self, needle: str):
+        """Highlight every case-insensitive occurrence of *needle* in bright green."""
+        if not needle:
+            return
+        try:
+            self._textbox.tag_config(
+                "search_highlight",
+                background="#00ff88",
+                foreground="#000000",
+            )
+        except Exception:
+            return
+        content = self._original_content or ""
+        hay = content.casefold()
+        needle_cf = needle.casefold()
+        nlen = len(needle_cf)
+        if nlen == 0:
+            return
+        start = 0
+        first_mark: "str | None" = None
+        while True:
+            idx = hay.find(needle_cf, start)
+            if idx == -1:
+                break
+            start_index = f"1.0+{idx}c"
+            end_index = f"1.0+{idx + nlen}c"
+            try:
+                self._textbox.tag_add("search_highlight", start_index, end_index)
+            except Exception:
+                break
+            if first_mark is None:
+                first_mark = start_index
+            start = idx + nlen
+        if first_mark is not None:
+            try:
+                self._textbox.see(first_mark)
+            except Exception:
+                pass
 
     def _on_save(self):
         try:

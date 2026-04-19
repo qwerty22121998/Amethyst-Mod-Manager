@@ -1802,7 +1802,8 @@ class App(ctk.CTk):
 
     # -- Ini file editor panel (overlays mod list) --------------------------
 
-    def show_ini_editor_panel(self, file_path: str, rel_path: str, mod_name: str):
+    def show_ini_editor_panel(self, file_path: str, rel_path: str, mod_name: str,
+                              highlight: "str | None" = None):
         """Show the ini/json file editor overlay over the mod list."""
         from gui.dialogs import IniFileEditorPanel
         self._show_plugin_overlay(
@@ -1813,6 +1814,7 @@ class App(ctk.CTk):
                 rel_path=rel_path,
                 mod_name=mod_name,
                 on_done=lambda p: self._hide_plugin_overlay("_ini_editor_panel"),
+                highlight=highlight,
             ),
         )
 
