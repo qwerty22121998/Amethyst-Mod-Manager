@@ -3518,6 +3518,13 @@ class ModListPanel(ctk.CTkFrame):
             else:
                 middle.append(g)
 
+        # With no user separators, ungrouped mods live in Root's group
+        # (first separator in inverted-visual order). Promote them to a
+        # separator-less group so they reverse between OW and Root.
+        if rf_group is not None and rf_group[1]:
+            middle.append((None, rf_group[1]))
+            rf_group = (rf_group[0], [])
+
         # Reverse middle groups and rebuild in natural order:
         # [OW, highest-pri-group, ..., lowest-pri-group, Root]
         new_groups = (([ow_group] if ow_group else [])
@@ -4033,6 +4040,13 @@ class ModListPanel(ctk.CTkFrame):
                     rf_group = g
                 else:
                     middle.append(g)
+
+            # With no user separators, ungrouped mods live in OW's group
+            # (first separator in natural order). Promote them to a
+            # separator-less group so they reverse between RF and OW.
+            if ow_group is not None and ow_group[1]:
+                middle.append((None, ow_group[1]))
+                ow_group = (ow_group[0], [])
 
             # Inverted order: Root first, middle reversed, OW last.
             inv_groups = (([rf_group] if rf_group else [])
@@ -6868,7 +6882,11 @@ class ModListPanel(ctk.CTkFrame):
         if dialog.result is None:
             return
         sep_name = dialog.result.strip() + "_separator"
-        insert_at = ref_idx if above else ref_idx + 1
+        # Under inverted priority sort, visual above/below is flipped in natural order.
+        visually_above = above
+        if self._sort_column == "priority" and self._sort_ascending:
+            visually_above = not above
+        insert_at = ref_idx if visually_above else ref_idx + 1
         entry = ModEntry(name=sep_name, enabled=True, locked=True, is_separator=True)
         self._entries.insert(insert_at, entry)
         # Keep check_vars aligned (None for separators)
@@ -7503,51 +7521,59 @@ class ModListPanel(ctk.CTkFrame):
             btn.configure(fg_color=BG_HEADER, hover_color=BG_HOVER)
 
     def _move_up(self):
-        indices = sorted(self._sel_set) if self._sel_set else (
-            [self._sel_idx] if self._sel_idx >= 0 else []
-        )
-        if not indices or indices[0] <= 0:
-            return
-        if any(self._entries[i].locked for i in indices):
-            return
-        saved_col, saved_asc = self._clear_sort()
-        for i in indices:
-            self._entries[i], self._entries[i - 1] = self._entries[i - 1], self._entries[i]
-            self._check_vars[i], self._check_vars[i - 1] = self._check_vars[i - 1], self._check_vars[i]
-        self._sel_set = {i - 1 for i in indices}
-        self._sel_idx = self._sel_idx - 1 if self._sel_idx >= 0 else -1
-        self._restore_sort(saved_col, saved_asc)
-        self._invalidate_derived_caches()
-        self._redraw()
-        self._update_info()
-        self._save_modlist()
-        self._rebuild_filemap()
-        label = self._entries[indices[0] - 1].name if len(indices) == 1 else f"{len(indices)} items"
-        self._log(f"Moved '{label}' up")
+        # Under inverted priority sort, visual up = natural down.
+        inverted = (self._sort_column == "priority" and self._sort_ascending)
+        if inverted:
+            self._shift_selection(+1, "up")
+        else:
+            self._shift_selection(-1, "up")
 
     def _move_down(self):
-        indices = sorted(self._sel_set, reverse=True) if self._sel_set else (
+        inverted = (self._sort_column == "priority" and self._sort_ascending)
+        if inverted:
+            self._shift_selection(-1, "down")
+        else:
+            self._shift_selection(+1, "down")
+
+    def _shift_selection(self, delta: int, label_dir: str):
+        """Shift the current selection by `delta` positions in natural order.
+        delta=-1 moves toward index 0, delta=+1 toward the end."""
+        if delta == 0:
+            return
+        # Process highest-index-first when moving toward end, lowest-first when moving toward 0
+        indices = sorted(self._sel_set, reverse=(delta > 0)) if self._sel_set else (
             [self._sel_idx] if self._sel_idx >= 0 else []
         )
-        if not indices or indices[0] >= len(self._entries) - 1:
+        if not indices:
+            return
+        # Boundary check: extremum in direction of travel
+        if delta < 0 and min(indices) <= 0:
+            return
+        if delta > 0 and max(indices) >= len(self._entries) - 1:
             return
         if any(self._entries[i].locked for i in indices):
             return
+        # Don't swap past a pinned separator (Overwrite/Root_Folder)
+        for i in indices:
+            neighbor = self._entries[i + delta]
+            if neighbor.name in (OVERWRITE_NAME, ROOT_FOLDER_NAME):
+                return
         saved_col, saved_asc = self._clear_sort()
         for i in indices:
-            self._entries[i], self._entries[i + 1] = self._entries[i + 1], self._entries[i]
-            self._check_vars[i], self._check_vars[i + 1] = self._check_vars[i + 1], self._check_vars[i]
-        self._sel_set = {i + 1 for i in indices}
-        self._sel_idx = self._sel_idx + 1 if self._sel_idx >= 0 else -1
+            j = i + delta
+            self._entries[i], self._entries[j] = self._entries[j], self._entries[i]
+            self._check_vars[i], self._check_vars[j] = self._check_vars[j], self._check_vars[i]
+        self._sel_set = {i + delta for i in indices}
+        self._sel_idx = self._sel_idx + delta if self._sel_idx >= 0 else -1
         self._restore_sort(saved_col, saved_asc)
         self._invalidate_derived_caches()
         self._redraw()
         self._update_info()
         self._save_modlist()
         self._rebuild_filemap()
-        sorted_fwd = sorted(indices)
-        label = self._entries[sorted_fwd[0] + 1].name if len(indices) == 1 else f"{len(indices)} items"
-        self._log(f"Moved '{label}' down")
+        first = min(indices) + delta if delta < 0 else max(indices) + delta
+        label = self._entries[first].name if len(indices) == 1 else f"{len(indices)} items"
+        self._log(f"Moved '{label}' {label_dir}")
 
     def _set_priority(self, idx: int):
         """Prompt for a target position and move the mod there.
