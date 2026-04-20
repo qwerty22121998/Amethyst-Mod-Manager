@@ -7,8 +7,8 @@ Mod structure:
   Staged mods live in Profiles/Fallout 3/mods/
 """
 
-import configparser
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -19,6 +19,83 @@ from Utils.config_paths import get_profiles_dir
 from Utils.steam_finder import find_prefix
 
 _PROFILES_DIR = get_profiles_dir()
+
+
+def _set_ini_key(ini_path: Path, section: str, key: str, value: "str | None") -> None:
+    """Set or remove a single INI key without disturbing the rest of the file.
+
+    Bethesda game INIs sometimes contain multi-line values (e.g. Fallout.ini's
+    [GeneralWarnings] section) that configparser refuses to parse. This helper
+    does a line-based edit so the rest of the file is preserved byte-for-byte.
+    value=None removes the key; empty [section] blocks are pruned on removal.
+    """
+    try:
+        text = ini_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        text = ""
+    except UnicodeDecodeError:
+        text = ini_path.read_text(encoding="utf-8", errors="replace")
+
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(newline) if text else []
+
+    section_header = f"[{section}]"
+    section_re = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+
+    section_start = -1
+    section_end = len(lines)
+    for i, line in enumerate(lines):
+        m = section_re.match(line)
+        if not m:
+            continue
+        if section_start == -1 and m.group("name").strip() == section:
+            section_start = i
+        elif section_start != -1:
+            section_end = i
+            break
+
+    if section_start == -1:
+        if value is None:
+            return
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(section_header)
+        lines.append(f"{key}={value}")
+        lines.append("")
+    else:
+        key_line = -1
+        for i in range(section_start + 1, section_end):
+            if key_re.match(lines[i]):
+                key_line = i
+                break
+
+        if value is None:
+            if key_line != -1:
+                del lines[key_line]
+                section_end -= 1
+            has_content = any(
+                ln.strip() and not ln.strip().startswith((";", "#"))
+                for ln in lines[section_start + 1:section_end]
+            )
+            if not has_content:
+                trailing = section_end
+                while trailing < len(lines) and lines[trailing] == "":
+                    trailing += 1
+                del lines[section_start:trailing]
+        else:
+            new_line = f"{key}={value}"
+            if key_line != -1:
+                lines[key_line] = new_line
+            else:
+                lines.insert(section_end, new_line)
+
+    out = newline.join(lines)
+    if text.endswith(newline) and not out.endswith(newline):
+        out += newline
+    tmp = ini_path.with_suffix(ini_path.suffix + ".tmp")
+    tmp.write_text(out, encoding="utf-8")
+    tmp.replace(ini_path)
 
 
 class Fallout_3(BaseGame):
@@ -453,18 +530,8 @@ class Fallout_3(BaseGame):
             _log("  WARN: Prefix path not set — skipping archive invalidation.")
             return
 
-        parser = configparser.RawConfigParser(strict=False)
-        parser.optionxform = str  # preserve key casing
-        if ini_path.is_file():
-            parser.read(str(ini_path), encoding="utf-8")
-
-        if not parser.has_section("Archive"):
-            parser.add_section("Archive")
-        parser.set("Archive", "bInvalidateOlderFiles", "1")
-
         ini_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(ini_path, "w", encoding="utf-8") as fh:
-            parser.write(fh, space_around_delimiters=False)
+        _set_ini_key(ini_path, "Archive", "bInvalidateOlderFiles", "1")
         _log(f"  Archive invalidation enabled in {ini_path.name}.")
 
     def revert_archive_invalidation(self, log_fn) -> None:
@@ -476,17 +543,7 @@ class Fallout_3(BaseGame):
         if ini_path is None or not ini_path.is_file():
             return
 
-        parser = configparser.RawConfigParser(strict=False)
-        parser.optionxform = str
-        parser.read(str(ini_path), encoding="utf-8")
-
-        if parser.has_section("Archive"):
-            parser.remove_option("Archive", "bInvalidateOlderFiles")
-            if not parser.options("Archive"):
-                parser.remove_section("Archive")
-
-        with open(ini_path, "w", encoding="utf-8") as fh:
-            parser.write(fh, space_around_delimiters=False)
+        _set_ini_key(ini_path, "Archive", "bInvalidateOlderFiles", None)
         _log(f"  Archive invalidation reverted in {ini_path.name}.")
 
     def swap_launcher(self, log_fn) -> None:
@@ -778,7 +835,7 @@ class Fallout_NV(Fallout_3):
     _APPDATA_SUBPATH_GOG = Path("drive_c/users/steamuser/AppData/Local/FalloutNV GOG")
     _MYGAMES_SUBPATH = Path("FalloutNV")
     _MYGAMES_SUBPATH_GOG = Path("FalloutNV GOG")
-    _ARCHIVE_INI_FILENAME = "FALLOUT.ini"
+    _ARCHIVE_INI_FILENAME = "Fallout.ini"
 
     @property
     def _script_extender_exe(self) -> str:
