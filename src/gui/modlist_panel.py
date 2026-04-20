@@ -5057,6 +5057,11 @@ class ModListPanel(ctk.CTkFrame):
             menu.add_command("Show Conflicts",
                 lambda: self._show_overwrites_dialog(_mod_name))
 
+        # Sort Alphabetically (multi-select only)
+        if _is_multi and len(toggleable) >= 2:
+            menu.add_command(f"Sort Alphabetically ({len(toggleable)})",
+                lambda inds=list(toggleable): self._sort_selected_alphabetically(inds))
+
         menu.popup(x, y)
 
     def _on_root_folder_toggle(self) -> None:
@@ -5328,6 +5333,53 @@ class ModListPanel(ctk.CTkFrame):
         self._update_info()
         label = _entry_bundle or entry.name
         _show_mod_notification(self.winfo_toplevel(), f"Removed: {label}", state="warning")
+
+    def _sort_selected_alphabetically(self, indices: list[int]):
+        """Reorder the selected mods alphabetically (case-insensitive).
+
+        Mods with loose-file conflicts are pushed to the bottom of the
+        selection in their original relative order — never reordered, so the
+        loose-file load order is preserved exactly. Only conflict-free mods
+        are sorted alphabetically (placed above the conflict block).
+        Separators and unselected mods between the slots stay in place.
+        """
+        slots = sorted(i for i in indices if 0 <= i < len(self._entries))
+        if len(slots) < 2:
+            return
+        # Snapshot the actual entry/check_var pairs being reordered.
+        items: list[tuple[ModEntry, tk.BooleanVar | None]] = [
+            (self._entries[i], self._check_vars[i]) for i in slots
+        ]
+        # Loose-only conflict status — _conflict_map_base excludes BSA folding.
+        no_conflict: list[tuple[ModEntry, tk.BooleanVar | None]] = []
+        conflict_keep_order: list[tuple[ModEntry, tk.BooleanVar | None]] = []
+        for e, cv in items:
+            if self._conflict_map_base.get(e.name, CONFLICT_NONE) == CONFLICT_NONE:
+                no_conflict.append((e, cv))
+            else:
+                conflict_keep_order.append((e, cv))
+        no_conflict.sort(key=lambda pair: pair[0].name.casefold())
+        new_pairs = no_conflict + conflict_keep_order
+        # Already in this exact order? Skip the save/rebuild.
+        if [e.name for e, _ in new_pairs] == [e.name for e, _ in items]:
+            return
+        saved_col, saved_asc = self._clear_sort()
+        for slot, (e, cv) in zip(slots, new_pairs):
+            self._entries[slot] = e
+            self._check_vars[slot] = cv
+        self._sel_set = set(slots)
+        if self._sel_idx not in self._sel_set:
+            self._sel_idx = slots[0]
+        self._restore_sort(saved_col, saved_asc)
+        self._invalidate_derived_caches()
+        self._save_modlist()
+        self._rebuild_filemap()
+        self._redraw()
+        self._update_info()
+        self._log(
+            f"Sorted {len(no_conflict)} mod(s) alphabetically; "
+            f"{len(conflict_keep_order)} with loose-file conflicts kept in original order."
+        )
 
     def _enable_selected_mods(self, indices: list[int]):
         """Enable all mods at the given indices."""
