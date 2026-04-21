@@ -286,7 +286,7 @@ def find_heroic_game_info_by_exe(exe_name: str) -> "tuple[Path, Path | None, str
     Used for games like Subnautica Below Zero where the handler provides
     SubnauticaZero.exe; we resolve appname (Foxglove), install path, and prefix.
     """
-    exe_lower = exe_name.lower()
+    exe_lower = exe_name.replace("\\", "/").rsplit("/", 1)[-1].lower()
 
     for heroic_root in _find_heroic_config_roots():
         # 1. Epic (Legendary) installed.json
