@@ -1,10 +1,20 @@
 """
 plugins.py
-Read and write a MO2-compatible plugins.txt file.
+Read and write a plugins.txt file.
 
-Format (one plugin per line):
-  *PluginName.esp   — enabled plugin
-  PluginName.esp    — disabled plugin (no prefix)
+Two formats are supported:
+
+  star_prefix=True (MO2-style — Fallout 4, Skyrim SE, Starfield, …):
+    *PluginName.esp   — enabled plugin
+    PluginName.esp    — disabled plugin (no prefix)
+
+  star_prefix=False (legacy engine — Fallout 3, Fallout NV, Oblivion, Skyrim LE):
+    PluginName.esp    — enabled plugin
+    (disabled plugins are omitted from the file entirely)
+
+  loadorder.txt (sibling file) stores the full known plugin set as bare
+  filenames; for legacy games it is the source of truth for "plugin exists
+  but is disabled" (present in loadorder.txt, absent from plugins.txt).
 
 Order in the file defines load order (line 0 = first loaded).
 """
@@ -34,10 +44,12 @@ def read_plugins(path: Path, star_prefix: bool = True) -> list[PluginEntry]:
     Parse plugins.txt and return entries in file order (index 0 = first loaded).
     Lines that are blank or start with '#' are skipped.
 
-    When star_prefix is True (default, MO2-style):
+    When star_prefix is True (MO2-style):
       '*Name' = enabled; bare 'Name' = disabled.
-    When star_prefix is False (e.g. Oblivion Remastered):
-      All listed plugins are enabled; no '*' prefix is used.
+    When star_prefix is False (legacy engine / Oblivion Remastered):
+      All listed plugins are enabled. Disabled plugins are not present
+      in the file — callers that need the full plugin set (to recover
+      disabled state) should cross-reference loadorder.txt.
     """
     entries: list[PluginEntry] = []
     if not path.is_file():
@@ -62,16 +74,18 @@ def write_plugins(path: Path, entries: list[PluginEntry], star_prefix: bool = Tr
     Write entries back to plugins.txt.
     Creates parent directories if needed.
 
-    When star_prefix is True (default, MO2-style):
+    When star_prefix is True (MO2-style):
       Enabled entries are written as '*Name', disabled as bare 'Name'.
-    When star_prefix is False (e.g. Oblivion Remastered):
-      All entries are written as bare 'Name' (the game has no '*' syntax).
+    When star_prefix is False (legacy engine):
+      Only enabled entries are written (the engine has no '*' syntax and
+      treats any listed plugin as active). Disabled entries survive in
+      loadorder.txt, which is the source of truth for the full plugin set.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        (f"*{e.name}" if e.enabled else e.name) if star_prefix else e.name
-        for e in entries
-    ]
+    if star_prefix:
+        lines = [(f"*{e.name}" if e.enabled else e.name) for e in entries]
+    else:
+        lines = [e.name for e in entries if e.enabled]
     path.write_text(
         "\n".join(lines) + ("\n" if lines else ""),
         encoding="utf-8",
@@ -194,14 +208,16 @@ def sync_plugins_from_data_dir(
 
     exts_lower = {ext.lower() for ext in plugin_extensions}
     existing = read_plugins(plugins_path, star_prefix=star_prefix)
-    existing_lower = {e.name.lower() for e in existing}
+    known_lower = {e.name.lower() for e in existing}
+    if not star_prefix:
+        known_lower.update(n.lower() for n in read_loadorder(plugins_path.parent / "loadorder.txt"))
 
     new_entries: list[PluginEntry] = []
     for entry in data_dir.iterdir():
         if entry.is_file() and entry.suffix.lower() in exts_lower:
-            if entry.name.lower() not in existing_lower:
+            if entry.name.lower() not in known_lower:
                 new_entries.append(PluginEntry(name=entry.name, enabled=True))
-                existing_lower.add(entry.name.lower())
+                known_lower.add(entry.name.lower())
 
     if new_entries:
         write_plugins(plugins_path, existing + new_entries, star_prefix=star_prefix)
@@ -235,7 +251,9 @@ def sync_plugins_from_overwrite_dir(
 
     exts_lower = {ext.lower() for ext in plugin_extensions}
     existing = read_plugins(plugins_path, star_prefix=star_prefix)
-    existing_lower = {e.name.lower() for e in existing}
+    known_lower = {e.name.lower() for e in existing}
+    if not star_prefix:
+        known_lower.update(n.lower() for n in read_loadorder(plugins_path.parent / "loadorder.txt"))
 
     def scan_directory(directory: Path) -> list[PluginEntry]:
         entries: list[PluginEntry] = []
@@ -243,9 +261,9 @@ def sync_plugins_from_overwrite_dir(
             return entries
         for entry in directory.iterdir():
             if entry.is_file() and entry.suffix.lower() in exts_lower:
-                if entry.name.lower() not in existing_lower:
+                if entry.name.lower() not in known_lower:
                     entries.append(PluginEntry(name=entry.name, enabled=True))
-                    existing_lower.add(entry.name.lower())
+                    known_lower.add(entry.name.lower())
         return entries
 
     new_entries: list[PluginEntry] = []
@@ -293,6 +311,13 @@ def sync_plugins_from_filemap(
     existing = read_plugins(plugins_path, star_prefix=star_prefix)
     existing_lower = {e.name.lower() for e in existing}
 
+    # For legacy (non-star) games, a user-disabled plugin is absent from
+    # plugins.txt but still present in loadorder.txt. Treat presence in
+    # loadorder.txt as "already known" so we don't re-add it as enabled.
+    known_lower = set(existing_lower)
+    if not star_prefix:
+        known_lower.update(n.lower() for n in read_loadorder(plugins_path.parent / "loadorder.txt"))
+
     new_entries: list[PluginEntry] = []
 
     with filemap_path.open(encoding="utf-8") as f:
@@ -307,7 +332,7 @@ def sync_plugins_from_filemap(
                 continue
             filename = rel_path
             if (Path(filename).suffix.lower() in exts_lower
-                    and filename.lower() not in existing_lower):
+                    and filename.lower() not in known_lower):
                 if disabled_plugins:
                     mod_disabled = {n.lower() for n in disabled_plugins.get(mod_name, [])}
                     if filename.lower() in mod_disabled:
@@ -318,7 +343,7 @@ def sync_plugins_from_filemap(
                 ext  = Path(filename).suffix.lower()
                 normalised = stem + ext
                 new_entries.append(PluginEntry(name=normalised, enabled=True))
-                existing_lower.add(normalised.lower())
+                known_lower.add(normalised.lower())
 
     if new_entries:
         write_plugins(plugins_path, existing + new_entries, star_prefix=star_prefix)
@@ -393,16 +418,23 @@ def sync_plugins_from_filemap_combined(
     existing = read_plugins(plugins_path, star_prefix=star_prefix)
     existing_lower = {e.name.lower() for e in existing}
 
+    # For legacy (non-star) games, a user-disabled plugin is absent from
+    # plugins.txt but still present in loadorder.txt. Use loadorder as the
+    # "already known" gate so disabled plugins aren't re-added as enabled.
+    known_lower = set(existing_lower)
+    if not star_prefix:
+        known_lower.update(n.lower() for n in read_loadorder(plugins_path.parent / "loadorder.txt"))
+
     # --- 5. Prune: keep entries present in filemap or vanilla data_dir.
     keep = set(filemap_names.keys()) | in_data_dir
     kept = [e for e in existing if e.name.lower() in keep]
     removed = len(existing) - len(kept)
 
-    # --- 6. Add: filemap plugins not already in plugins.txt (and not disabled).
+    # --- 6. Add: filemap plugins the user hasn't seen yet (and not disabled).
     kept_lower = {e.name.lower() for e in kept}
     new_entries: list[PluginEntry] = []
     for low, original in filemap_names.items():
-        if low in kept_lower:
+        if low in known_lower:
             continue
         if low in disabled_lower:
             continue
@@ -410,7 +442,7 @@ def sync_plugins_from_filemap_combined(
         dot = original.rfind(".")
         normalised = original[:dot] + original[dot:].lower() if dot >= 0 else original
         new_entries.append(PluginEntry(name=normalised, enabled=True))
-        kept_lower.add(low)
+        known_lower.add(low)
 
     if removed or new_entries:
         write_plugins(plugins_path, kept + new_entries, star_prefix=star_prefix)

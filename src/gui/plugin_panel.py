@@ -5954,6 +5954,21 @@ class PluginPanel(ctk.CTkFrame):
         loadorder_path = self._plugins_path.parent / "loadorder.txt"
         saved_order = read_loadorder(loadorder_path)
 
+        # For legacy (non-star) games plugins.txt contains only *enabled*
+        # plugins; disabled ones are recovered by subtracting plugins.txt
+        # from loadorder.txt. Synthesize disabled entries so the panel can
+        # show and re-enable them.
+        if not self._plugins_star_prefix and saved_order:
+            for name in saved_order:
+                low = name.lower()
+                if low in mod_map:
+                    continue
+                if low in self._vanilla_plugins:
+                    continue
+                disabled_entry = PluginEntry(name=name, enabled=False)
+                mod_map[low] = disabled_entry
+                mod_entries.append(disabled_entry)
+
         if saved_order:
             ordered: list[PluginEntry] = []
             seen: set[str] = set()

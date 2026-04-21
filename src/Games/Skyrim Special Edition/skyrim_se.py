@@ -18,6 +18,8 @@ from Utils.modlist import read_modlist
 
 class SkyrimSE(Fallout_3):
 
+    plugins_use_star_prefix = True
+    plugins_include_vanilla = False
     supports_esl_flag = True
 
     # -----------------------------------------------------------------------

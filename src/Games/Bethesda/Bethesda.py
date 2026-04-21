@@ -100,6 +100,9 @@ def _set_ini_key(ini_path: Path, section: str, key: str, value: "str | None") ->
 
 class Fallout_3(BaseGame):
 
+    plugins_use_star_prefix = False
+    plugins_include_vanilla = True
+
     def __init__(self):
         self._game_path: Path | None = None
         self._prefix_path: Path | None = None
@@ -844,6 +847,8 @@ class Fallout_NV(Fallout_3):
 
 class Fallout_4(Fallout_3):
 
+    plugins_use_star_prefix = True
+    plugins_include_vanilla = False
     supports_esl_flag = True
 
     @property
@@ -931,6 +936,8 @@ class Fallout_4(Fallout_3):
 
 class Fallout_4VR(Fallout_3):
 
+    plugins_use_star_prefix = True
+    plugins_include_vanilla = False
     supports_esl_flag = True
 
     @property
@@ -1202,6 +1209,8 @@ class Skyrim(Fallout_3):
 
 class SkyrimVR(Fallout_3):
 
+    plugins_use_star_prefix = True
+    plugins_include_vanilla = False
     supports_esl_flag = True
 
     @property
@@ -1281,6 +1290,8 @@ class SkyrimVR(Fallout_3):
 
 class Starfield(Fallout_3):
 
+    plugins_use_star_prefix = True
+    plugins_include_vanilla = False
     supports_esl_flag = True
 
     @property
@@ -1453,6 +1464,8 @@ class Enderal(Fallout_3):
 
 class EnderalSE(Fallout_3):
 
+    plugins_use_star_prefix = True
+    plugins_include_vanilla = False
     supports_esl_flag = True
 
     @property
