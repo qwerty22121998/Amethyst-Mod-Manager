@@ -47,6 +47,7 @@ from gui.downloads_panel import DownloadsPanel
 from gui.download_locations_overlay import DownloadLocationsOverlay
 from gui.loot_groups_overlay import LootGroupsOverlay
 from gui.loot_plugin_rules_overlay import LootPluginRulesOverlay
+from gui.plugin_cycle_overlay import PluginCycleOverlay
 from gui.ctk_components import CTkTreeview
 
 from Utils.config_paths import get_exe_args_path, get_game_config_dir, get_game_config_path
@@ -352,6 +353,21 @@ class PluginPanel(ctk.CTkFrame):
         # Keyed by (filemap_mtime, plugins_tuple, data_dir_str).
         self._masters_cache_key: tuple | None = None
         self._userlist_plugins: set[str] = set()
+        # Plugins (lowercased names) that participate in a userlist.yaml cycle.
+        # Used to paint the userlist dot red instead of white.
+        self._userlist_cycle_plugins: set[str] = set()
+        # plugin_name_lower → frozenset of all plugins in the same SCC.
+        # Drives the "Show cycle" overlay so one click surfaces the full cycle.
+        self._userlist_cycle_components: dict[str, frozenset[str]] = {}
+        # (u_lower, v_lower) → list of reason dicts for the u→v edge
+        # ("must load before"). Used by the overlay to explain / flip rules.
+        self._userlist_cycle_edges: dict[tuple[str, str], list[dict]] = {}
+        # Open-overlay bookkeeping — lowercased plugin name the overlay is
+        # pinned to, plus the fixed scope (SCC at open time) so we can keep
+        # showing rules after the user flips the cycle away.
+        self._plugin_cycle_overlay = None
+        self._plugin_cycle_anchor: str = ""
+        self._plugin_cycle_scope: frozenset[str] = frozenset()
         # Plugin filter panel state
         self._plugin_filter_state: dict = {}
         self._plugin_filter_panel_open: bool = False
@@ -4514,6 +4530,312 @@ class PluginPanel(ctk.CTkFrame):
         self._loot_plugin_rules_overlay = None
         self._on_plugin_row_selected_cb = None
 
+    def _open_plugin_cycle_overlay(self, plugin_name: str):
+        """Show the cycle / userlist-rule overlay for plugin_name.
+
+        If plugin_name is in an SCC, the scope is that SCC (cycle view). If
+        it's just a userlist-managed plugin, the scope is the set of plugins
+        reachable via any userlist rule (weakly-connected component) so the
+        user can visualise all rules touching this plugin.
+        """
+        self._close_plugin_cycle_overlay()
+        name_lower = plugin_name.lower()
+        component = self._userlist_cycle_components.get(name_lower)
+        if not component:
+            component = self._userlist_rule_component(name_lower)
+        if not component:
+            self._log(f"{plugin_name} has no userlist rules to display.")
+            return
+        mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
+        if mod_panel is None:
+            self._log("Cannot find modlist panel.")
+            return
+
+        self._plugin_cycle_anchor = name_lower
+        # Freeze the plugin set at open time. Subsequent flips keep showing
+        # these plugins' rules even if the cycle is gone, so the user can
+        # revert or adjust further.
+        self._plugin_cycle_scope = component
+        panel = PluginCycleOverlay(
+            mod_panel,
+            starting_plugin=plugin_name,
+            on_close=self._close_plugin_cycle_overlay,
+            on_flip=self._flip_plugin_rule,
+        )
+        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
+        panel.lift()
+        self._plugin_cycle_overlay = panel
+        self._refresh_cycle_overlay_data()
+
+    def _userlist_rule_component(self, name_lower: str) -> frozenset[str]:
+        """Return every plugin reachable from name_lower through userlist
+        rules (treated as undirected). Plugin before/after rules and
+        group-rule expansions both count. Includes the starting plugin
+        itself even if it has no rules yet.
+        """
+        ul_path = self._get_userlist_path()
+        if ul_path is None or not ul_path.is_file():
+            return frozenset()
+        data = self._parse_userlist(ul_path)
+
+        neigh: dict[str, set[str]] = {}
+        def _link(a: str, b: str):
+            if not a or not b or a == b:
+                return
+            neigh.setdefault(a, set()).add(b)
+            neigh.setdefault(b, set()).add(a)
+
+        for entry in data.get("plugins", []):
+            nm = (entry.get("name") or "").lower()
+            if not nm:
+                continue
+            neigh.setdefault(nm, set())
+            for o in entry.get("after", []) or []:
+                _link(nm, o.lower())
+            for o in entry.get("before", []) or []:
+                _link(nm, o.lower())
+
+        group_members: dict[str, list[str]] = {}
+        for entry in data.get("plugins", []):
+            nm = (entry.get("name") or "").lower()
+            grp = entry.get("group")
+            if nm and grp:
+                group_members.setdefault(grp, []).append(nm)
+        for entry in data.get("groups", []):
+            g = entry.get("name")
+            if not g:
+                continue
+            dests = group_members.get(g, [])
+            for ag in entry.get("after", []) or []:
+                sources = group_members.get(ag, [])
+                for u in sources:
+                    for v in dests:
+                        _link(u, v)
+
+        if name_lower not in neigh:
+            # Plugin is in userlist but with no rules at all — show just it.
+            return frozenset({name_lower})
+
+        seen: set[str] = set()
+        stack = [name_lower]
+        while stack:
+            n = stack.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            stack.extend(neigh.get(n, ()))
+        return frozenset(seen)
+
+    def _refresh_cycle_overlay_data(self):
+        """Push current scope plugins + all their plugin rules to the overlay."""
+        panel = getattr(self, "_plugin_cycle_overlay", None)
+        anchor = getattr(self, "_plugin_cycle_anchor", "")
+        scope = getattr(self, "_plugin_cycle_scope", frozenset())
+        if panel is None or not anchor or not scope:
+            return
+
+        display: dict[str, str] = {}
+        for entry in self._plugin_entries:
+            display[entry.name.lower()] = entry.name
+        ul_path = self._get_userlist_path()
+        data = self._parse_userlist(ul_path) if (ul_path and ul_path.is_file()) else {"plugins": [], "groups": []}
+        for entry in data.get("plugins", []):
+            raw = entry.get("name") or ""
+            if raw:
+                display.setdefault(raw.lower(), raw)
+
+        # Re-run analyzer on the fresh YAML to get cycle membership for the
+        # banner + per-edge cyclic flag. This is separate from the global
+        # analyze that's already stored on the panel because we want rules
+        # even from non-cyclic edges now.
+        info = self._analyze_userlist_cycles(data)
+        cycle_plugins = info["plugins"]
+        cycle_components = info["components"]
+
+        # All plugin rules between scope plugins (cyclic or not).
+        scope_edges: dict[tuple[str, str], list[dict]] = {}
+        for entry in data.get("plugins", []):
+            raw = entry.get("name") or ""
+            name = raw.lower()
+            if name not in scope:
+                continue
+            for other in entry.get("after", []) or []:
+                ol = other.lower()
+                if ol not in scope:
+                    continue
+                scope_edges.setdefault((ol, name), []).append({
+                    "kind": "plugin",
+                    "text": f"plugin rule: {raw} 'after' {other}",
+                    "owner": raw,
+                    "field": "after",
+                    "target": other,
+                    "id": (name, "after", ol),
+                })
+            for other in entry.get("before", []) or []:
+                ol = other.lower()
+                if ol not in scope:
+                    continue
+                scope_edges.setdefault((name, ol), []).append({
+                    "kind": "plugin",
+                    "text": f"plugin rule: {raw} 'before' {other}",
+                    "owner": raw,
+                    "field": "before",
+                    "target": other,
+                    "id": (name, "before", ol),
+                })
+        # Group rules — informational only. Any group→group rule where both
+        # ends include at least one scope plugin shows up here.
+        group_members: dict[str, list[str]] = {}
+        for entry in data.get("plugins", []):
+            name = (entry.get("name") or "").lower()
+            grp = entry.get("group")
+            if name and grp:
+                group_members.setdefault(grp, []).append(name)
+        for entry in data.get("groups", []):
+            g_name = entry.get("name")
+            if not g_name:
+                continue
+            dests = group_members.get(g_name, [])
+            for after_group in entry.get("after", []) or []:
+                sources = group_members.get(after_group, [])
+                for u in sources:
+                    for v in dests:
+                        if u in scope and v in scope:
+                            scope_edges.setdefault((u, v), []).append({
+                                "kind": "group",
+                                "text": (
+                                    f"group rule: '{g_name}' after '{after_group}' "
+                                    f"({display.get(u, u)} in '{after_group}' → "
+                                    f"{display.get(v, v)} in '{g_name}')"
+                                ),
+                            })
+
+        # Mark which edges still form part of a cycle so the overlay can
+        # annotate them. Edge (u, v) is cyclic iff u and v share an SCC AND
+        # that SCC has size ≥ 2 (or a self-loop — guaranteed by analyzer).
+        cyclic_edges: set[tuple[str, str]] = set()
+        for (u, v) in scope_edges:
+            cu = cycle_components.get(u)
+            cv = cycle_components.get(v)
+            if cu is not None and cu is cv:
+                cyclic_edges.add((u, v))
+
+        is_broken = any(p in cycle_plugins for p in scope)
+
+        # Compute which plugin rules, if flipped in isolation, would leave no
+        # cycle inside the scope. These get highlighted as single-flip fixes.
+        fixable_reasons: set[tuple[str, str, str]] = set()
+        if is_broken:
+            # Collect unique plugin rules from cyclic edges — flipping a
+            # non-cyclic rule can't break a cycle that doesn't touch it.
+            seen: set[tuple[str, str, str]] = set()
+            for edge in cyclic_edges:
+                for reason in scope_edges.get(edge, []):
+                    if reason.get("kind") != "plugin":
+                        continue
+                    rid = reason.get("id")
+                    if rid is None or rid in seen:
+                        continue
+                    seen.add(rid)
+                    if self._would_flip_resolve(data, reason, scope):
+                        fixable_reasons.add(rid)
+
+        panel.update_cycle(
+            starting_plugin=display.get(anchor, anchor),
+            scope_plugins=scope,
+            scope_edges=scope_edges,
+            cyclic_edges=cyclic_edges,
+            fixable_reasons=fixable_reasons,
+            display_names=display,
+            is_broken=is_broken,
+        )
+
+    def _would_flip_resolve(self, data: dict, reason: dict, scope: frozenset[str]) -> bool:
+        """Return True iff flipping this plugin rule (in isolation) leaves no
+        cycle inside `scope`. Uses an in-memory copy of the userlist data."""
+        owner = reason.get("owner", "")
+        target = reason.get("target", "")
+        field = reason.get("field", "")
+        if field not in ("after", "before") or not owner or not target:
+            return False
+        owner_l = owner.lower()
+        target_l = target.lower()
+        other = "before" if field == "after" else "after"
+
+        # Shallow copy the plugins list; deep copy only the owner entry we mutate.
+        sim_plugins = []
+        for entry in data.get("plugins", []):
+            if (entry.get("name") or "").lower() == owner_l:
+                e2 = dict(entry)
+                e2[field] = [t for t in (entry.get(field, []) or []) if t.lower() != target_l]
+                if not e2[field]:
+                    e2.pop(field, None)
+                opp = list(entry.get(other, []) or [])
+                if not any(t.lower() == target_l for t in opp):
+                    opp.append(target)
+                e2[other] = opp
+                sim_plugins.append(e2)
+            else:
+                sim_plugins.append(entry)
+        sim_data = {"plugins": sim_plugins, "groups": data.get("groups", [])}
+        sim_info = self._analyze_userlist_cycles(sim_data)
+        return not any(p in sim_info["plugins"] for p in scope)
+
+    def _flip_plugin_rule(self, owner: str, field: str, target: str) -> None:
+        """Move `target` from the given field of `owner`'s userlist entry to
+        the opposite field. Triggered by the cycle overlay's flip buttons."""
+        if field not in ("after", "before"):
+            return
+        ul_path = self._get_userlist_path()
+        if ul_path is None or not ul_path.is_file():
+            self._log("userlist.yaml not found — cannot flip rule.")
+            return
+
+        data = self._parse_userlist(ul_path)
+        owner_lower = owner.lower()
+        target_lower = target.lower()
+        other = "before" if field == "after" else "after"
+
+        changed = False
+        for entry in data.get("plugins", []):
+            if (entry.get("name") or "").lower() != owner_lower:
+                continue
+            cur = entry.get(field, []) or []
+            new_cur = [t for t in cur if t.lower() != target_lower]
+            if len(new_cur) == len(cur):
+                continue  # target not actually present — nothing to flip
+            if new_cur:
+                entry[field] = new_cur
+            else:
+                entry.pop(field, None)
+            opposite = entry.get(other, []) or []
+            if not any(t.lower() == target_lower for t in opposite):
+                opposite.append(target)
+                entry[other] = opposite
+            changed = True
+            break
+
+        if not changed:
+            self._log(f"Rule {owner} '{field}' {target} not found in userlist.yaml.")
+            return
+
+        self._write_userlist(ul_path, data)
+        self._log(f"Flipped: {owner} now '{other}' {target}")
+        self._refresh_userlist_set()
+        self._predraw()
+        self._refresh_cycle_overlay_data()
+
+    def _close_plugin_cycle_overlay(self):
+        panel = getattr(self, "_plugin_cycle_overlay", None)
+        if panel:
+            try:
+                panel.destroy()
+            except Exception:
+                pass
+        self._plugin_cycle_overlay = None
+        self._plugin_cycle_anchor = ""
+        self._plugin_cycle_scope = frozenset()
+
     # ------------------------------------------------------------------
     # Plugin filter side panel — open / close
     # ------------------------------------------------------------------
@@ -6230,6 +6552,7 @@ class PluginPanel(ctk.CTkFrame):
                     entry.name in self._late_masters,
                     entry.name in self._version_mismatch_masters,
                     name_lower in self._userlist_plugins,
+                    name_lower in self._userlist_cycle_plugins,
                     name_lower in self._esl_flagged_plugins,
                     name_lower in self._vanilla_plugins,
                     bool(self._plugin_locks.get(entry.name, False)),
@@ -6314,7 +6637,10 @@ class PluginPanel(ctk.CTkFrame):
                         cx = next(_flag_pos)
                         r = scaled(4)
                         c.coords(ul_dot_id, cx - r, y_mid - r, cx + r, y_mid + r)
-                        c.itemconfigure(ul_dot_id, state="normal")
+                        in_cycle = name_lower in self._userlist_cycle_plugins
+                        c.itemconfigure(ul_dot_id,
+                                        fill="#e74c3c" if in_cycle else "white",
+                                        state="normal")
                     else:
                         c.itemconfigure(ul_dot_id, state="hidden")
 
@@ -6858,10 +7184,13 @@ class PluginPanel(ctk.CTkFrame):
             if vmm:
                 parts.append("Version mismatched masters:\n" + "\n".join(f"  - {m}" for m in vmm))
             if entry.name.lower() in self._userlist_plugins:
-                ul_msg = "This plugin is managed by userlist.yaml"
-                grp = self._plugin_group_map.get(entry.name.lower())
-                if grp:
-                    ul_msg += f"\nGroup: {grp}"
+                if entry.name.lower() in self._userlist_cycle_plugins:
+                    ul_msg = "This plugin has a broken cycle, Right click > Show cycle for info"
+                else:
+                    ul_msg = "This plugin is managed by userlist.yaml"
+                    grp = self._plugin_group_map.get(entry.name.lower())
+                    if grp:
+                        ul_msg += f"\nGroup: {grp}"
                 parts.append(ul_msg)
             if entry.name.lower() in self._esl_flagged_plugins:
                 parts.append("This plugin is marked as Light (ESL)")
@@ -7110,9 +7439,182 @@ class PluginPanel(ctk.CTkFrame):
                 for e in data["plugins"]
                 if e.get("name") and e.get("group") and e["group"] != "default"
             }
+            info = self._analyze_userlist_cycles(data)
+            self._userlist_cycle_plugins = info["plugins"]
+            self._userlist_cycle_components = info["components"]
+            self._userlist_cycle_edges = info["edges"]
         else:
             self._userlist_plugins = set()
             self._plugin_group_map = {}
+            self._userlist_cycle_plugins = set()
+            self._userlist_cycle_components = {}
+            self._userlist_cycle_edges = {}
+
+    @staticmethod
+    def _analyze_userlist_cycles(data: dict) -> dict:
+        """Analyze userlist.yaml and return cycle information.
+
+        Builds a directed graph from userlist plugin before/after rules and
+        group after rules (every plugin in group G inherits "after X" for each
+        X listed on G's after entry, meaning every plugin in group X must load
+        before every plugin in G). Runs Tarjan's SCC; any node inside a
+        non-trivial strongly-connected component (size ≥ 2, or with a self
+        edge) participates in a cycle.
+
+        Returns a dict:
+          {
+            "plugins":    set[str] — every plugin in any cycle (lowercased),
+            "components": dict[str, frozenset[str]] — plugin → SCC membership,
+            "edges":      dict[(u, v), list[dict]] — structured reasons.
+          }
+        Each edge reason is a dict like:
+          {"kind": "plugin", "text": str,
+           "owner": raw_name, "field": "after"|"before", "target": raw_name}
+          {"kind": "group", "text": str}
+        'kind=plugin' entries can be flipped by the overlay (move target between
+        the owner entry's after/before lists). Group reasons are informational.
+        """
+        plugins = data.get("plugins", []) or []
+        groups = data.get("groups", []) or []
+
+        empty = {"plugins": set(), "components": {}, "edges": {}}
+        if not plugins and not groups:
+            return empty
+
+        # Edge u → v means "u must load before v". Reasons list per edge so
+        # the overlay can explain each cycle edge.
+        adj: dict[str, set[str]] = {}
+        edges: dict[tuple[str, str], list[dict]] = {}
+        display: dict[str, str] = {}
+
+        def _add_edge(u: str, v: str, reason: dict) -> None:
+            if not u or not v:
+                return
+            adj.setdefault(u, set()).add(v)
+            adj.setdefault(v, set())
+            edges.setdefault((u, v), []).append(reason)
+
+        # Plugin-level rules. Track display casing from the entries.
+        for entry in plugins:
+            raw = entry.get("name") or ""
+            name = raw.lower()
+            if not name:
+                continue
+            display.setdefault(name, raw)
+            adj.setdefault(name, set())
+            for other in entry.get("after", []) or []:
+                other_l = other.lower()
+                display.setdefault(other_l, other)
+                _add_edge(other_l, name, {
+                    "kind": "plugin",
+                    "text": f"plugin rule: {raw} 'after' {other}",
+                    "owner": raw,
+                    "field": "after",
+                    "target": other,
+                })
+            for other in entry.get("before", []) or []:
+                other_l = other.lower()
+                display.setdefault(other_l, other)
+                _add_edge(name, other_l, {
+                    "kind": "plugin",
+                    "text": f"plugin rule: {raw} 'before' {other}",
+                    "owner": raw,
+                    "field": "before",
+                    "target": other,
+                })
+
+        # Group-level rules — expand each group-after into plugin-plugin edges.
+        group_members: dict[str, list[str]] = {}
+        for entry in plugins:
+            name = (entry.get("name") or "").lower()
+            grp = entry.get("group")
+            if name and grp:
+                group_members.setdefault(grp, []).append(name)
+        for entry in groups:
+            g_name = entry.get("name")
+            if not g_name:
+                continue
+            dests = group_members.get(g_name, [])
+            if not dests:
+                continue
+            for after_group in entry.get("after", []) or []:
+                sources = group_members.get(after_group, [])
+                for u in sources:
+                    for v in dests:
+                        _add_edge(u, v, {
+                            "kind": "group",
+                            "text": (
+                                f"group rule: '{g_name}' after '{after_group}' "
+                                f"({display.get(u, u)} in '{after_group}' → "
+                                f"{display.get(v, v)} in '{g_name}')"
+                            ),
+                        })
+
+        if not adj:
+            return empty
+
+        # Tarjan's SCC, iterative.
+        index = 0
+        indices: dict[str, int] = {}
+        low: dict[str, int] = {}
+        on_stack: set[str] = set()
+        stack: list[str] = []
+        cycle_plugins: set[str] = set()
+        components: dict[str, frozenset[str]] = {}
+
+        for start in list(adj.keys()):
+            if start in indices:
+                continue
+            work: list[tuple[str, iter]] = [(start, iter(adj[start]))]
+            indices[start] = low[start] = index
+            index += 1
+            stack.append(start)
+            on_stack.add(start)
+            while work:
+                node, it = work[-1]
+                nxt = next(it, None)
+                if nxt is None:
+                    if low[node] == indices[node]:
+                        component: list[str] = []
+                        while True:
+                            w = stack.pop()
+                            on_stack.discard(w)
+                            component.append(w)
+                            if w == node:
+                                break
+                        if len(component) > 1 or node in adj.get(node, ()):
+                            frozen = frozenset(component)
+                            cycle_plugins.update(component)
+                            for w in component:
+                                components[w] = frozen
+                    work.pop()
+                    if work:
+                        parent = work[-1][0]
+                        if low[node] < low[parent]:
+                            low[parent] = low[node]
+                    continue
+                if nxt not in indices:
+                    indices[nxt] = low[nxt] = index
+                    index += 1
+                    stack.append(nxt)
+                    on_stack.add(nxt)
+                    work.append((nxt, iter(adj[nxt])))
+                elif nxt in on_stack:
+                    if indices[nxt] < low[node]:
+                        low[node] = indices[nxt]
+
+        # Only keep edges that are fully inside a cycle — irrelevant edges
+        # would clutter the overlay.
+        cycle_edges: dict[tuple[str, str], list[dict]] = {}
+        for (u, v), reasons in edges.items():
+            if u in cycle_plugins and v in cycle_plugins and components.get(u) is components.get(v):
+                cycle_edges[(u, v)] = reasons
+
+        return {
+            "plugins": cycle_plugins,
+            "components": components,
+            "edges": cycle_edges,
+        }
 
     def _get_userlist_path(self) -> Path | None:
         game = _GAMES.get(self.winfo_toplevel()._topbar._game_var.get())
@@ -7461,6 +7963,12 @@ class PluginPanel(ctk.CTkFrame):
             if plugin_name.lower() in self._userlist_plugins:
                 items.append(("Remove from userlist",
                                lambda n=plugin_name: self._remove_plugin_from_userlist(n)))
+            if plugin_name.lower() in self._userlist_cycle_plugins:
+                items.append(("Show cycle...",
+                               lambda n=plugin_name: self._open_plugin_cycle_overlay(n)))
+            elif plugin_name.lower() in self._userlist_plugins:
+                items.append(("Show userlist rules...",
+                               lambda n=plugin_name: self._open_plugin_cycle_overlay(n)))
 
             # LOOT locations (mod page / author links from the masterlist)
             loot_locs = (self._loot_info.get(plugin_name.lower(), {}).get("locations") or [])

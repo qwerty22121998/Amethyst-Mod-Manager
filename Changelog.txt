@@ -10,7 +10,9 @@
 - Added patch selection to the Baldurs gate 3 configure menu to choose between patch 7,6 and 8
 - Fixed plugins.txt being formatted incorrectly for older bethesda titles
 - Fixed 7DTD load ordering
-- Added a synthesis wizard to set up and run synthesis 
+- Added a synthesis wizard to set up and run synthesis
+- Fixed wizard tools not setting the last deployed profile correctly when deploying
+- Added an option/window to resolve broken plugin rule cycles 
 
 - v1.2.10
 - Added a opt in to pre releases option in the settings menu, When toggled on the update checker will always use the latest pre release if available
