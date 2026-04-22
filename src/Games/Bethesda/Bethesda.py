@@ -177,6 +177,14 @@ class Fallout_3(BaseGame):
                 "config",
                 "menus",
                 "fose",
+                "distantlod",
+                "fonts",
+                "facegen",
+                "lodsettings",
+                "lsdata",
+                "strings",
+                "trees",
+                "asi",
                 }
 
     @property
@@ -185,7 +193,7 @@ class Fallout_3(BaseGame):
 
     @property
     def mod_required_file_types(self) -> set[str]:
-        return {".esp", ".esl", ".esm",".ini"}
+        return {".esp", ".esl", ".esm", ".ini", ".bsa", ".ba2"}
 
     @property
     def mod_install_as_is_if_no_match(self) -> bool:

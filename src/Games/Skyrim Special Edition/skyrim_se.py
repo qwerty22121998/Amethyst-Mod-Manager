@@ -49,8 +49,8 @@ class SkyrimSE(Fallout_3):
 
     @property
     def mod_required_top_level_folders(self) -> set[str]:
-        # Skyrim SE subset — excludes Fallout-specific folders (f4se, materials,
-        # tools, nvse, config, menus, fose) that Fallout_3 includes.
+        # Skyrim SE subset — excludes Fallout-specific folders (f4se, nvse,
+        # fose, config) that Fallout_3 includes.
         return {
             "skse",
             "textures",
@@ -73,7 +73,16 @@ class SkyrimSE(Fallout_3):
             "data",
             "PBRNifPatcher",
             "PBRTextureSets",
-            
+            "distantlod",
+            "fonts",
+            "facegen",
+            "menus",
+            "lodsettings",
+            "lsdata",
+            "strings",
+            "trees",
+            "asi",
+            "tools",
         }
 
     @property
