@@ -265,6 +265,7 @@ class RedDeadRedemption2(BaseGame):
                 rules=custom_rules,
                 mode=mode,
                 strip_prefixes=self.mod_folder_strip_prefixes,
+                per_mod_strip_prefixes=per_mod_strip,
                 log_fn=_log,
             )
             _log(f"Step 2: Moving {data_dir.name}/ → {core}/ ...")

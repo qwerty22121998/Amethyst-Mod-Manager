@@ -1031,9 +1031,7 @@ class TopBar(ctk.CTkFrame):
                     _filemap_root_path = game.get_effective_filemap_path().parent / "filemap_root.txt"
                     _staging = game.get_effective_mod_staging_path()
                     _strip   = getattr(game, "mod_folder_strip_prefixes", None)
-                    _per_mod_strip = load_per_mod_strip_prefixes(
-                        game.get_effective_filemap_path().parent
-                    )
+                    _per_mod_strip = load_per_mod_strip_prefixes(profile_dir)
                     _rf_count = deploy_root_flagged_mods(
                         _filemap_root_path, game_root, _staging,
                         mode=deploy_mode, strip_prefixes=_strip,

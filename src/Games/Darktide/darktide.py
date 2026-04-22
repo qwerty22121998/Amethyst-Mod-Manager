@@ -272,6 +272,9 @@ class Darktide(BaseGame):
                 "Run 'Build Filemap' before deploying."
             )
 
+        profile_dir = self.get_profile_root() / "profiles" / profile
+        per_mod_strip = load_per_mod_strip_prefixes(profile_dir)
+
         custom_rules = self.custom_routing_rules
         custom_exclude: set[str] = set()
         if custom_rules:
@@ -281,6 +284,7 @@ class Darktide(BaseGame):
                 rules=custom_rules,
                 mode=mode,
                 strip_prefixes=self.mod_folder_strip_prefixes,
+                per_mod_strip_prefixes=per_mod_strip,
                 log_fn=_log,
                 progress_fn=progress_fn,
             )
@@ -291,8 +295,6 @@ class Darktide(BaseGame):
         mods_dir.mkdir(parents=True, exist_ok=True)
 
         _log(f"Step 2: Transferring mod files into {mods_dir} ({mode.name}) ...")
-        profile_dir = self.get_profile_root() / "profiles" / profile
-        per_mod_strip = load_per_mod_strip_prefixes(profile_dir)
         _sep_deploy = load_separator_deploy_paths(profile_dir)
         _sep_entries = read_modlist(profile_dir / "modlist.txt") if _sep_deploy else []
         per_mod_deploy = expand_separator_deploy_paths(_sep_deploy, _sep_entries) or None

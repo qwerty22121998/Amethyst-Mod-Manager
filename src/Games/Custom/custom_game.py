@@ -453,6 +453,7 @@ class StandardCustomGame(BaseGame):
                 rules=custom_rules,
                 mode=mode,
                 strip_prefixes=self.mod_folder_strip_prefixes,
+                per_mod_strip_prefixes=per_mod_strip,
                 log_fn=_log,
             )
             _log(f"Step 2: Moving {data_dir.name}/ → {data_dir.name}_Core/ ...")
@@ -548,6 +549,7 @@ class RootCustomGame(StandardCustomGame):
                 rules=custom_rules,
                 mode=mode,
                 strip_prefixes=self.mod_folder_strip_prefixes,
+                per_mod_strip_prefixes=per_mod_strip,
                 log_fn=_log,
             )
 

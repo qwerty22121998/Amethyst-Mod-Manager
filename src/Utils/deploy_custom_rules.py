@@ -34,6 +34,7 @@ def deploy_custom_rules(
     rules: list[CustomRule],
     mode: LinkMode = LinkMode.HARDLINK,
     strip_prefixes: set[str] | None = None,
+    per_mod_strip_prefixes: dict[str, list[str]] | None = None,
     log_fn=None,
     progress_fn=None,
 ) -> set[str]:
@@ -58,6 +59,7 @@ def deploy_custom_rules(
 
     _log = _safe_log(log_fn)
     _strip = {p.lower() for p in strip_prefixes} if strip_prefixes else set()
+    _per_mod_strip = per_mod_strip_prefixes or {}
     overwrite_dir = staging_root.parent / "overwrite"
     _overwrite_str = str(overwrite_dir)
     _staging_str   = str(staging_root)
@@ -163,7 +165,7 @@ def deploy_custom_rules(
 
             src_str = _resolve_source(
                 mod_name, rel_str, rel_lower, overwrite_dir, staging_root,
-                _overwrite_str, _staging_str, sorted_strip, {},
+                _overwrite_str, _staging_str, sorted_strip, _per_mod_strip,
                 nocase_cache,
             )
             if src_str is None:
@@ -201,7 +203,7 @@ def deploy_custom_rules(
                 continue
             src_str = _resolve_source(
                 sib_mod_name, sib_rel_str, sib_lower, overwrite_dir, staging_root,
-                _overwrite_str, _staging_str, sorted_strip, {},
+                _overwrite_str, _staging_str, sorted_strip, _per_mod_strip,
                 nocase_cache,
             )
             if src_str is None:
