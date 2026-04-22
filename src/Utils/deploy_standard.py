@@ -443,13 +443,28 @@ def restore_data_core(
     # Data is the only remaining version and must be rescued to overwrite.
     if overwrite_dir is not None and deploy_dir.is_dir():
         # Build core_lower using os.walk — avoids per-file stat() from rglob+is_file.
+        # Also capture (st_ino, st_size, st_mtime_ns) so we can detect when a
+        # deployed vanilla file has been replaced by an external tool (e.g.
+        # xEdit Quick Auto Clean writes a fresh file over the deployed symlink
+        # or hardlink).  An "original" deploy shares the core inode (hardlink)
+        # or matches size+mtime (copy).  A replaced file fails both checks.
         _t_rescue_start = _time.perf_counter()
         _core_str = str(core_dir)
         _core_plen = len(_core_str) + 1
         core_lower: set[str] = set()
+        core_stat: dict[str, tuple[int, int, int]] = {}
+        core_path: dict[str, str] = {}
         for _dp, _dns, _fns in os.walk(_core_str):
             for _fn in _fns:
-                core_lower.add((_dp + "/" + _fn)[_core_plen:].lower())
+                _cp = _dp + "/" + _fn
+                _rel = _cp[_core_plen:].lower()
+                core_lower.add(_rel)
+                core_path[_rel] = _cp
+                try:
+                    _cs = os.lstat(_cp)
+                    core_stat[_rel] = (_cs.st_ino, _cs.st_size, _cs.st_mtime_ns)
+                except OSError:
+                    pass
         filemap_path = overwrite_dir.parent / "filemap.txt"
         filemap_lower: set[str] = set()
         filemap_rel_to_mod: dict[str, str] = {}
@@ -484,6 +499,7 @@ def restore_data_core(
         rescued = 0
         rescued_to_mod = 0
         rescued_to_overwrite = 0
+        rescued_edited_vanilla = 0
         _deploy_str = str(deploy_dir)
         _deploy_plen = len(_deploy_str) + 1
         _overwrite_str = str(overwrite_dir)
@@ -519,6 +535,28 @@ def restore_data_core(
                     rel_str = src_str[_deploy_plen:]
                     rel_lower = rel_str.lower()
                     if rel_lower in core_lower:
+                        # Vanilla path — but the file might have been replaced by
+                        # an external tool (e.g. xEdit Quick Auto Clean deletes
+                        # the symlink/hardlink and writes a fresh file).  If the
+                        # on-disk file no longer matches the core backup by inode
+                        # or by (size, mtime), overwrite the core copy with the
+                        # edited file so the rmtree+rename below restores the
+                        # edited vanilla plugin back into Data/.
+                        _cs = core_stat.get(rel_lower)
+                        if _cs is not None:
+                            _core_ino, _core_sz, _core_mt = _cs
+                            if (st.st_ino == _core_ino or
+                                (st.st_size == _core_sz and st.st_mtime_ns == _core_mt)):
+                                continue  # untouched vanilla — restore from core
+                            core_dst = core_path.get(rel_lower)
+                            if core_dst is not None:
+                                try:
+                                    os.replace(src_str, core_dst)
+                                    rescued += 1
+                                    rescued_edited_vanilla += 1
+                                except OSError:
+                                    pass
+                            continue
                         continue  # vanilla file — will be restored from core
                     # Check if we would skip as a known mod file
                     in_filemap = rel_lower in filemap_lower
@@ -583,6 +621,8 @@ def restore_data_core(
                 _log(f"  Rescued {rescued_to_mod} file(s) back to mod folder(s).")
             if rescued_to_overwrite:
                 _log(f"  Rescued {rescued_to_overwrite} runtime-created file(s) → overwrite/.")
+            if rescued_edited_vanilla:
+                _log(f"  Preserved {rescued_edited_vanilla} edited vanilla file(s) (e.g. xEdit-cleaned).")
             # Update modindex.bin so the next build_filemap call immediately
             # sees the rescued files under [Overwrite] without a full rescan.
             if rescued_to_overwrite:
