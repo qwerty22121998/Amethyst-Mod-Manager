@@ -43,9 +43,29 @@ from urllib.parse import parse_qs, urlparse
 
 from Utils.app_log import app_log
 
-# Path for the Unix domain socket used for single-instance IPC
-_SOCKET_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
-_SOCKET_PATH = _SOCKET_DIR / "amethyst-mod-manager.sock"
+# Path for the Unix domain socket used for single-instance IPC.
+#
+# Resolved via _resolve_socket_path() so that every launch of the same app
+# (including browser-triggered `flatpak run ... --nxm %u` invocations) picks
+# the same path, regardless of whether XDG_RUNTIME_DIR is set in the env
+# inherited from the caller. Under Flatpak, /run/user/<uid>/app/<FLATPAK_ID>/
+# is auto-created per-user per-app and is stable across invocations; outside
+# Flatpak, XDG_RUNTIME_DIR is used when set, otherwise a uid-scoped path
+# under /tmp as a last resort.
+def _resolve_socket_path() -> Path:
+    uid = os.getuid()
+    flatpak_id = os.environ.get("FLATPAK_ID")
+    if flatpak_id:
+        app_run = Path(f"/run/user/{uid}/app/{flatpak_id}")
+        if app_run.is_dir():
+            return app_run / "amethyst-mod-manager.sock"
+    xdg = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg:
+        return Path(xdg) / "amethyst-mod-manager.sock"
+    return Path(f"/tmp/amethyst-mod-manager-{uid}.sock")
+
+
+_SOCKET_PATH = _resolve_socket_path()
 
 # XDG .desktop file name used to register the handler
 _DESKTOP_FILE_NAME = "amethystmodmanager-nxm.desktop"
@@ -675,6 +695,12 @@ class NxmIPC:
         Returns True if delivered, False if no instance was listening.
         """
         if not _SOCKET_PATH.exists():
+            app_log(
+                f"NXM handoff: no socket at {_SOCKET_PATH} "
+                f"(FLATPAK_ID={os.environ.get('FLATPAK_ID', '')!r}, "
+                f"XDG_RUNTIME_DIR={os.environ.get('XDG_RUNTIME_DIR', '')!r}) "
+                f"— opening new window"
+            )
             return False
 
         try:
@@ -684,10 +710,10 @@ class NxmIPC:
             payload = json.dumps({"nxm_url": nxm_url}).encode("utf-8")
             sock.sendall(payload)
             sock.close()
-            app_log("Sent NXM link to running instance")
+            app_log(f"Sent NXM link to running instance via {_SOCKET_PATH}")
             return True
         except (ConnectionRefusedError, FileNotFoundError, OSError) as exc:
-            app_log(f"No running instance to hand off to: {exc}")
+            app_log(f"NXM handoff failed on {_SOCKET_PATH}: {exc}")
             # Stale socket — clean up
             _SOCKET_PATH.unlink(missing_ok=True)
             return False
@@ -703,6 +729,7 @@ class NxmIPC:
         """
         # Clean stale socket
         _SOCKET_PATH.unlink(missing_ok=True)
+        _SOCKET_PATH.parent.mkdir(parents=True, exist_ok=True)
 
         srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         srv.bind(str(_SOCKET_PATH))
@@ -731,7 +758,11 @@ class NxmIPC:
         t = threading.Thread(target=_accept_loop, daemon=True, name="nxm-ipc")
         t.start()
         cls._thread = t
-        app_log(f"NXM IPC server listening on {_SOCKET_PATH}")
+        app_log(
+            f"NXM IPC server listening on {_SOCKET_PATH} "
+            f"(FLATPAK_ID={os.environ.get('FLATPAK_ID', '')!r}, "
+            f"XDG_RUNTIME_DIR={os.environ.get('XDG_RUNTIME_DIR', '')!r})"
+        )
 
     @classmethod
     def shutdown(cls) -> None:
