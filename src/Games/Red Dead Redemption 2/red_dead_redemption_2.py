@@ -95,7 +95,7 @@ class RedDeadRedemption2(BaseGame):
 
     @property
     def conflict_ignore_filenames(self) -> set[str]:
-        return {"*.txt"}
+        return {"*.txt","*.pdf"}
 
     @property
     def wine_dll_overrides(self) -> dict[str, str]:
@@ -116,6 +116,7 @@ class RedDeadRedemption2(BaseGame):
             CustomRule(dest="", filenames=["lml.ini"]),
             CustomRule(dest="", filenames=["vfs.asi"]),
             CustomRule(dest="", folders=["x64"]),
+            CustomRule(dest="", folders=["RampageFiles"]),
         ]
 
     @property
