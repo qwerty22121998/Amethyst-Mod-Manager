@@ -80,6 +80,13 @@ from LOOT.loot_sorter import (
 )
 from Nexus.nexus_meta import write_meta, read_meta
 
+# Bump this whenever check_esl_eligible() changes its verdict criteria so that
+# cached results from older algorithm versions are invalidated on next scan.
+# v1 = libloot-backed is_valid_as_light_plugin via load_plugin_headers (broken —
+#      returned True for every plugin because records aren't loaded).
+# v2 = libloot-backed, using load_plugins so record data is actually parsed.
+_ESL_ELIG_CACHE_VERSION = 2
+
 
 def _file_exists_ci(base: Path, rel: Path) -> bool:
     """Case-insensitive file existence check.
@@ -344,10 +351,12 @@ class PluginPanel(ctk.CTkFrame):
         self._esl_flagged_plugins: set[str] = set()  # lowercase plugin names with ESL flag set
         self._esl_safe_plugins: set[str] = set()    # lowercase plugin names eligible for ESL flag
         self._esl_unsafe_plugins: set[str] = set()  # lowercase plugin names ineligible for ESL flag
-        # Cache for ESL eligibility results keyed by (path_str, mtime_ns, size).
-        # check_esl_eligible() does a full record scan of the plugin file —
-        # expensive enough that we must not re-run it on every toggle/reorder.
-        self._esl_eligible_cache: dict[tuple[str, int, int], bool] = {}
+        # Cache for ESL eligibility results.
+        # Key: ((path_str, mtime_ns, size), game_type_attr, algo_version).
+        # check_esl_eligible() now delegates to libloot, which is stricter than
+        # the old FormID-range scan — bumping _ESL_ELIG_CACHE_VERSION invalidates
+        # any stale True results that libloot would now reject.
+        self._esl_eligible_cache: dict[tuple, bool] = {}
         # Cache for _check_all_masters() — the filemap+staging scan and master/
         # version-mismatch checks are expensive (~450 ms for 1300 plugins).
         # Keyed by (filemap_mtime, plugins_tuple, data_dir_str).
@@ -7055,6 +7064,8 @@ class PluginPanel(ctk.CTkFrame):
             self._esl_unsafe_plugins = set()
             return
 
+        game_type_attr = getattr(self._game, "loot_game_type", "") or ""
+
         flagged: set[str] = set()
         safe: set[str] = set()
         unsafe: set[str] = set()
@@ -7085,17 +7096,18 @@ class PluginPanel(ctk.CTkFrame):
             if flag_val:
                 flagged.add(name_lower)
             # Only check ESL eligibility for ESP/ESM files (not already ESL).
-            # Cache by (path, mtime, size) so the record scan only runs once
-            # per plugin until the file is modified.
+            # Cache key includes game_type + a version tag so switching games or
+            # upgrading the eligibility algorithm invalidates old entries.
             if not name_lower.endswith((".esp", ".esm")):
                 continue
-            cached = cache.get(stat_key)
+            elig_key = (stat_key, game_type_attr, _ESL_ELIG_CACHE_VERSION)
+            cached = cache.get(elig_key)
             if cached is None:
                 try:
-                    cached, _ = check_esl_eligible(path)
+                    cached = check_esl_eligible(path, game_type_attr)
                 except Exception:
                     cached = False
-                cache[stat_key] = cached
+                cache[elig_key] = cached
             if cached:
                 safe.add(name_lower)
             else:
@@ -7942,19 +7954,16 @@ class PluginPanel(ctk.CTkFrame):
                                    lambda idxs=toggleable: self._toggle_esl_flag(idxs, False)))
                 else:
                     path = self._plugin_paths.get(plugin_name.lower())
+                    _game_type = getattr(self._game, "loot_game_type", "") or ""
                     if path and path.is_file():
-                        _eligible, _max_obj = check_esl_eligible(path)
+                        _eligible = check_esl_eligible(path, _game_type)
                     else:
-                        _eligible, _max_obj = False, -1
+                        _eligible = False
                     if _eligible:
                         items.append(("Mark as Light (ESL)",
                                        lambda idxs=toggleable: self._toggle_esl_flag(idxs, True)))
                     else:
-                        if _max_obj >= 0:
-                            _reason = f"Not ESL-safe (max ID 0x{_max_obj:X} > 0xFFF — compact in xEdit first)"
-                        else:
-                            _reason = "Not ESL-safe (file unreadable or not a TES4 plugin)"
-                        items.append((_reason, None))
+                        items.append(("Not ESL-safe (per LOOT — compact in xEdit first)", None))
             if plugin_name.lower() not in self._userlist_plugins:
                 items.append(("Add to userlist...",
                                lambda n=plugin_name, i=plugin_idx: self._add_plugin_to_userlist(n, i)))
@@ -8002,11 +8011,11 @@ class PluginPanel(ctk.CTkFrame):
                     ]
                     not_esl = []
                     ineligible_count = 0
+                    _game_type = getattr(self._game, "loot_game_type", "") or ""
                     for _i in not_esl_raw:
                         _p = self._plugin_paths.get(self._plugin_entries[_i].name.lower())
                         if _p and _p.is_file():
-                            _el, _ = check_esl_eligible(_p)
-                            if _el:
+                            if check_esl_eligible(_p, _game_type):
                                 not_esl.append(_i)
                             else:
                                 ineligible_count += 1
@@ -8085,12 +8094,11 @@ class PluginPanel(ctk.CTkFrame):
         For each plugin:
         * Skips .esl files (always light by extension — no header change needed).
         * Skips plugins whose file path is unknown.
-        * When *enable* is True, first checks whether the plugin is ESL-eligible
-          (all new FormIDs ≤ 0xFFF).  If not eligible, logs a warning but still
-          applies the flag if the user has already confirmed — the check is
-          advisory only; the user may know their plugin is safe.
+        * When *enable* is True, first asks libloot whether the plugin is
+          ESL-eligible; skips any plugin libloot rejects.
         """
         changed = 0
+        game_type_attr = getattr(self._game, "loot_game_type", "") or ""
         for i in indices:
             if not (0 <= i < len(self._plugin_entries)):
                 continue
@@ -8103,9 +8111,8 @@ class PluginPanel(ctk.CTkFrame):
                 self._log(f"  ESL: cannot find file for {name} — skipped.")
                 continue
             if enable:
-                eligible, max_obj = check_esl_eligible(path)
-                if not eligible:
-                    self._log(f"  ESL: skipped {name} — not eligible (max new object ID 0x{max_obj:X} > 0xFFF, compact in xEdit first).")
+                if not check_esl_eligible(path, game_type_attr):
+                    self._log(f"  ESL: skipped {name} — not eligible per LOOT (compact in xEdit first).")
                     continue
             ok = set_esl_flag(path, enable)
             if ok:
