@@ -589,7 +589,7 @@ class App(ctk.CTk):
             command=_close,
         ).pack(side="left")
 
-    def _check_for_app_update(self, force_downgrade_prompt: bool = False):
+    def _check_for_app_update(self, force_downgrade_prompt: bool = False, force_fresh: bool = False):
         """Run in background: fetch latest version and prompt if newer.
 
         AppImage installs compare against GitHub releases and offer the
@@ -600,11 +600,13 @@ class App(ctk.CTk):
         pre-release channel off while running a beta), the AppImage/Flatpak
         branches will surface the latest stable even if it's older than the
         currently-running version, with downgrade-aware copy.
+
+        When *force_fresh* is True (or implied by force_downgrade_prompt), the
+        ETag-cache throttle is bypassed so a manual user action triggers an
+        immediate re-check instead of waiting out the 1-hour throttle window.
         """
 
-        # When the user explicitly toggles the pre-release channel we bypass
-        # the ETag-cache throttle so they see an immediate re-check.
-        force_fresh = bool(force_downgrade_prompt)
+        force_fresh = bool(force_fresh or force_downgrade_prompt)
 
         def _do_check():
             allow_pre = load_allow_prerelease()

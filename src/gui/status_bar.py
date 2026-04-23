@@ -667,7 +667,7 @@ class SettingsPanel(ctk.CTkFrame):
         app = self.winfo_toplevel()
         check = getattr(app, "_check_for_app_update", None)
         if callable(check):
-            check(force_downgrade_prompt=not new_val)
+            check(force_downgrade_prompt=not new_val, force_fresh=True)
 
     def _bind_scroll_recursive(self, widget=None):
         """Bind Linux scroll-wheel events to every child so they propagate to the scrollable body.
