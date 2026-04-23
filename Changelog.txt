@@ -1,3 +1,8 @@
+- v1.2.12
+- Fixed vanilla plugins modified by quick auto clean not returning to the data folder
+- Added some missing required top level folders for bethesda games to reduce bad installs
+- Changed plugin esl eligibility check to use libloot instead
+
 - v1.2.11
 - Added Red Dead Redemption 2
 - Moved the set deployment paths window/option to the mod files tab
