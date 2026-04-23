@@ -47,7 +47,10 @@ from Utils.modlist import write_modlist, read_modlist, ModEntry
 from Utils.filemap import rebuild_mod_index
 from Utils.config_paths import get_download_cache_dir
 from Nexus.nexus_download import delete_archive_and_sidecar, DownloadResult, _find_cached_archive, _get_downloads_dir
-from gui.download_locations_overlay import load_extra_download_locations
+from gui.download_locations_overlay import (
+    is_default_downloads_disabled,
+    load_extra_download_locations,
+)
 from Utils.ui_config import load_clear_archive_after_install, load_keep_fomod_archives, load_collection_settings
 from Nexus.nexus_meta import build_meta_from_download
 from Utils.xdg import open_url
@@ -2198,10 +2201,11 @@ class CollectionDetailDialog(tk.Frame):
             _ext_seen: set = {_cache_dir_resolved}
             _ext_dirs: list[Path] = []
             if _col_cfg.get("check_download_locations", True):
-                _sys_dl = _get_downloads_dir()
-                if _sys_dl.resolve() not in _ext_seen and _sys_dl.is_dir():
-                    _ext_dirs.append(_sys_dl)
-                    _ext_seen.add(_sys_dl.resolve())
+                if not is_default_downloads_disabled():
+                    _sys_dl = _get_downloads_dir()
+                    if _sys_dl.resolve() not in _ext_seen and _sys_dl.is_dir():
+                        _ext_dirs.append(_sys_dl)
+                        _ext_seen.add(_sys_dl.resolve())
                 for _xl in load_extra_download_locations():
                     _xp = Path(_xl).expanduser().resolve()
                     if _xp not in _ext_seen and Path(_xl).is_dir():
@@ -3707,7 +3711,10 @@ class CollectionDetailDialog(tk.Frame):
         """Background thread: guide user through manual download of each mod, then install."""
         import time as _time_mod
         from Nexus.nexus_download import _find_cached_archive, _get_downloads_dir
-        from gui.download_locations_overlay import load_extra_download_locations
+        from gui.download_locations_overlay import (
+            is_default_downloads_disabled,
+            load_extra_download_locations,
+        )
 
         _slug = self._collection.slug or ""
         _install_state: dict = {"status": "", "installed_fids": set(), "done": False, "profile_dir": profile_dir}
@@ -3923,8 +3930,12 @@ class CollectionDetailDialog(tk.Frame):
         # Step 3: Sequential manual download + install
         # ------------------------------------------------------------------
         def _get_scan_dirs() -> list[Path]:
-            dirs: list[Path] = [_get_downloads_dir()]
-            seen = {dirs[0].resolve()}
+            dirs: list[Path] = []
+            seen: set[Path] = set()
+            if not is_default_downloads_disabled():
+                default = _get_downloads_dir()
+                dirs.append(default)
+                seen.add(default.resolve())
             for p in load_extra_download_locations():
                 path = Path(p).expanduser().resolve()
                 if path.is_dir() and path not in seen:

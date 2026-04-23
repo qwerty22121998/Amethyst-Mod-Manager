@@ -4854,20 +4854,27 @@ class ModListPanel(ctk.CTkFrame):
                     if not _is_multi and _ctx_meta.installation_file:
                         _xdg = os.environ.get("XDG_DOWNLOAD_DIR")
                         _dl_dir = Path(_xdg) if _xdg else Path.home() / "Downloads"
-                        _search_dirs = [_dl_dir, get_download_cache_dir()]
+                        _search_dirs: list[Path] = []
                         try:
-                            from gui.download_locations_overlay import load_extra_download_locations
-                            _search_dirs.extend(load_extra_download_locations())
+                            from gui.download_locations_overlay import (
+                                is_default_downloads_disabled,
+                                load_extra_download_locations,
+                            )
+                            if not is_default_downloads_disabled():
+                                _search_dirs.append(_dl_dir)
+                            _search_dirs.append(get_download_cache_dir())
+                            _search_dirs.extend(
+                                Path(_p) for _p in load_extra_download_locations()
+                            )
                         except Exception:
-                            pass
-                        _arc = _dl_dir / _ctx_meta.installation_file
-                        if not _arc.is_file():
-                            for _d in _search_dirs:
-                                _cand = Path(_d) / _ctx_meta.installation_file
-                                if _cand.is_file():
-                                    _arc = _cand
-                                    break
-                        if _arc.is_file():
+                            _search_dirs = [_dl_dir, get_download_cache_dir()]
+                        _arc = None
+                        for _d in _search_dirs:
+                            _cand = Path(_d) / _ctx_meta.installation_file
+                            if _cand.is_file():
+                                _arc = _cand
+                                break
+                        if _arc is not None and _arc.is_file():
                             _archive_path = _arc
                 except Exception:
                     _ctx_meta = None

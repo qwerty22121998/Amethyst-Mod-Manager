@@ -17,7 +17,10 @@ from typing import Callable, Optional, Set
 import customtkinter as ctk
 from gui.ctk_components import CTkPopupMenu
 from gui.wheel_compat import LEGACY_WHEEL_REDUNDANT
-from gui.download_locations_overlay import load_extra_download_locations
+from gui.download_locations_overlay import (
+    is_default_downloads_disabled,
+    load_extra_download_locations,
+)
 from gui.theme import (
     BG_DEEP,
     BG_HEADER,
@@ -222,9 +225,17 @@ class DownloadsPanel:
     # ------------------------------------------------------------------
 
     def _get_scan_dirs(self) -> list[Path]:
-        """Return all directories to scan: default Downloads + user-added locations."""
-        dirs: list[Path] = [_get_downloads_dir()]
-        seen: set[Path] = {dirs[0].resolve()}
+        """Return all directories to scan: default Downloads + user-added locations.
+
+        The default Downloads folder is skipped when the user has disabled it
+        via the Locations overlay.
+        """
+        dirs: list[Path] = []
+        seen: set[Path] = set()
+        if not is_default_downloads_disabled():
+            default = _get_downloads_dir()
+            dirs.append(default)
+            seen.add(default.resolve())
         for p in load_extra_download_locations():
             path = Path(p).expanduser().resolve()
             if path.is_dir() and path not in seen:
@@ -235,10 +246,13 @@ class DownloadsPanel:
     def refresh(self):
         """Scan Downloads + extra locations for archive files and rebuild everything."""
         scan_dirs = self._get_scan_dirs()
-        primary = scan_dirs[0]
-        self._dir_label.configure(
-            text=str(primary) + (" +" + str(len(scan_dirs) - 1) + " more" if len(scan_dirs) > 1 else "")
-        )
+        if not scan_dirs:
+            self._dir_label.configure(text="(no download locations configured)")
+        else:
+            primary = scan_dirs[0]
+            self._dir_label.configure(
+                text=str(primary) + (" +" + str(len(scan_dirs) - 1) + " more" if len(scan_dirs) > 1 else "")
+            )
 
         raw_files: list[tuple[Path, float, int]] = []
         for dl_dir in scan_dirs:
