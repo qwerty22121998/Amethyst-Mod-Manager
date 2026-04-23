@@ -1003,6 +1003,15 @@ THEME_DEFAULTS: dict[str, str] = {
     "separator_bg":       "#3E3E3E",
 }
 
+# Keys whose default should swap when appearance mode is "light". Values here
+# override THEME_DEFAULTS only when the user has not customised them via
+# Settings → Theme. Any key present in the [theme] section of amethyst.ini
+# takes precedence over both this and THEME_DEFAULTS.
+_THEME_LIGHT_DEFAULTS: dict[str, str] = {
+    "separator_bg":       "#b8b8b8",
+    "conflict_separator": "#a8a8a8",
+}
+
 _HEX_RE = _re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 _theme_colors: dict[str, str] = dict(THEME_DEFAULTS)
@@ -1013,9 +1022,20 @@ def _valid_hex(s: str) -> bool:
 
 
 def load_theme_colors() -> dict[str, str]:
-    """Load [theme] from INI, falling back to defaults for missing/invalid values."""
+    """Load [theme] from INI, falling back to defaults for missing/invalid values.
+
+    Mode-aware: if appearance_mode is "light", defaults from
+    _THEME_LIGHT_DEFAULTS override THEME_DEFAULTS for keys the user hasn't
+    customised. User overrides in [theme] always win — except when a saved
+    value exactly matches the dark default for a key that has a light
+    default; in that case we treat it as "never customised" (the user saw a
+    dark-only app when they were last here) and apply the light default.
+    """
     global _theme_colors
+    is_light = get_appearance_mode() == "light"
     result = dict(THEME_DEFAULTS)
+    if is_light:
+        result.update(_THEME_LIGHT_DEFAULTS)
     path = get_ui_config_path()
     if path.is_file():
         try:
@@ -1024,8 +1044,14 @@ def load_theme_colors() -> dict[str, str]:
             if parser.has_section(_THEME_SECTION):
                 for key in THEME_DEFAULTS:
                     raw = parser.get(_THEME_SECTION, key, fallback="").strip()
-                    if _valid_hex(raw):
-                        result[key] = raw
+                    if not _valid_hex(raw):
+                        continue
+                    # Treat "saved value == dark default" as legacy / uncustomised
+                    # for mode-aware keys, so switching to light gets the light default.
+                    if (is_light and key in _THEME_LIGHT_DEFAULTS
+                            and raw.lower() == THEME_DEFAULTS[key].lower()):
+                        continue
+                    result[key] = raw
         except Exception:
             pass
     _theme_colors = result
@@ -1056,3 +1082,42 @@ def save_theme_color(key: str, value: str) -> None:
 def get_theme_color(key: str) -> str:
     """Return the current cached value for *key*, or its default if unknown."""
     return _theme_colors.get(key, THEME_DEFAULTS.get(key, "#000000"))
+
+
+# ---------------------------------------------------------------------------
+# Appearance mode (dark / light) — applied at startup, requires restart.
+# ---------------------------------------------------------------------------
+_APPEARANCE_OPTION = "appearance_mode"
+_APPEARANCE_DEFAULT = "dark"
+_APPEARANCE_VALID = ("dark", "light")
+
+
+def get_appearance_mode() -> str:
+    """Return 'dark' or 'light' from amethyst.ini, defaulting to dark."""
+    path = get_ui_config_path()
+    if not path.is_file():
+        return _APPEARANCE_DEFAULT
+    try:
+        parser = configparser.ConfigParser()
+        parser.read(path)
+        raw = parser.get(_INI_SECTION, _APPEARANCE_OPTION, fallback=_APPEARANCE_DEFAULT).strip().lower()
+        return raw if raw in _APPEARANCE_VALID else _APPEARANCE_DEFAULT
+    except Exception:
+        return _APPEARANCE_DEFAULT
+
+
+def save_appearance_mode(mode: str) -> None:
+    """Persist the appearance mode. Invalid values are silently rejected."""
+    mode = mode.strip().lower()
+    if mode not in _APPEARANCE_VALID:
+        return
+    path = get_ui_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parser = configparser.ConfigParser()
+    if path.is_file():
+        parser.read(path)
+    if _INI_SECTION not in parser:
+        parser[_INI_SECTION] = {}
+    parser[_INI_SECTION][_APPEARANCE_OPTION] = mode
+    with path.open("w") as f:
+        parser.write(f)

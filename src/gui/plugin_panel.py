@@ -33,6 +33,32 @@ from gui.theme import (
     TEXT_MAIN,
     TEXT_OK,
     TEXT_SEP,
+    SCROLL_BG,
+    SCROLL_TROUGH,
+    SCROLL_ACTIVE,
+    TAG_INI_PROFILE,
+    TAG_BSA,
+    TAG_FOLDER,
+    BTN_SUCCESS,
+    BTN_SUCCESS_HOV,
+    BTN_SUCCESS_ALT,
+    BTN_SUCCESS_ALT_HOV,
+    BTN_INFO,
+    BTN_INFO_DEEP,
+    BTN_INFO_DEEP_HOV,
+    BTN_INFO_HOV,
+    BTN_CANCEL,
+    TONE_CYAN,
+    STATUS_BADGE_RED,
+    STATUS_BADGE_GREEN,
+    BG_GREEN_ROW,
+    BG_GREEN_DEEP,
+    BG_RED_DEEP,
+    BG_GREEN_TEXT,
+    BG_RED_TEXT,
+    BG_OVERLAY_ERR,
+    STATUS_ERR_BRIGHT,
+    TEXT_WHITE,
     scaled,
     _ICONS_DIR,
     load_icon as _load_icon,
@@ -299,8 +325,8 @@ class PluginPanel(ctk.CTkFrame):
         # Tooltip state
         self._tooltip = TkTooltip(
             self,
-            bg="#1a1a2e",
-            fg="#ff6b6b",
+            bg=BG_OVERLAY_ERR,
+            fg=STATUS_ERR_BRIGHT,
             font=(_theme.FONT_FAMILY, _theme.FS10),
         )
 
@@ -806,8 +832,8 @@ class PluginPanel(ctk.CTkFrame):
         if is_game_exe:
             self._run_exe_btn.configure(
                 text="▶  Play",
-                fg_color="#2d7a2d",
-                hover_color="#3a9a3a",
+                fg_color=BTN_SUCCESS,
+                hover_color=BTN_SUCCESS_HOV,
             )
         else:
             self._run_exe_btn.configure(
@@ -2022,9 +2048,9 @@ class PluginPanel(ctk.CTkFrame):
         self._mf_tree.column("toplevel", width=70, minwidth=70, stretch=False, anchor="center")
         self._mf_tree.column("check", width=60, minwidth=60, stretch=False, anchor="center")
 
-        _sb_bg     = "#383838"
-        _sb_trough = "#1a1a1a"
-        _sb_active = "#0078d4"
+        _sb_bg     = SCROLL_BG
+        _sb_trough = SCROLL_TROUGH
+        _sb_active = SCROLL_ACTIVE
         vsb = tk.Scrollbar(
             tab, orient="vertical", command=self._mf_tree.yview,
             bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
@@ -2168,7 +2194,7 @@ class PluginPanel(ctk.CTkFrame):
         self._ini_files_tree.column("mod", minwidth=120, stretch=True)
         self._ini_files_tree.tag_configure("mod_highlight", background=_theme.plugin_mod, foreground=TEXT_MAIN)
         self._ini_files_tree.tag_configure("game_folder", foreground=TEXT_OK)
-        self._ini_files_tree.tag_configure("profile_folder", foreground="#00e5ff")
+        self._ini_files_tree.tag_configure("profile_folder", foreground=TAG_INI_PROFILE)
 
         self._ini_marker_strip = tk.Canvas(
             list_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
@@ -2176,9 +2202,9 @@ class PluginPanel(ctk.CTkFrame):
         )
         self._ini_marker_strip.bind("<Configure>", self._on_ini_marker_strip_resize)
 
-        _sb_bg = "#383838"
-        _sb_trough = "#1a1a1a"
-        _sb_active = "#0078d4"
+        _sb_bg = SCROLL_BG
+        _sb_trough = SCROLL_TROUGH
+        _sb_active = SCROLL_ACTIVE
         self._ini_vsb = tk.Scrollbar(
             list_frame, orient="vertical", command=self._ini_files_tree.yview,
             bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
@@ -3406,9 +3432,9 @@ class PluginPanel(ctk.CTkFrame):
         )
         self._arc_tree.column("#0", stretch=True, minwidth=150)
 
-        _sb_bg = "#383838"
-        _sb_trough = "#1a1a1a"
-        _sb_active = "#0078d4"
+        _sb_bg = SCROLL_BG
+        _sb_trough = SCROLL_TROUGH
+        _sb_active = SCROLL_ACTIVE
         vsb = tk.Scrollbar(
             tab, orient="vertical", command=self._arc_tree.yview,
             bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
@@ -3445,12 +3471,12 @@ class PluginPanel(ctk.CTkFrame):
             return "break"
         _arc_search_entry.bind("<Control-a>", _arc_select_all)
 
-        self._arc_tree.tag_configure("bsa", foreground="#d8a657")
+        self._arc_tree.tag_configure("bsa", foreground=TAG_BSA)
         self._arc_tree.tag_configure("bsa_neutral", foreground=TEXT_MAIN)
-        self._arc_tree.tag_configure("folder", foreground="#56b6c2")
+        self._arc_tree.tag_configure("folder", foreground=TAG_FOLDER)
         self._arc_tree.tag_configure("conflict_win", foreground=_theme.conflict_higher)
         self._arc_tree.tag_configure("conflict_lose", foreground=_theme.conflict_lower)
-        self._arc_tree.tag_configure("conflict_mixed", foreground="#d8a657")
+        self._arc_tree.tag_configure("conflict_mixed", foreground=TAG_BSA)
         self._arc_tree.tag_configure("dim", foreground=TEXT_DIM)
 
     def _toggle_arc_tree_expand(self):
@@ -4139,7 +4165,7 @@ class PluginPanel(ctk.CTkFrame):
             # Store (fname, mod_name, rel_key_lower) so leaf nodes can be tagged
             node.setdefault("__files__", []).append((parts[-1], mod_name, rel_key_lower))
 
-        self._data_tree.tag_configure("folder",       foreground="#56b6c2")
+        self._data_tree.tag_configure("folder",       foreground=TAG_FOLDER)
         self._data_tree.tag_configure("file",         foreground=TEXT_MAIN)
         self._data_tree.tag_configure("conflict_win", foreground=_theme.conflict_higher)
 
@@ -4885,7 +4911,7 @@ class PluginPanel(ctk.CTkFrame):
         if btn is None:
             return
         any_active = any(self._plugin_filter_state.values()) if self._plugin_filter_state else False
-        btn.configure(fg_color=ACCENT if any_active else "#1e4d7a")
+        btn.configure(fg_color=ACCENT if any_active else BTN_INFO)
 
     def _close_download_locations_overlay(self):
         """Destroy the download locations overlay."""
@@ -4999,28 +5025,28 @@ class PluginPanel(ctk.CTkFrame):
 
         ctk.CTkButton(
             btn_row, text="Sort Plugins", width=110, height=30,
-            fg_color="#2e6b30", hover_color="#3a8a3d",
+            fg_color=BTN_SUCCESS_ALT, hover_color=BTN_SUCCESS_ALT_HOV,
             text_color=TEXT_MAIN, font=_theme.FONT_SMALL,
             command=self._sort_plugins_loot,
         ).pack(side="left", padx=8)
 
         ctk.CTkButton(
             btn_row, text="Groups", width=80, height=30,
-            fg_color="#1e4d7a", hover_color="#2a6aab",
+            fg_color=BTN_INFO, hover_color=BTN_INFO_HOV,
             text_color=TEXT_MAIN, font=_theme.FONT_SMALL,
             command=self._open_loot_groups_overlay,
         ).pack(side="left", padx=(0, 8))
 
         ctk.CTkButton(
             btn_row, text="Plugin Rules", width=100, height=30,
-            fg_color="#1e4d7a", hover_color="#2a6aab",
+            fg_color=BTN_INFO, hover_color=BTN_INFO_HOV,
             text_color=TEXT_MAIN, font=_theme.FONT_SMALL,
             command=self._open_loot_plugin_rules_overlay,
         ).pack(side="left", padx=(0, 8))
 
         self._plugin_filter_btn = ctk.CTkButton(
             btn_row, text="Filters", width=80, height=30,
-            fg_color="#1e4d7a", hover_color="#2a6aab",
+            fg_color=BTN_INFO, hover_color=BTN_INFO_HOV,
             text_color=TEXT_MAIN, font=_theme.FONT_SMALL,
             command=self._toggle_plugin_filter_panel,
         )
@@ -5301,7 +5327,7 @@ class PluginPanel(ctk.CTkFrame):
 
             bg_id = c.create_rectangle(0, -200, 0, -200, fill="", outline="", state="hidden")
             missing_strip_id = c.create_rectangle(0, -200, 3, -200,
-                                                   fill="#c0392b", outline="", state="hidden")
+                                                   fill=BTN_CANCEL, outline="", state="hidden")
             name_id = c.create_text(0, -200, text="", anchor="w", fill="",
                                     font=(_theme.FONT_FAMILY, _theme.FS11), state="hidden")
             idx_id = c.create_text(0, -200, text="", anchor="center", fill="",
@@ -5378,7 +5404,7 @@ class PluginPanel(ctk.CTkFrame):
             self._pool_ul_dot.append(ul_dot)
 
             esl_badge = c.create_text(0, -200, text="L", anchor="center",
-                                      fill="#7ec8e3",
+                                      fill=TONE_CYAN,
                                       font=(_theme.FONT_FAMILY, _theme.FS11, "bold"),
                                       state="hidden")
             self._pool_esl_badge.append(esl_badge)
@@ -6152,10 +6178,10 @@ class PluginPanel(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     # Colours for framework status banners
-    _FW_GREEN_BG   = "#1b4d1b"
-    _FW_GREEN_TEXT = "#c8ffc8"
-    _FW_RED_BG     = "#4d1b1b"
-    _FW_RED_TEXT   = "#ffc8c8"
+    _FW_GREEN_BG   = BG_GREEN_DEEP
+    _FW_GREEN_TEXT = BG_GREEN_TEXT
+    _FW_RED_BG     = BG_RED_DEEP
+    _FW_RED_TEXT   = BG_RED_TEXT
 
     def _refresh_framework_banners(self) -> None:
         """Rebuild the framework status banners at the top of the Plugins tab.
@@ -6536,7 +6562,7 @@ class PluginPanel(ctk.CTkFrame):
                 if is_sel:
                     bg = BG_SELECT
                 elif name_lower in master_names_lower:
-                    bg = "#1a5c1a"
+                    bg = BG_GREEN_ROW
                 elif name_lower in self._highlighted_plugins:
                     bg = _theme.plugin_mod
                 elif name_lower in self._bsa_conflict_higher_plugins:
@@ -6582,7 +6608,7 @@ class PluginPanel(ctk.CTkFrame):
 
                 _theme_bgs = (_theme.conflict_higher, _theme.conflict_lower, _theme.plugin_mod)
                 if entry.name in self._missing_masters:
-                    name_color = "#e74c3c"
+                    name_color = STATUS_BADGE_RED
                 elif bg in _theme_bgs:
                     name_color = _theme.contrasting_text_color(bg)
                 elif not entry.enabled:
@@ -6648,7 +6674,7 @@ class PluginPanel(ctk.CTkFrame):
                         c.coords(ul_dot_id, cx - r, y_mid - r, cx + r, y_mid + r)
                         in_cycle = name_lower in self._userlist_cycle_plugins
                         c.itemconfigure(ul_dot_id,
-                                        fill="#e74c3c" if in_cycle else "white",
+                                        fill=STATUS_BADGE_RED if in_cycle else TEXT_WHITE,
                                         state="normal")
                     else:
                         c.itemconfigure(ul_dot_id, state="hidden")
@@ -6796,9 +6822,9 @@ class PluginPanel(ctk.CTkFrame):
 
             # Priority: missing (red) > highlighted (mod) > master (green) > conflict_higher > conflict_lower.
             priority = {
-                "#c0392b": 5,
+                BTN_CANCEL: 5,
                 plugin_mod_color: 4,
-                "#2a8c2a": 3,
+                STATUS_BADGE_GREEN: 3,
                 conflict_higher_color: 2,
                 conflict_lower_color: 1,
             }
@@ -6807,13 +6833,13 @@ class PluginPanel(ctk.CTkFrame):
             for i, e in enumerate(entries):
                 name = e.name
                 if name in missing:
-                    color = "#c0392b"
+                    color = BTN_CANCEL
                 else:
                     name_lower = name.lower()
                     if name_lower in highlighted:
                         color = plugin_mod_color
                     elif name_lower in master_names_lower:
-                        color = "#2a8c2a"
+                        color = STATUS_BADGE_GREEN
                     elif name_lower in higher:
                         color = conflict_higher_color
                     elif name_lower in lower:
@@ -7135,7 +7161,7 @@ class PluginPanel(ctk.CTkFrame):
                 if is_sel:
                     bg = BG_SELECT
                 elif entry and name_lower in {m.lower() for m in self._master_highlights}:
-                    bg = "#1a5c1a"
+                    bg = BG_GREEN_ROW
                 elif entry and name_lower in self._highlighted_plugins:
                     bg = _theme.plugin_mod
                 elif entry and name_lower in self._bsa_conflict_higher_plugins:
@@ -7150,7 +7176,7 @@ class PluginPanel(ctk.CTkFrame):
                 if entry is not None:
                     _theme_bgs = (_theme.conflict_higher, _theme.conflict_lower, _theme.plugin_mod)
                     if entry.name in self._missing_masters:
-                        name_color = "#e74c3c"
+                        name_color = STATUS_BADGE_RED
                     elif bg in _theme_bgs:
                         name_color = _theme.contrasting_text_color(bg)
                     elif not entry.enabled:

@@ -98,7 +98,8 @@ from Nexus.nxm_handler import NxmLink, NxmCollectionLink, NxmHandler, NxmIPC, pa
 from Nexus.nexus_meta import build_meta_from_download, write_meta
 from Utils.config_paths import get_download_cache_dir
 
-ctk.set_appearance_mode("dark")
+from Utils.ui_config import get_appearance_mode as _get_appearance_mode
+ctk.set_appearance_mode(_get_appearance_mode())
 ctk.set_default_color_theme("dark-blue")
 
 def _run_installer(allow_prerelease: bool = False):

@@ -41,9 +41,27 @@ from gui.theme import (
     scaled,
     TEXT_DIM,
     TEXT_MAIN,
+    TEXT_MUTED,
     TEXT_SEP,
+    TEXT_WHITE,
+    TEXT_BLACK,
     BG_SELECT,
     BG_ROW_ALT,
+    BG_OVERLAY_ERR,
+    BG_OVERLAY_DEEP,
+    STATUS_ERR_BRIGHT,
+    STATUS_SUCCESS_SOLID,
+    BTN_CANCEL,
+    BTN_CANCEL_HOV,
+    BTN_SUCCESS,
+    BTN_SUCCESS_HOV,
+    BTN_DANGER_ALT,
+    BTN_DANGER_ALT_HOV,
+    TONE_GREEN,
+    TONE_RED,
+    TONE_BLUE,
+    TAG_BSA_ALT,
+    FONT_FAMILY,
 )
 import gui.theme as _theme
 from gui.path_utils import _to_wine_path
@@ -1376,8 +1394,8 @@ class _ProfileNameDialog(ctk.CTkToplevel):
         _specific_cb.grid(row=2, column=0, sticky="w", padx=16, pady=(0, 8))
         self._specific_tooltip = TkTooltip(
             self,
-            bg="#1a1a2e",
-            fg="#ff6b6b",
+            bg=BG_OVERLAY_ERR,
+            fg=STATUS_ERR_BRIGHT,
             font=(_theme.FONT_FAMILY, _theme.FS10),
         )
         self._specific_tooltip.attach(
@@ -1752,7 +1770,7 @@ class OverwritesPanel(ctk.CTkFrame):
         self._build_two_col_pane(
             left, row=0, col=0,
             header=f"Files overriding others  ({len(files_win)})",
-            header_color="#98c379",
+            header_color=TONE_GREEN,
             col0_title="File path",
             col1_title="Mod(s) beaten",
             rows=files_win,
@@ -1761,7 +1779,7 @@ class OverwritesPanel(ctk.CTkFrame):
         self._build_two_col_pane(
             left, row=1, col=0,
             header=f"Files overridden by others  ({len(files_lose)})",
-            header_color="#e06c75",
+            header_color=TONE_RED,
             col0_title="File path",
             col1_title="Winning mod",
             rows=files_lose,
@@ -1770,7 +1788,7 @@ class OverwritesPanel(ctk.CTkFrame):
         self._build_one_col_pane(
             body, row=0, col=1,
             header=f"Files with no conflicts  ({len(files_no_conflict)})",
-            header_color="#61afef",
+            header_color=TONE_BLUE,
             col0_title="File path",
             rows=files_no_conflict,
         )
@@ -1781,7 +1799,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tk.Frame(footer, bg=BORDER, height=1).pack(side="top", fill="x")
         ctk.CTkButton(
             footer, text="Close",
-            fg_color="#c0392b", hover_color="#a93226",
+            fg_color=BTN_CANCEL, hover_color=BTN_CANCEL_HOV,
             text_color=TEXT_MAIN, font=FONT_BOLD,
             width=80, height=32,
             command=self._on_close,
@@ -1830,7 +1848,7 @@ class OverwritesPanel(ctk.CTkFrame):
         tv.heading("col1", text=col1_title, anchor="w")
         tv.column("#0",   minwidth=100, stretch=True)
         tv.column("col1", minwidth=100, stretch=True)
-        tv.tag_configure("bsa", foreground="#56d8e4")
+        tv.tag_configure("bsa", foreground=TAG_BSA_ALT)
 
         def _resize_cols(event, _tv=tv):
             half = event.width // 2
@@ -1894,7 +1912,7 @@ class OverwritesPanel(ctk.CTkFrame):
         )
         tv.heading("#0", text=col0_title, anchor="w")
         tv.column("#0", minwidth=180, stretch=True)
-        tv.tag_configure("bsa", foreground="#56d8e4")
+        tv.tag_configure("bsa", foreground=TAG_BSA_ALT)
 
         vsb = tk.Scrollbar(tree_frame, orient="vertical", command=tv.yview,
                            bg=_theme.BG_SEP, troughcolor=BG_DEEP, activebackground=ACCENT,
@@ -2048,7 +2066,7 @@ class _BENDrRunDialog(ctk.CTkToplevel):
 
     def __init__(self, parent, *, bat_dir: Path, game_data_dir: Path,
                  output_dir: Path, log_fn):
-        super().__init__(parent, fg_color="#1a1a1a")
+        super().__init__(parent, fg_color=BG_OVERLAY_DEEP)
         self.title("BENDr — Normal Map Processor")
         self.geometry("480x260")
         self.resizable(False, False)
@@ -2079,7 +2097,7 @@ class _BENDrRunDialog(ctk.CTkToplevel):
     def _build(self):
         ctk.CTkLabel(
             self, text="BENDr Normal Map Processor",
-            font=(_theme.FONT_FAMILY, 16, "bold"), text_color="#d4d4d4",
+            font=(_theme.FONT_FAMILY, 16, "bold"), text_color=TEXT_MAIN,
         ).pack(pady=(16, 4))
         ctk.CTkLabel(
             self,
@@ -2087,18 +2105,18 @@ class _BENDrRunDialog(ctk.CTkToplevel):
                 "Processes normal maps and parallax textures:\n"
                 "BSA extract → filter → parallax prep → bend normals → BC7 compress"
             ),
-            font=(_theme.FONT_FAMILY, 12), text_color="#858585", justify="center",
+            font=(_theme.FONT_FAMILY, 12), text_color=TEXT_DIM, justify="center",
         ).pack(pady=(0, 12))
 
         ctk.CTkLabel(
             self, text=f"Output: {self._output_dir}",
-            font=(_theme.FONT_FAMILY, 11), text_color="#858585", wraplength=scaled(440),
+            font=(_theme.FONT_FAMILY, 11), text_color=TEXT_DIM, wraplength=scaled(440),
         ).pack(pady=(4, 12))
 
         ctk.CTkButton(
             self, text="▶  Run BENDr", width=160, height=36,
             font=(_theme.FONT_FAMILY, 13, "bold"),
-            fg_color="#0078d4", hover_color="#1084d8", text_color="white",
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_WHITE,
             command=self._on_run,
         ).pack(pady=(0, 16))
 
@@ -2145,7 +2163,7 @@ class _ParallaxRRunDialog(ctk.CTkToplevel):
 
     def __init__(self, parent, *, bat_dir: Path, game_data_dir: Path,
                  output_dir: Path, log_fn):
-        super().__init__(parent, fg_color="#1a1a1a")
+        super().__init__(parent, fg_color=BG_OVERLAY_DEEP)
         self.title("ParallaxR — Parallax Texture Processor")
         self.geometry("480x260")
         self.resizable(False, False)
@@ -2176,7 +2194,7 @@ class _ParallaxRRunDialog(ctk.CTkToplevel):
     def _build(self):
         ctk.CTkLabel(
             self, text="ParallaxR Parallax Texture Processor",
-            font=(_theme.FONT_FAMILY, 16, "bold"), text_color="#d4d4d4",
+            font=(_theme.FONT_FAMILY, 16, "bold"), text_color=TEXT_MAIN,
         ).pack(pady=(16, 4))
         ctk.CTkLabel(
             self,
@@ -2184,18 +2202,18 @@ class _ParallaxRRunDialog(ctk.CTkToplevel):
                 "Processes normal maps and parallax textures:\n"
                 "BSA extract → filter pairs → height maps → output QC"
             ),
-            font=(_theme.FONT_FAMILY, 12), text_color="#858585", justify="center",
+            font=(_theme.FONT_FAMILY, 12), text_color=TEXT_DIM, justify="center",
         ).pack(pady=(0, 12))
 
         ctk.CTkLabel(
             self, text=f"Output: {self._output_dir}",
-            font=(_theme.FONT_FAMILY, 11), text_color="#858585", wraplength=scaled(440),
+            font=(_theme.FONT_FAMILY, 11), text_color=TEXT_DIM, wraplength=scaled(440),
         ).pack(pady=(4, 12))
 
         ctk.CTkButton(
             self, text="▶  Run ParallaxR", width=160, height=36,
             font=(_theme.FONT_FAMILY, 13, "bold"),
-            fg_color="#0078d4", hover_color="#1084d8", text_color="white",
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_WHITE,
             command=self._on_run,
         ).pack(pady=(0, 16))
 
@@ -2722,7 +2740,7 @@ class ExeConfigPanel(ctk.CTkFrame):
         if self._exe_path in self._custom_exes:
             ctk.CTkButton(
                 bar, text="Remove EXE", width=110, height=30, font=FONT_NORMAL,
-                fg_color="#8B1A1A", hover_color="#B22222", text_color="white",
+                fg_color=BTN_DANGER_ALT, hover_color=BTN_DANGER_ALT_HOV, text_color=TEXT_WHITE,
                 command=self._on_remove,
             ).pack(side="left", padx=(12, 4), pady=9)
         if not is_game_exe:
@@ -3194,7 +3212,7 @@ class _ReplaceModDialog(ctk.CTkToplevel):
             text_color=("black", "white"), command=self._on_rename,
         ).pack(side="left", padx=4)
         ctk.CTkButton(
-            btn_frame, text="Cancel", width=90, fg_color="#c0392b", hover_color="#a93226",
+            btn_frame, text="Cancel", width=90, fg_color=BTN_CANCEL, hover_color=BTN_CANCEL_HOV,
             text_color="white", command=self._on_cancel,
         ).pack(side="left", padx=4)
 
@@ -4162,7 +4180,7 @@ class SepColorPanel(ctk.CTkFrame):
         self._wheel_canvas.coords(self._cross_v, px_, py_-arm, px_, py_+arm)
         rv, gv, bv = colorsys.hsv_to_rgb(self._hue, self._sat, self._val)
         lum = 0.2126*rv + 0.7152*gv + 0.0722*bv
-        col = "#000000" if lum > 0.5 else "#ffffff"
+        col = TEXT_BLACK if lum > 0.5 else TEXT_WHITE
         self._wheel_canvas.itemconfigure(self._cross_h, fill=col)
         self._wheel_canvas.itemconfigure(self._cross_v, fill=col)
 
@@ -4415,7 +4433,7 @@ class ExeFilterPanel(ctk.CTkFrame):
             ).grid(row=0, column=0, sticky="ew", padx=8)
             ctk.CTkButton(
                 row, text="\u2715", width=28, height=24, font=FONT_SMALL,
-                fg_color=BG_HEADER, hover_color="#8B1A1A", text_color=TEXT_MAIN,
+                fg_color=BG_HEADER, hover_color=BTN_DANGER_ALT, text_color=TEXT_MAIN,
                 command=lambda n=name: self._on_remove(n),
             ).grid(row=0, column=1, padx=(4, 4))
 
@@ -4521,8 +4539,8 @@ class IniFileEditorPanel(ctk.CTkFrame):
         try:
             self._textbox.tag_config(
                 "search_highlight",
-                background="#00ff88",
-                foreground="#000000",
+                background=STATUS_SUCCESS_SOLID,
+                foreground=TEXT_BLACK,
             )
         except Exception:
             return
@@ -4861,13 +4879,13 @@ class MissingReqsPanel(ctk.CTkFrame):
                 url = req.url or f"https://www.nexusmods.com/{self._domain or req.game_domain}/mods/{req.mod_id}"
                 vb = ctk.CTkButton(
                     self, text="View", width=VIEW_W, height=BTN_H,
-                    fg_color=ACCENT, hover_color=ACCENT_HOV, text_color="#ffffff",
+                    fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_WHITE,
                     font=(_theme.FONT_FAMILY, _theme.FS10), cursor="hand2",
                     command=lambda u=url: open_url(u),
                 )
                 ib = ctk.CTkButton(
                     self, text="Install", width=BTN_W, height=BTN_H,
-                    fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="#ffffff",
+                    fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV, text_color=TEXT_WHITE,
                     font=(_theme.FONT_FAMILY, _theme.FS10), cursor="hand2",
                     command=lambda r=req: self._on_install(r),
                 )

@@ -69,11 +69,56 @@ from gui.theme import (
     BG_HEADER,
     BG_ROW,
     BG_HOVER,
+    BG_OVERLAY_DEEP,
+    BG_CARD,
+    BG_CARD_ALT,
+    BG_MOD_OPT,
+    BG_MOD_REQ,
     ACCENT,
     ACCENT_HOV,
     TEXT_MAIN,
     TEXT_DIM,
+    TEXT_MUTED,
+    TEXT_FAINT,
+    TEXT_WHITE,
+    TEXT_CARD,
+    TEXT_CARD_DIM,
+    TEXT_CARD_MED,
     BORDER,
+    BORDER_DIM,
+    BORDER_FAINT,
+    BTN_SUCCESS,
+    BTN_SUCCESS_HOV,
+    BTN_DANGER,
+    BTN_DANGER_HOV,
+    BTN_DANGER_DEEP,
+    BTN_DANGER_DEEP_HOV,
+    BTN_WARN,
+    BTN_WARN_HOV,
+    BTN_WARN_DEEP,
+    BTN_WARN_DEEP_HOV,
+    BTN_WARN_BROWN,
+    BTN_WARN_BROWN_HOV,
+    BTN_WARN_ORANGE,
+    BTN_WARN_ORANGE_HOV,
+    BTN_INFO_DEEP,
+    BTN_INFO_DEEP_HOV,
+    BTN_NEUTRAL,
+    BTN_NEUTRAL_HOV,
+    BTN_PURPLE,
+    BTN_PURPLE_HOV,
+    BTN_SUCCESS_DEEP,
+    BTN_SUCCESS_DEEP_HOV,
+    BTN_GREY,
+    BTN_GREY_HOV,
+    BTN_GREY_ALT,
+    BTN_GREY_ALT_HOV,
+    TAG_INSTALLED_BG,
+    TAG_BUNDLED_BG,
+    TAG_BUNDLED_FG,
+    STATUS_DL_GREEN,
+    STATUS_QUEUED,
+    SCROLL_BG,
     FONT_HEADER,
     FONT_NORMAL,
     FONT_BOLD,
@@ -515,7 +560,7 @@ class CollectionCard:
             btn_frame, text="View",
             width=_btn_w, height=_btn_h,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
-            text_color="#ffffff", font=FONT_SMALL,
+            text_color=TEXT_WHITE, font=FONT_SMALL,
             command=on_view,
         ).place(relx=0.5, rely=0.5, anchor="center")
 
@@ -722,7 +767,7 @@ class OptionalModsPanel(ctk.CTkFrame):
         ).pack(side="right", padx=(4, 12), pady=12)
         ctk.CTkButton(
             bar, text="Install", width=80, height=28, font=FONT_BOLD,
-            fg_color="#2d7a2d", hover_color="#3a9e3a", text_color="white",
+            fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV, text_color=TEXT_WHITE,
             command=self._on_ok,
         ).pack(side="right", padx=4, pady=12)
 
@@ -914,7 +959,7 @@ class CollectionDetailDialog(tk.Frame):
         style.map(
             "CollDetail.Treeview",
             background=[("selected", ACCENT)],
-            foreground=[("selected", "#ffffff")],
+            foreground=[("selected", TEXT_WHITE)],
         )
         try:
             style.layout("CollDetail.Treeview", [(
@@ -949,9 +994,9 @@ class CollectionDetailDialog(tk.Frame):
 
         self._tree.tag_configure("odd", background=BG_ROW)
         self._tree.tag_configure("even", background=BG_PANEL)
-        self._tree.tag_configure("unordered", foreground="#888888")
-        self._tree.tag_configure("installed", background="#1e4d1e")
-        self._tree.tag_configure("bundled", background="#1a2a3a", foreground="#7ab8e8")
+        self._tree.tag_configure("unordered", foreground=TEXT_FAINT)
+        self._tree.tag_configure("installed", background=TAG_INSTALLED_BG)
+        self._tree.tag_configure("bundled", background=TAG_BUNDLED_BG, foreground=TAG_BUNDLED_FG)
 
         # --- Priority note ---
         self._priority_note = tk.Label(
@@ -966,7 +1011,7 @@ class CollectionDetailDialog(tk.Frame):
 
         ctk.CTkButton(
             ftr, text="Close",
-            height=scaled(30), fg_color="#3c3c3c", hover_color="#505050",
+            height=scaled(30), fg_color=BTN_GREY_ALT, hover_color=BTN_GREY_ALT_HOV,
             text_color=TEXT_MAIN, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_close,
@@ -974,8 +1019,8 @@ class CollectionDetailDialog(tk.Frame):
 
         self._install_btn = ctk.CTkButton(
             ftr, text="Install Collection",
-            height=scaled(30), fg_color="#2d7a2d", hover_color="#3a9e3a",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10, "bold"),
+            height=scaled(30), fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10, "bold"),
             border_width=0,
             command=self._on_install_collection,
         )
@@ -983,16 +1028,16 @@ class CollectionDetailDialog(tk.Frame):
 
         ctk.CTkButton(
             ftr, text="Open on Nexus",
-            height=scaled(30), fg_color="#3a5a8a", hover_color="#4a70aa",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            height=scaled(30), fg_color=BTN_NEUTRAL, hover_color=BTN_NEUTRAL_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_open_on_nexus,
         ).pack(side="right", padx=(10, 0), pady=6)
 
         self._open_missing_btn = ctk.CTkButton(
             ftr, text="Open Missing on Nexus",
-            height=scaled(30), fg_color="#5a3a00", hover_color="#7a5200",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            height=scaled(30), fg_color=BTN_WARN_BROWN, hover_color=BTN_WARN_BROWN_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_open_missing_on_nexus,
         )
@@ -1000,8 +1045,8 @@ class CollectionDetailDialog(tk.Frame):
 
         self._reset_btn = ctk.CTkButton(
             ftr, text="Reset Load Order",
-            height=scaled(30), fg_color="#5a3a00", hover_color="#7a5200",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            height=scaled(30), fg_color=BTN_WARN_BROWN, hover_color=BTN_WARN_BROWN_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_reset_load_order,
         )
@@ -1139,7 +1184,7 @@ class CollectionDetailDialog(tk.Frame):
             inner,
             yscrollcommand=sb.set,
             bg=BG_PANEL, fg=TEXT_MAIN,
-            selectbackground=ACCENT, selectforeground="#ffffff",
+            selectbackground=ACCENT, selectforeground=TEXT_WHITE,
             activestyle="none",
             relief="flat", bd=0, highlightthickness=0,
             font=font_sized_px(FONT_FAMILY, 10),
@@ -1770,7 +1815,7 @@ class CollectionDetailDialog(tk.Frame):
             """Update status on both the registry and (if still alive) the panel."""
             _install_state["status"] = msg
             try:
-                color = "#4caf50" if msg.startswith("Downloading") else TEXT_DIM
+                color = STATUS_DL_GREEN if msg.startswith("Downloading") else TEXT_DIM
                 self.after(0, lambda m=msg, c=color: (
                     self._status_var.set(m),
                     self._status_lbl.configure(fg=c),
@@ -3104,32 +3149,32 @@ class CollectionDetailDialog(tk.Frame):
 
     def _show_install_overlay(self, mod_count: int, profile_name: str):
         """Show a semi-transparent overlay that blocks all interaction."""
-        overlay = tk.Frame(self, bg="#1a1a1a")
+        overlay = tk.Frame(self, bg=BG_OVERLAY_DEEP)
         overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
         overlay.lift()
         # Consume all clicks so nothing underneath is reachable
         overlay.bind("<Button-1>", lambda e: "break")
         overlay.bind("<ButtonRelease-1>", lambda e: "break")
 
-        inner = tk.Frame(overlay, bg="#2b2b2b", width=500, bd=0, highlightthickness=0)
+        inner = tk.Frame(overlay, bg=BG_CARD_ALT, width=500, bd=0, highlightthickness=0)
         inner.place(relx=0.5, rely=0.5, anchor="center", width=500)
 
         tk.Label(
             inner, text=f"Installing {mod_count} mods…" if mod_count else "Installing…",
-            font=font_sized_px(FONT_FAMILY, 16, "bold"), fg="#ffffff", bg="#2b2b2b",
+            font=font_sized_px(FONT_FAMILY, 16, "bold"), fg=TEXT_WHITE, bg=BG_CARD_ALT,
             bd=0, highlightthickness=0,
         ).pack(pady=(20, 4))
         if profile_name:
             tk.Label(
                 inner, text=f"Profile: {profile_name}",
-                font=font_sized_px(FONT_FAMILY, 12), fg="#aaaaaa", bg="#2b2b2b",
+                font=font_sized_px(FONT_FAMILY, 12), fg=TEXT_MUTED, bg=BG_CARD_ALT,
                 bd=0, highlightthickness=0,
             ).pack(pady=(0, 4))
 
         # Dedicated overlay status label — mirrors self._status_var
         tk.Label(
             inner, textvariable=self._status_var,
-            bg="#2b2b2b", fg="#aaaaaa",
+            bg=BG_CARD_ALT, fg=TEXT_MUTED,
             font=font_sized_px(FONT_FAMILY, 11), anchor="w", bd=0, highlightthickness=0,
         ).pack(fill="x", padx=16, pady=(6, 2))
 
@@ -3143,7 +3188,7 @@ class CollectionDetailDialog(tk.Frame):
 
         # Download progress section (hidden until downloads start)
         dl_msg_lbl = tk.Label(
-            inner, text="", bg="#2b2b2b", fg="#aaaaaa",
+            inner, text="", bg=BG_CARD_ALT, fg=TEXT_MUTED,
             font=font_sized_px(FONT_FAMILY, 10), anchor="w", bd=0, highlightthickness=0,
         )
         dl_bar = ctk.CTkProgressBar(
@@ -3157,13 +3202,13 @@ class CollectionDetailDialog(tk.Frame):
         # overlay never resizes as mods start/finish downloading.  Empty rows
         # remain invisible (blank label + zeroed bar) but reserve their space.
         MAX_DL_SLOTS = 8
-        per_mod_frame = tk.Frame(inner, bg="#2b2b2b", bd=0, highlightthickness=0)
+        per_mod_frame = tk.Frame(inner, bg=BG_CARD_ALT, bd=0, highlightthickness=0)
         dl_slot_widgets: list = []
         for _i in range(MAX_DL_SLOTS):
-            _row = tk.Frame(per_mod_frame, bg="#2b2b2b", bd=0, highlightthickness=0)
+            _row = tk.Frame(per_mod_frame, bg=BG_CARD_ALT, bd=0, highlightthickness=0)
             _row.pack(fill="x", pady=(1, 1))
             _name = tk.Label(
-                _row, text=" ", bg="#2b2b2b", fg="#dddddd",
+                _row, text=" ", bg=BG_CARD_ALT, fg=TEXT_CARD_MED,
                 font=font_sized_px(FONT_FAMILY, 9), anchor="w",
                 bd=0, highlightthickness=0,
             )
@@ -3181,9 +3226,9 @@ class CollectionDetailDialog(tk.Frame):
         # Extracting rows: up to MAX_EXTRACT_SLOTS concurrent extractions can
         # be displayed simultaneously.  Pre-allocated for fixed height.
         MAX_EXTRACT_SLOTS = 8
-        extracting_frame = tk.Frame(inner, bg="#2b2b2b", bd=0, highlightthickness=0)
+        extracting_frame = tk.Frame(inner, bg=BG_CARD_ALT, bd=0, highlightthickness=0)
         extracting_header = tk.Label(
-            extracting_frame, text="Extracting", bg="#2b2b2b", fg="#888888",
+            extracting_frame, text="Extracting", bg=BG_CARD_ALT, fg=TEXT_FAINT,
             font=font_sized_px(FONT_FAMILY, 9, "bold"), anchor="w",
             bd=0, highlightthickness=0,
         )
@@ -3191,7 +3236,7 @@ class CollectionDetailDialog(tk.Frame):
         extracting_slot_labels: list = []
         for _i in range(MAX_EXTRACT_SLOTS):
             _lbl = tk.Label(
-                extracting_frame, text=" ", bg="#2b2b2b", fg="#cccccc",
+                extracting_frame, text=" ", bg=BG_CARD_ALT, fg=TEXT_CARD,
                 font=font_sized_px(FONT_FAMILY, 10), anchor="w",
                 bd=0, highlightthickness=0,
             )
@@ -3200,14 +3245,14 @@ class CollectionDetailDialog(tk.Frame):
         # Not packed yet — revealed together with per_mod_frame on first download.
 
         # Button row — always packed last so other sections can be inserted before it
-        btn_row = tk.Frame(inner, bg="#2b2b2b")
+        btn_row = tk.Frame(inner, bg=BG_CARD_ALT)
         btn_row.pack(pady=(8, 16))
 
         pause_btn = ctk.CTkButton(
             btn_row, text="Pause",
             height=scaled(28), width=scaled(110),
-            fg_color="#7a5a00", hover_color="#a07800",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            fg_color=BTN_WARN_DEEP, hover_color=BTN_WARN_DEEP_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_pause_install,
         )
@@ -3216,8 +3261,8 @@ class CollectionDetailDialog(tk.Frame):
         cancel_btn = ctk.CTkButton(
             btn_row, text="Cancel",
             height=scaled(28), width=scaled(110),
-            fg_color="#7a1a1a", hover_color="#a02020",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            fg_color=BTN_DANGER_DEEP, hover_color=BTN_DANGER_DEEP_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_cancel_install,
         )
@@ -3378,18 +3423,18 @@ class CollectionDetailDialog(tk.Frame):
             if i < n_active:
                 name = active[i][1] or "(unnamed)"
                 try:
-                    lbl.configure(text=f"  • {name}", fg="#cccccc")
+                    lbl.configure(text=f"  • {name}", fg=TEXT_CARD)
                 except Exception:
                     pass
             elif i - n_active < len(queued):
                 name = queued[i - n_active][1] or "(unnamed)"
                 try:
-                    lbl.configure(text=f"  • {name}  - Queued", fg="#ff9a3c")
+                    lbl.configure(text=f"  • {name}  - Queued", fg=STATUS_QUEUED)
                 except Exception:
                     pass
             else:
                 try:
-                    lbl.configure(text=" ", fg="#cccccc")
+                    lbl.configure(text=" ", fg=TEXT_CARD)
                 except Exception:
                     pass
 
@@ -3475,53 +3520,53 @@ class CollectionDetailDialog(tk.Frame):
 
     def _show_manual_install_overlay(self, mod_count: int, profile_name: str):
         """Show a blocking overlay for sequential manual-download collection install."""
-        overlay = tk.Frame(self, bg="#1a1a1a")
+        overlay = tk.Frame(self, bg=BG_OVERLAY_DEEP)
         overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
         overlay.lift()
         overlay.bind("<Button-1>", lambda e: "break")
         overlay.bind("<ButtonRelease-1>", lambda e: "break")
 
-        inner = tk.Frame(overlay, bg="#2b2b2b", bd=0, highlightthickness=0)
+        inner = tk.Frame(overlay, bg=BG_CARD_ALT, bd=0, highlightthickness=0)
         inner.place(relx=0.5, rely=0.5, anchor="center", width=scaled(540))
 
         tk.Label(
             inner, text="Manual Download Required",
-            font=font_sized_px(FONT_FAMILY, 16, "bold"), fg="#ffffff", bg="#2b2b2b",
+            font=font_sized_px(FONT_FAMILY, 16, "bold"), fg=TEXT_WHITE, bg=BG_CARD_ALT,
         ).pack(pady=(20, 2))
         tk.Label(
             inner, text=f"Non-premium users must download each mod manually.",
-            font=font_sized_px(FONT_FAMILY, 10), fg="#aaaaaa", bg="#2b2b2b",
+            font=font_sized_px(FONT_FAMILY, 10), fg=TEXT_MUTED, bg=BG_CARD_ALT,
         ).pack(pady=(0, 2))
         if profile_name:
             tk.Label(
                 inner, text=f"Profile: {profile_name}",
-                font=font_sized_px(FONT_FAMILY, 11), fg="#aaaaaa", bg="#2b2b2b",
+                font=font_sized_px(FONT_FAMILY, 11), fg=TEXT_MUTED, bg=BG_CARD_ALT,
             ).pack(pady=(0, 6))
 
         # --- Mod info card ---
-        card = tk.Frame(inner, bg="#333333", bd=0, highlightthickness=1, highlightbackground="#555555")
+        card = tk.Frame(inner, bg=BG_CARD, bd=0, highlightthickness=1, highlightbackground=BORDER_DIM)
         card.pack(fill="x", padx=20, pady=(6, 4))
 
         self._manual_mod_name_lbl = tk.Label(
-            card, text="", font=font_sized_px(FONT_FAMILY, 13, "bold"), fg="#ffffff", bg="#333333",
+            card, text="", font=font_sized_px(FONT_FAMILY, 13, "bold"), fg=TEXT_WHITE, bg=BG_CARD,
             anchor="w", wraplength=scaled(480),
         )
         self._manual_mod_name_lbl.pack(fill="x", padx=12, pady=(10, 2))
 
-        info_row = tk.Frame(card, bg="#333333")
+        info_row = tk.Frame(card, bg=BG_CARD)
         info_row.pack(fill="x", padx=12, pady=(0, 2))
         self._manual_mod_size_lbl = tk.Label(
-            info_row, text="", font=font_sized_px(FONT_FAMILY, 10), fg="#aaaaaa", bg="#333333", anchor="w",
+            info_row, text="", font=font_sized_px(FONT_FAMILY, 10), fg=TEXT_MUTED, bg=BG_CARD, anchor="w",
         )
         self._manual_mod_size_lbl.pack(side="left")
         self._manual_mod_badge_lbl = tk.Label(
-            info_row, text="", font=font_sized_px(FONT_FAMILY, 9, "bold"), fg="#ffffff", bg="#2d7a2d",
+            info_row, text="", font=font_sized_px(FONT_FAMILY, 9, "bold"), fg=TEXT_WHITE, bg=BTN_SUCCESS,
             padx=6, pady=1,
         )
         self._manual_mod_badge_lbl.pack(side="left", padx=(8, 0))
 
         self._manual_mod_file_hint_lbl = tk.Label(
-            card, text="", font=font_sized_px("Consolas", 9), fg="#777777", bg="#333333",
+            card, text="", font=font_sized_px("Consolas", 9), fg=TEXT_CARD_DIM, bg=BG_CARD,
             anchor="w", wraplength=scaled(480),
         )
         self._manual_mod_file_hint_lbl.pack(fill="x", padx=12, pady=(0, 10))
@@ -3530,18 +3575,18 @@ class CollectionDetailDialog(tk.Frame):
         self._manual_status_var = tk.StringVar(value="Preparing\u2026")
         tk.Label(
             inner, textvariable=self._manual_status_var,
-            bg="#2b2b2b", fg="#aaaaaa", font=font_sized_px(FONT_FAMILY, 10), anchor="w",
+            bg=BG_CARD_ALT, fg=TEXT_MUTED, font=font_sized_px(FONT_FAMILY, 10), anchor="w",
         ).pack(fill="x", padx=20, pady=(6, 2))
 
         # --- Buttons ---
-        btn_row = tk.Frame(inner, bg="#2b2b2b")
+        btn_row = tk.Frame(inner, bg=BG_CARD_ALT)
         btn_row.pack(pady=(8, 4))
 
         self._manual_open_url_btn = ctk.CTkButton(
             btn_row, text="Open Download Page",
             height=32, width=200,  # unscaled — CTk applies set_widget_scaling internally
             fg_color=ACCENT, hover_color=ACCENT_HOV,
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 11),
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 11),
             border_width=0,
             command=lambda: None,  # replaced per-mod
         )
@@ -3550,8 +3595,8 @@ class CollectionDetailDialog(tk.Frame):
         self._manual_open_next_btn = ctk.CTkButton(
             btn_row, text="Open next 5",
             height=32, width=110,  # unscaled — CTk applies set_widget_scaling internally
-            fg_color="#1a5a8a", hover_color="#2070a8",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            fg_color=BTN_INFO_DEEP, hover_color=BTN_INFO_DEEP_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=lambda: None,  # replaced per-mod
         )
@@ -3561,8 +3606,8 @@ class CollectionDetailDialog(tk.Frame):
         self._manual_select_btn = ctk.CTkButton(
             btn_row, text="Select File\u2026",
             height=32, width=120,  # unscaled — CTk applies set_widget_scaling internally
-            fg_color="#444444", hover_color="#555555",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            fg_color=BTN_GREY, hover_color=BORDER_DIM,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_manual_select_file,
         )
@@ -3571,8 +3616,8 @@ class CollectionDetailDialog(tk.Frame):
         self._manual_skip_btn = ctk.CTkButton(
             btn_row, text="Skip",
             height=32, width=80,  # unscaled — CTk applies set_widget_scaling internally
-            fg_color="#7a5a00", hover_color="#a07800",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            fg_color=BTN_WARN_DEEP, hover_color=BTN_WARN_DEEP_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_manual_skip,
         )
@@ -3585,28 +3630,28 @@ class CollectionDetailDialog(tk.Frame):
             inner, text="Auto open next mod",
             variable=self._manual_auto_open_var,
             font=font_sized(FONT_FAMILY, 10),
-            text_color="#cccccc",
+            text_color=TEXT_CARD,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
-            border_color="#666666",
-            checkmark_color="#ffffff",
+            border_color=BORDER_FAINT,
+            checkmark_color=TEXT_WHITE,
             width=20, height=20,
         ).pack(anchor="w", padx=22, pady=(2, 4))
 
         # --- Bottom row: progress + cancel ---
-        bottom = tk.Frame(inner, bg="#2b2b2b")
+        bottom = tk.Frame(inner, bg=BG_CARD_ALT)
         bottom.pack(fill="x", padx=20, pady=(6, 16))
 
         self._manual_progress_lbl = tk.Label(
             bottom, text=f"0 of {mod_count} mods installed",
-            font=font_sized_px(FONT_FAMILY, 10), fg="#aaaaaa", bg="#2b2b2b", anchor="w",
+            font=font_sized_px(FONT_FAMILY, 10), fg=TEXT_MUTED, bg=BG_CARD_ALT, anchor="w",
         )
         self._manual_progress_lbl.pack(side="left")
 
         cancel_btn = ctk.CTkButton(
             bottom, text="Cancel",
             height=28, width=100,  # unscaled — CTk applies set_widget_scaling internally
-            fg_color="#7a1a1a", hover_color="#a02020",
-            text_color="#ffffff", font=font_sized(FONT_FAMILY, 10),
+            fg_color=BTN_DANGER_DEEP, hover_color=BTN_DANGER_DEEP_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
             border_width=0,
             command=self._on_manual_cancel,
         )
@@ -3627,10 +3672,10 @@ class CollectionDetailDialog(tk.Frame):
         self._manual_mod_size_lbl.configure(text=size_str)
 
         if getattr(mod, "optional", False):
-            self._manual_mod_badge_lbl.configure(text="Optional", bg="#c37800")
+            self._manual_mod_badge_lbl.configure(text="Optional", bg=BG_MOD_OPT)
             self._manual_skip_btn.pack(side="left", padx=(0, 8))
         else:
-            self._manual_mod_badge_lbl.configure(text="Required", bg="#2d7a2d")
+            self._manual_mod_badge_lbl.configure(text="Required", bg=BG_MOD_REQ)
             self._manual_skip_btn.pack_forget()
 
         hint = mod.file_name or ""
@@ -4526,7 +4571,7 @@ class CollectionDetailDialog(tk.Frame):
             try:
                 btn.configure(
                     text="Resume Install",
-                    fg_color="#b35a00", hover_color="#d97000",
+                    fg_color=BTN_WARN_ORANGE, hover_color=BTN_WARN_ORANGE_HOV,
                 )
             except Exception:
                 pass
@@ -4534,7 +4579,7 @@ class CollectionDetailDialog(tk.Frame):
             try:
                 btn.configure(
                     text="Install Collection",
-                    fg_color="#2d7a2d", hover_color="#3a9e3a",
+                    fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV,
                 )
             except Exception:
                 pass
@@ -4760,7 +4805,7 @@ class CollectionDetailDialog(tk.Frame):
             ctk.CTkButton(
                 row, text="Open", width=scaled(55), height=scaled(22),
                 fg_color=ACCENT, hover_color=ACCENT_HOV,
-                text_color="#ffffff", font=font_sized(FONT_FAMILY, 9),
+                text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 9),
                 border_width=0,
                 command=lambda u=_url: open_url(u),
             ).pack(side="right", padx=6, pady=3)
@@ -5139,13 +5184,13 @@ class CollectionsDialog(tk.Frame):
         # Close button — top-right, returns to modlist
         ctk.CTkButton(
             toolbar, text="✕ Close", width=scaled(72), height=scaled(26),
-            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            fg_color=BTN_DANGER, hover_color=BTN_DANGER_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._do_close,
         ).pack(side="right", padx=(4, 8), pady=2)
 
         self._prev_btn = ctk.CTkButton(
             toolbar, text="← Prev", width=scaled(70), height=scaled(26),
-            fg_color="#c37800", hover_color="#e28b00", text_color="white",
+            fg_color=BTN_WARN, hover_color=BTN_WARN_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._go_prev_page,
             state="disabled",
         )
@@ -5153,7 +5198,7 @@ class CollectionsDialog(tk.Frame):
 
         self._next_btn = ctk.CTkButton(
             toolbar, text="Next →", width=scaled(52), height=scaled(26),
-            fg_color="#c37800", hover_color="#e28b00", text_color="white",
+            fg_color=BTN_WARN, hover_color=BTN_WARN_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._go_next_page,
             state="disabled",
         )
@@ -5177,14 +5222,14 @@ class CollectionsDialog(tk.Frame):
 
         self._workshop_btn = ctk.CTkButton(
             toolbar, text="Workshop", width=scaled(90), height=scaled(26),
-            fg_color="#7b2fa8", hover_color="#9b3fd0", text_color="white",
+            fg_color=BTN_PURPLE, hover_color=BTN_PURPLE_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._open_workshop,
         )
         self._workshop_btn.pack(side="left", padx=4, pady=2)
 
         self._import_manifest_btn = ctk.CTkButton(
             toolbar, text="Import Manifest", width=scaled(115), height=scaled(26),
-            fg_color="#2a6e3f", hover_color="#369150", text_color="white",
+            fg_color=BTN_SUCCESS_DEEP, hover_color=BTN_SUCCESS_DEEP_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._import_manifest,
         )
         self._import_manifest_btn.pack(side="left", padx=4, pady=2)
@@ -5230,7 +5275,7 @@ class CollectionsDialog(tk.Frame):
 
         ctk.CTkButton(
             self._url_bar, text="✕", width=scaled(32), height=scaled(26),
-            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            fg_color=BTN_DANGER, hover_color=BTN_DANGER_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._toggle_url_bar,
         ).pack(side="left", padx=(0, 8), pady=4)
 
@@ -5246,7 +5291,7 @@ class CollectionsDialog(tk.Frame):
         )
         self._vsb = tk.Scrollbar(
             canvas_frame, orient="vertical", command=self._canvas.yview,
-            bg="#383838", troughcolor=BG_DEEP, activebackground=ACCENT,
+            bg=SCROLL_BG, troughcolor=BG_DEEP, activebackground=ACCENT,
             highlightthickness=0, bd=0,
         )
         self._canvas.configure(yscrollcommand=self._vsb.set)
@@ -5299,7 +5344,7 @@ class CollectionsDialog(tk.Frame):
 
         self._clear_btn = ctk.CTkButton(
             search_bar, text="✕", width=scaled(32), height=scaled(26),
-            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            fg_color=BTN_DANGER, hover_color=BTN_DANGER_HOV, text_color=TEXT_WHITE,
             font=FONT_HEADER, command=self._clear_search,
         )
         self._clear_btn.pack(side="left", padx=(0, 8), pady=4)

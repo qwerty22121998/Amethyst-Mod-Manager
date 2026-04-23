@@ -30,6 +30,7 @@ from Utils.ui_config import (
     load_default_staging_path, save_default_staging_path,
     load_font_family, save_font_family, get_font_family,
     THEME_DEFAULTS, get_theme_color, save_theme_color,
+    get_appearance_mode, save_appearance_mode,
 )
 from gui.ctk_components import CTkProgressPopup, CTkAlert, CTkNotification
 from gui.version_check import is_appimage, is_flatpak
@@ -1001,6 +1002,33 @@ class SettingsPanel(ctk.CTkFrame):
 
         # ==== Theme ====
         theme_sec = _begin_section("Theme")
+
+        # --- Appearance mode (dark / light). Applied on next restart. ---
+        mode_row = ctk.CTkFrame(theme_sec, fg_color="transparent")
+        mode_row.pack(fill="x", pady=(0, 4))
+        ctk.CTkLabel(
+            mode_row, text="Appearance", font=FONT_NORMAL, text_color=TEXT_MAIN,
+            anchor="w", width=scaled(220),
+        ).pack(side="left")
+        _mode_label_to_val = {"Dark": "dark", "Light": "light"}
+        _mode_val_to_label = {v: k for k, v in _mode_label_to_val.items()}
+        self._appearance_mode_var = tk.StringVar(
+            value=_mode_val_to_label.get(get_appearance_mode(), "Dark")
+        )
+        def _on_appearance_change(choice: str) -> None:
+            save_appearance_mode(_mode_label_to_val.get(choice, "dark"))
+        ctk.CTkOptionMenu(
+            mode_row, values=list(_mode_label_to_val.keys()),
+            variable=self._appearance_mode_var,
+            command=_on_appearance_change,
+            width=scaled(120), height=scaled(28),
+            font=FONT_NORMAL,
+        ).pack(side="left")
+        ctk.CTkLabel(
+            theme_sec,
+            text="Restart the app to apply a new appearance mode.",
+            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w", justify="left",
+        ).pack(anchor="w", pady=(0, 12))
 
         ctk.CTkLabel(
             theme_sec,

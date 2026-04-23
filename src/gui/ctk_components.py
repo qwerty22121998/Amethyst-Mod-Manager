@@ -34,7 +34,11 @@ from tkinter import ttk
 import customtkinter as ctk
 from PIL import Image, ImageDraw, ImageTk
 
-from gui.theme import font_sized_px, scaled, FONT_FAMILY
+from gui.theme import (
+    font_sized_px, scaled, FONT_FAMILY,
+    BG_PANEL, BG_DEEP, CTK_TEXT, CTK_FOOTER_FG, CTK_FOOTER_HOV, CTK_SEP, CTK_SEP_ALT,
+    CTK_BTN_HOVER, SCROLL_BG, SCROLL_TROUGH, SCROLL_ACTIVE, LINK_BLUE,
+)
 
 try:
     from src.util.CTkGif import CTkGif
@@ -71,7 +75,7 @@ def _load_icon_image(path, size=(15, 15)):
 
 
 # Menu background (match theme panel for seamless look; also used as transparent target)
-_MENU_BG = "#252526"
+_MENU_BG = BG_PANEL
 
 ICON_PATH = {
     "close": (os.path.join(ICON_DIR, "close_black.png"), os.path.join(ICON_DIR, "close_white.png")),
@@ -97,19 +101,19 @@ DEFAULT_BTN = {
     "anchor": "w",
 }
 
-LINK_BTN = {**DEFAULT_BTN, "width": 70, "height": 25, "text_color": "#3574F0"}
-BTN_LINK = {**DEFAULT_BTN, "width": 20, "height": 20, "text_color": "#3574F0", "font": ("", 13, "underline")}
+LINK_BTN = {**DEFAULT_BTN, "width": 70, "height": 25, "text_color": LINK_BLUE}
+BTN_LINK = {**DEFAULT_BTN, "width": 20, "height": 20, "text_color": LINK_BLUE, "font": ("", 13, "underline")}
 ICON_BTN = {**DEFAULT_BTN, "width": 30, "height": 30}
-BTN_OPTION = {**DEFAULT_BTN, "text_color": ("black", "white"), "corner_radius": 5, "hover_color": ("gray90", "gray25")}
-btn = {**DEFAULT_BTN, "width": 230, "height": 50, "text_color": ("#000000", "#FFFFFF"), "font": ("", 13)}
+BTN_OPTION = {**DEFAULT_BTN, "text_color": CTK_TEXT, "corner_radius": 5, "hover_color": CTK_BTN_HOVER}
+btn = {**DEFAULT_BTN, "width": 230, "height": 50, "text_color": CTK_TEXT, "font": ("", 13)}
 btn_active = {**btn, "fg_color": (ctk.ThemeManager.theme["CTkButton"]["fg_color"]), "hover": True}
-btn_footer = {**btn, "fg_color": ("#EBECF0", "#393B40"), "hover_color": ("#DFE1E5", "#43454A"), "corner_radius": 0}
+btn_footer = {**btn, "fg_color": CTK_FOOTER_FG, "hover_color": CTK_FOOTER_HOV, "corner_radius": 0}
 
-DEFAULT_ICON_ONLY_BTN = {**DEFAULT_BTN, "height": 50, "text_color": ("#000000", "#FFFFFF"), "anchor": "center"}
+DEFAULT_ICON_ONLY_BTN = {**DEFAULT_BTN, "height": 50, "text_color": CTK_TEXT, "anchor": "center"}
 btn_icon_only = {**DEFAULT_ICON_ONLY_BTN, "width": 70}
 btn_icon_only_active = {**btn_icon_only, "fg_color": (ctk.ThemeManager.theme["CTkButton"]["fg_color"]), "hover": True}
-btn_icon_only_footer = {**DEFAULT_ICON_ONLY_BTN, "width": 80, "fg_color": ("#EBECF0", "#393B40"),
-                        "hover_color": ("#DFE1E5", "#43454A"), "corner_radius": 0}
+btn_icon_only_footer = {**DEFAULT_ICON_ONLY_BTN, "width": 80, "fg_color": CTK_FOOTER_FG,
+                        "hover_color": CTK_FOOTER_HOV, "corner_radius": 0}
 
 TEXT = "Some quick example text to build on the card title and make up the bulk of the card's content."
 
@@ -512,7 +516,7 @@ class CTkCard(ctk.CTkFrame):
         card_header = ctk.CTkLabel(self, text=header, font=("", 15))
         card_header.grid(row=0, column=0, padx=10, pady=5, sticky="nw")
 
-        ctk.CTkFrame(self, height=2, fg_color=("#C9CCD6", "#5A5D63")).grid(row=1, column=0, padx=0, pady=2, sticky="ew")
+        ctk.CTkFrame(self, height=2, fg_color=CTK_SEP).grid(row=1, column=0, padx=0, pady=2, sticky="ew")
 
         card_title = ctk.CTkLabel(self, text=title, font=("", 18))
         card_title.grid(row=2, column=0, padx=10, pady=(10, 0), sticky="sw")
@@ -786,7 +790,7 @@ class CTkPopupMenu(ctk.CTkToplevel):
             self._title_label.grid(row=0, column=0, sticky="ew", padx=10, pady=5)
             self._content_height += 26
             self._item_row = 1
-        self._sep_color = self._apply_appearance_mode(("#D0D0D0", "#505050"))
+        self._sep_color = self._apply_appearance_mode(CTK_SEP_ALT)
         self._alive = [True]
         self._active_sub = [None]  # Currently open submenu (for hover submenus)
         self._active_sub_trigger = [None]  # Trigger btn that owns the open submenu
@@ -1398,7 +1402,7 @@ class CTkTreeview(ctk.CTkFrame):
                 rgb = self.root.winfo_rgb(_empty_bg)
                 _empty_bg = f"#{rgb[0]//256:02x}{rgb[1]//256:02x}{rgb[2]//256:02x}"
             except Exception:
-                _empty_bg = "#1a1a1a"
+                _empty_bg = BG_DEEP
             self.im_empty = Image.new("RGB", (15, 15), _empty_bg)
             self.img_open = ImageTk.PhotoImage(self.im_open, name='img_open', size=(15, 15))
             self.img_close = ImageTk.PhotoImage(self.im_close, name='img_close', size=(15, 15))
@@ -1460,17 +1464,14 @@ class CTkTreeview(ctk.CTkFrame):
             self.treeview.grid(row=tree_row, column=0, padx=10, pady=10, sticky="nsew")
 
             # Match modlist panel scrollbar styling (no white outline)
-            _sb_bg = "#383838"
-            _sb_trough = "#1a1a1a"
-            _sb_active = "#0078d4"
             vsb = tk.Scrollbar(
                 self, orient="vertical", command=self.treeview.yview,
-                bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
+                bg=SCROLL_BG, troughcolor=SCROLL_TROUGH, activebackground=SCROLL_ACTIVE,
                 highlightthickness=0, bd=0,
             )
             hsb = tk.Scrollbar(
                 self, orient="horizontal", command=self.treeview.xview,
-                bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
+                bg=SCROLL_BG, troughcolor=SCROLL_TROUGH, activebackground=SCROLL_ACTIVE,
                 highlightthickness=0, bd=0,
             )
             self.treeview.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)

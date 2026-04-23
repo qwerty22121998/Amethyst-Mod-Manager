@@ -32,10 +32,26 @@ from gui.theme import (
     BG_ROW,
     BG_ROW_ALT,
     BG_SELECT,
+    BG_SEP,
+    BG_OVERLAY_ERR,
+    BG_ENTRY,
+    BG_BTN_SAVE,
+    BG_SELECT_BAR,
     BORDER,
+    BORDER_FAINT,
     TEXT_DIM,
     TEXT_MAIN,
     TEXT_SEP,
+    TEXT_WHITE,
+    TONE_FLAG,
+    TONE_BLUE_SOFT,
+    TONE_GREEN,
+    STATUS_ERR_BRIGHT,
+    BG_DARK_GREEN,
+    BG_DARK_BLUE,
+    TEXT_TREE_FG,
+    BTN_DANGER,
+    BTN_DANGER_HOV,
     _ICONS_DIR,
     load_icon as _load_icon,
 )
@@ -366,8 +382,8 @@ class ModListPanel(ctk.CTkFrame):
         # Tooltip state (missing requirements hover)
         self._tooltip = TkTooltip(
             self,
-            bg="#1a1a2e",
-            fg="#ff6b6b",
+            bg=BG_OVERLAY_ERR,
+            fg=STATUS_ERR_BRIGHT,
             font=(_theme.FONT_FAMILY, _theme.FS10),
         )
 
@@ -831,7 +847,7 @@ class ModListPanel(ctk.CTkFrame):
 
         self._search_clear_btn = ctk.CTkButton(
             bar, text="✕", width=scaled(32), height=scaled(24),
-            fg_color="#b33a3a", hover_color="#c94848", text_color="white",
+            fg_color=BTN_DANGER, hover_color=BTN_DANGER_HOV, text_color=TEXT_WHITE,
             font=_theme.FONT_HEADER, cursor="hand2",
             command=self._on_search_clear,
         )
@@ -1346,7 +1362,7 @@ class ModListPanel(ctk.CTkFrame):
             else:
                 div = tk.Frame(self._header, bg=BG_HEADER, cursor="sb_h_double_arrow",
                                highlightthickness=0, bd=0)
-                line = tk.Frame(div, bg="#666666", width=2)
+                line = tk.Frame(div, bg=BORDER_FAINT, width=2)
                 line.place(relx=0.5, y=4, anchor="n", width=2, height=scaled(20))
                 # Bind drag events directly to the divider
                 div.bind("<ButtonPress-1>", lambda e, c=col_idx: self._on_divider_drag_start(e, c))
@@ -1551,7 +1567,7 @@ class ModListPanel(ctk.CTkFrame):
             self._hdr_drag_ghost = tk.Label(
                 self._header, text=title,
                 font=(_theme.FONT_FAMILY, _theme.FS11, "bold"),
-                fg=ACCENT, bg="#3a3a5a", relief="solid", bd=1,
+                fg=ACCENT, bg=BG_SELECT_BAR, relief="solid", bd=1,
                 padx=4,
             )
         # Position relative to header widget
@@ -1575,7 +1591,7 @@ class ModListPanel(ctk.CTkFrame):
             dc = slot_data_cols[slot] if slot < len(slot_data_cols) else 0
             is_movable = dc in (2, 3, 4, 5, 6, 7)
             if is_movable and slot == target_slot:
-                lbl.configure(bg="#3a3a5a")
+                lbl.configure(bg=BG_SELECT_BAR)
             else:
                 lbl.configure(bg=BG_HEADER)
 
@@ -2023,7 +2039,7 @@ class ModListPanel(ctk.CTkFrame):
             flag2_id = c.create_image(0, -200, anchor="center", state="hidden")
             flag3_id = c.create_image(0, -200, anchor="center", state="hidden")
             flag4_id = c.create_image(0, -200, anchor="center", state="hidden")
-            flag_star_id = c.create_text(0, -200, text="★", anchor="center", fill="#e5c07b",
+            flag_star_id = c.create_text(0, -200, text="★", anchor="center", fill=TONE_FLAG,
                                          font=(_theme.FONT_FAMILY, _theme.FS11), state="hidden")
             # Conflict icons (left slot and right slot)
             conf1_id = c.create_image(0, -200, anchor="center", state="hidden")
@@ -2333,15 +2349,15 @@ class ModListPanel(ctk.CTkFrame):
 
                     custom_color = None
                     if is_overwrite:
-                        base_bg = "#1e2a1e"
-                        txt_col = "#6dbf6d"
+                        base_bg = BG_DARK_GREEN
+                        txt_col = TEXT_TREE_FG
                     elif is_root_folder:
-                        base_bg = "#1e1e2e" if entry.enabled else _theme.BG_SEP
-                        txt_col = "#7aa2f7" if entry.enabled else TEXT_DIM
+                        base_bg = BG_DARK_BLUE if entry.enabled else _theme.BG_SEP
+                        txt_col = TONE_BLUE_SOFT if entry.enabled else TEXT_DIM
                     else:
                         custom_color = self._sep_colors.get(entry.name)
                         base_bg = custom_color if custom_color else _theme.BG_SEP
-                        txt_col = _theme.contrasting_text_color(base_bg) if custom_color else "#ffffff"
+                        txt_col = _theme.contrasting_text_color(base_bg)
 
                     _is_hover_sep = (i == self._hover_idx and self._drag_idx < 0)
                     if is_sel_row:
@@ -2405,7 +2421,7 @@ class ModListPanel(ctk.CTkFrame):
                             badge_text = "[raw deploy]"
                         c.coords(self._pool_sep_badge[s], badge_x, y_mid)
                         c.itemconfigure(self._pool_sep_badge[s], text=badge_text,
-                                        fill="#7aa2f7", state="normal")
+                                        fill=TONE_BLUE_SOFT, state="normal")
                         c.itemconfigure(self._pool_sep_line_l[s], state="hidden")
                         c.itemconfigure(self._pool_sep_line_r[s], state="hidden")
                     else:
@@ -5719,7 +5735,7 @@ class ModListPanel(ctk.CTkFrame):
         tk.Label(content, text="Deployment Location", bg=BG_PANEL, fg=TEXT_SEP,
                  font=_theme.FONT_SMALL, anchor="w",
         ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 4))
-        entry_w = tk.Entry(content, textvariable=path_var, bg="#1e1e1e", fg=TEXT_MAIN,
+        entry_w = tk.Entry(content, textvariable=path_var, bg=BG_ENTRY, fg=TEXT_MAIN,
                            insertbackground=TEXT_MAIN, relief="flat", font=_theme.FONT_SMALL)
         entry_w.grid(row=1, column=0, sticky="ew", padx=(0, 6))
 
@@ -5756,7 +5772,7 @@ class ModListPanel(ctk.CTkFrame):
             self._redraw()
             self._close_sep_settings()
 
-        tk.Button(btn_row, text="Save", command=_save, bg="#4a4a8a", fg=TEXT_MAIN,
+        tk.Button(btn_row, text="Save", command=_save, bg=BG_BTN_SAVE, fg=TEXT_MAIN,
                   relief="flat", font=_theme.FONT_SMALL, cursor="hand2", width=10,
         ).pack(side="right", padx=(6, 0))
         tk.Button(btn_row, text="Cancel", command=self._close_sep_settings, bg=BG_HEADER,
