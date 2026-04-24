@@ -655,7 +655,12 @@ def _link_or_copy(src: str | os.PathLike, dst: str | os.PathLike) -> None:
     except OSError:
         # EXDEV (cross-device), ENOSYS / EPERM (fs doesn't support hardlinks),
         # or any other link-time failure — fall back to a real copy.
-        shutil.copy2(src, dst)
+        try:
+            shutil.copy2(src, dst)
+        except FileNotFoundError:
+            # dst vanished between copyfile and copystat (concurrent worker
+            # unlinked the same path). Retry once — the retry reclaims dst.
+            shutil.copy2(src, dst)
 
 
 def _copytree_case_insensitive(src: Path, dst: Path) -> int:
@@ -733,6 +738,16 @@ def _copy_file_list(file_list: list[tuple[str, str, bool]],
                 dst = _resolve_dst_case(dest_root, dst_rel.rstrip("/\\"), _dst_cache) / src.name
             if src.is_file():
                 file_entries.append((src, dst))
+
+    # Dedupe by destination (case-insensitive) so two workers never race on the
+    # same dst — that race manifested as FileNotFoundError in shutil.copy2's
+    # copystat step when one thread unlinked a dst mid-copy. Keep the last
+    # entry per dst, which matches FOMOD priority (later wins).
+    if file_entries:
+        _by_dst: dict[str, tuple[Path, Path]] = {}
+        for src, dst in file_entries:
+            _by_dst[str(dst).lower()] = (src, dst)
+        file_entries = list(_by_dst.values())
 
     # Pre-create all destination directories (serial — avoids mkdir races).
     dirs_seen: set[Path] = set()
