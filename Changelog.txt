@@ -2,6 +2,8 @@
 - Fixed vanilla plugins modified by quick auto clean not returning to the data folder
 - Added some missing required top level folders for bethesda games to reduce bad installs
 - Changed plugin esl eligibility check to use libloot instead
+- Added a light theme
+- Fixed Fomod related mods not moving from tmp to run/media drives correctly
 
 - v1.2.11
 - Added Red Dead Redemption 2
