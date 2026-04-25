@@ -73,9 +73,11 @@ Download the .flatpak from [releases](https://github.com/ChrisDKN/Amethyst-Mod-M
 <tr><td>Expedition 33</td><td></td><td>Stalker 2</td><td></td></tr>
 <tr><td>Subnautica</td><td></td><td>Palworld</td><td></td></tr>
 <tr><td>Subnautica Below Zero</td><td></td><td>My Summer Car</td><td></td></tr>
+<tr><td>Red Dead Redemption 2</td><td></td><td>Planet Zoo</td><td></td></tr>
 </table>
 
-- Amethyst has the ability to define custom games and is not limited to this list. See the Wiki for the guide
+- Amethyst has the ability to define custom games and is not limited to this list. The games in the Custom Handlers folder were made using this feature. See the Wiki for the guide
+
 
 ## Supporting Applications
 
@@ -96,7 +98,7 @@ Amethyst supports many supporting applications used to mod games. Place the appl
 | Experimental | **Bendr** | Experimental python wrapper See wiki for instructions|
 | Experimental | **ParallaxR** | Experimental python wrapper See wiki for instructions|
 | Working | **Wrye Bash** | `-o` Auto generated for selected game at runtime |
-| Broken | **Synthesis** | Needs looking into |
+| Working | **Synthesis** | Use via wizard to setup the prefix |
 | Working | **Bodyslide and Outfits Studio** | Add as a mod > Deploy > refresh the exe list > Run the exe and it should work |
 | Working | **Witcher 3 Script merger** | Game path added to config automatically |
 | Working | **Witcher 3 Script merger Fresh and Automated Edition** | Game path added to config automatically. Requires .net 8 Runtime installed into the prefix |
