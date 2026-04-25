@@ -855,10 +855,16 @@ class SettingsPanel(ctk.CTkFrame):
         )
         self._clear_cache_btn.pack(side="left")
 
+        self._cache_status_lbl = ctk.CTkLabel(
+            cache_row, text="", font=FONT_SMALL, text_color=TEXT_DIM, anchor="w")
+        self._cache_status_lbl.pack(side="left", padx=(10, 0))
+
         # Per-game clear button — only meaningful when a game is selected.
         _active_game = self._active_game_name()
+        active_cache_row = ctk.CTkFrame(dl_sec, fg_color="transparent")
+        active_cache_row.pack(anchor="w", pady=(4, 0))
         self._clear_active_cache_btn = ctk.CTkButton(
-            cache_row,
+            active_cache_row,
             text=(f"Clear {_active_game} Cache (—)" if _active_game
                   else "Clear Active Game Cache"),
             height=scaled(28), font=FONT_NORMAL,
@@ -866,11 +872,7 @@ class SettingsPanel(ctk.CTkFrame):
             command=self._on_clear_active_game_cache,
             state=("normal" if _active_game else "disabled"),
         )
-        self._clear_active_cache_btn.pack(side="left", padx=(8, 0))
-
-        self._cache_status_lbl = ctk.CTkLabel(
-            cache_row, text="", font=FONT_SMALL, text_color=TEXT_DIM, anchor="w")
-        self._cache_status_lbl.pack(side="left", padx=(10, 0))
+        self._clear_active_cache_btn.pack(side="left")
 
         self.after(100, self._refresh_cache_size)
 
@@ -1632,11 +1634,15 @@ class SettingsPanel(ctk.CTkFrame):
                     moved += 1
                 except Exception:
                     failed += 1
-            self.after(0, lambda: self._cache_status_lbl.configure(
-                text=f"Moved {moved} item(s)" + (f" ({failed} failed)" if failed else "."),
-                text_color=(TEXT_WARN if failed else TEXT_OK),
-            ))
-            self.after(0, self._refresh_cache_size)
+            def _apply():
+                if not self._cache_status_lbl.winfo_exists():
+                    return
+                self._cache_status_lbl.configure(
+                    text=f"Moved {moved} item(s)" + (f" ({failed} failed)" if failed else "."),
+                    text_color=(TEXT_WARN if failed else TEXT_OK),
+                )
+                self._refresh_cache_size()
+            self.after(0, _apply)
 
         self._cache_status_lbl.configure(text="Moving cache…", text_color=TEXT_DIM)
         threading.Thread(target=_migrate_worker, daemon=True).start()
