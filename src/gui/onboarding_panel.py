@@ -522,26 +522,27 @@ class OnboardingPanel(ctk.CTkFrame):
             text_color=TEXT_MAIN,
         ).pack(pady=(0, 8))
 
+        add_game_row = ctk.CTkFrame(body, fg_color="transparent")
+        add_game_row.pack(pady=(0, 8))
+
         ctk.CTkLabel(
-            body,
+            add_game_row,
             text="Select a game to manage.",
             font=FONT_NORMAL,
             text_color=TEXT_DIM,
-            justify="center",
-            wraplength=scaled(480),
-        ).pack(pady=(0, 20))
+        ).pack(side="left", padx=(0, 12))
 
         ctk.CTkButton(
-            body,
+            add_game_row,
             text="Add a Game",
-            width=scaled(200),
-            height=scaled(38),
+            width=scaled(160),
+            height=scaled(34),
             font=FONT_BOLD,
             fg_color=ACCENT,
             hover_color=ACCENT_HOV,
             text_color=TEXT_ON_ACCENT,
             command=self._on_add_game_clicked,
-        ).pack()
+        ).pack(side="left")
 
         return frame
 
