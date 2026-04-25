@@ -75,7 +75,8 @@ Download the .flatpak from [releases](https://github.com/ChrisDKN/Amethyst-Mod-M
 <tr><td>Subnautica Below Zero</td><td></td><td>My Summer Car</td><td></td></tr>
 </table>
 
-- Amethyst has the ability to define custom games and is not limited to this list. See the Wiki for the guide
+- Amethyst has the ability to define custom games and is not limited to this list. The games in the Custom Handlers folder were made using this feature. See the Wiki for the guide
+
 
 ## Supporting Applications
 
