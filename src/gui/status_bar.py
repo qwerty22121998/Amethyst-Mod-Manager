@@ -192,6 +192,13 @@ class StatusBar(ctk.CTkFrame):
             command=self._apply_filter,
         )
 
+        self._clear_log_btn = ctk.CTkButton(
+            label_bar, text="Clear Log", width=70, height=16,
+            fg_color=BG_HEADER, hover_color=BG_HOVER,
+            text_color=TEXT_DIM, font=FONT_SMALL,
+            command=self._clear_log,
+        )
+
         self._toggle_btn = ctk.CTkButton(
             label_bar, text="▲ Show", width=70, height=16,
             fg_color=BG_HEADER, hover_color=BG_HOVER,
@@ -403,6 +410,7 @@ class StatusBar(ctk.CTkFrame):
         if self._visible:
             self._filter_err_cb.pack(side="left", padx=(12, 0))
             self._filter_warn_cb.pack(side="left", padx=(8, 0))
+            self._clear_log_btn.pack(side="left", padx=(8, 0))
             self._textbox.pack(fill="both", expand=True)
             self._current_h = self._EXPANDED_H
             self._set_height(self._current_h)
@@ -410,6 +418,7 @@ class StatusBar(ctk.CTkFrame):
         else:
             self._filter_err_cb.pack_forget()
             self._filter_warn_cb.pack_forget()
+            self._clear_log_btn.pack_forget()
             self._textbox.pack_forget()
             self._current_h = self._COLLAPSED_H
             self._set_height(self._current_h)
@@ -447,12 +456,14 @@ class StatusBar(ctk.CTkFrame):
             self._visible = True
             self._filter_err_cb.pack(side="left", padx=(12, 0))
             self._filter_warn_cb.pack(side="left", padx=(8, 0))
+            self._clear_log_btn.pack(side="left", padx=(8, 0))
             self._textbox.pack(fill="both", expand=True)
             self._toggle_btn.configure(text="▼ Hide")
         elif new_h <= self._COLLAPSED_H and self._visible:
             self._visible = False
             self._filter_err_cb.pack_forget()
             self._filter_warn_cb.pack_forget()
+            self._clear_log_btn.pack_forget()
             self._textbox.pack_forget()
             self._toggle_btn.configure(text="▲ Show")
         self._current_h = new_h
@@ -631,6 +642,21 @@ class StatusBar(ctk.CTkFrame):
             else:
                 inner.insert("end", line)
         self._textbox.see("end")
+        self._textbox.configure(state="disabled")
+
+    def _clear_log(self):
+        """Clear the log display only — the on-disk log file is untouched."""
+        self._log_buffer = []
+        self._log_entries = []
+        if self._log_flush_id is not None:
+            try:
+                self.after_cancel(self._log_flush_id)
+            except Exception:
+                pass
+            self._log_flush_id = None
+        inner = self._textbox._textbox
+        self._textbox.configure(state="normal")
+        inner.delete("1.0", "end")
         self._textbox.configure(state="disabled")
 
     def _apply_filter(self):
