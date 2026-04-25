@@ -378,7 +378,7 @@ def _run_zenity(args: list[str]) -> subprocess.CompletedProcess[str] | None:
             _debug_log("flatpak-spawn: zenity not installed on host")
             continue
         return result
-    _debug_log("zenity unavailable — install zenity (e.g. sudo pacman -S zenity) for a better file picker")
+    _debug_log("zenity unavailable — install the 'zenity' package from your distro for a better file picker")
     return None
 
 

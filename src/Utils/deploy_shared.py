@@ -9,6 +9,7 @@ the original deploy.py re-exports everything here via `from ... import *`.
 from __future__ import annotations
 
 import concurrent.futures
+import errno
 import json
 import os
 import shutil
@@ -350,12 +351,69 @@ def _default_core(deploy_dir: Path) -> Path:
     return deploy_dir.parent / f"{deploy_dir.name}_Core"
 
 
+# Errnos that mean "hardlink can't work here" rather than a real failure:
+#   EXDEV  — src and dst on different filesystems (SD card, external drive)
+#   EPERM  — filesystem doesn't support hardlinks (exFAT, some FUSE mounts)
+#   ENOTSUP/EOPNOTSUPP — explicit "operation not supported" from the FS
+#   EMLINK — link count exceeded (rare, but unrecoverable for hardlink)
+# On any of these we fall back to symlink, then copy.
+_HARDLINK_FALLBACK_ERRNOS = frozenset(
+    e for e in (
+        getattr(errno, "EXDEV", None),
+        getattr(errno, "EPERM", None),
+        getattr(errno, "ENOTSUP", None),
+        getattr(errno, "EOPNOTSUPP", None),
+        getattr(errno, "EMLINK", None),
+    ) if e is not None
+)
+
+_hardlink_fallback_notified = False
+
+
+def _notify_hardlink_fallback(exc: OSError) -> None:
+    """Emit a one-time stderr note when hardlink → symlink fallback kicks in.
+
+    Printed to stderr (not the app log) so it's visible when debugging but
+    doesn't spam the UI log per-file. Further fallbacks in the same session
+    are silent.
+    """
+    global _hardlink_fallback_notified
+    if _hardlink_fallback_notified:
+        return
+    _hardlink_fallback_notified = True
+    import sys
+    sys.stderr.write(
+        f"[deploy] hardlink unsupported on this path ({exc.strerror or exc}); "
+        f"falling back to symlink/copy. This usually means the game and mod "
+        f"staging live on different filesystems.\n"
+    )
+
+
 def _transfer(src: Path, dst: Path, mode: LinkMode) -> None:
-    """Transfer a single file from src to dst using the requested mode."""
+    """Transfer a single file from src to dst using the requested mode.
+
+    If HARDLINK fails because src and dst are on different filesystems (or
+    the filesystem doesn't support hardlinks), automatically fall back to
+    symlink, then to copy. This lets users keep mods on one drive and the
+    game on another without silently losing files.
+    """
     dst.parent.mkdir(parents=True, exist_ok=True)
     if mode is LinkMode.HARDLINK:
-        os.link(src, dst)
-    elif mode is LinkMode.SYMLINK:
+        try:
+            os.link(src, dst)
+            return
+        except OSError as exc:
+            if exc.errno not in _HARDLINK_FALLBACK_ERRNOS:
+                raise
+            _notify_hardlink_fallback(exc)
+        # Cross-FS or unsupported — try symlink, then copy.
+        try:
+            os.symlink(src, dst)
+            return
+        except OSError:
+            shutil.copy2(src, dst)
+            return
+    if mode is LinkMode.SYMLINK:
         os.symlink(src, dst)
     else:
         shutil.copy2(src, dst)
@@ -456,11 +514,30 @@ def _resolve_source(
 
 
 def _do_link(src: str, dst: str, mode: LinkMode) -> OSError | None:
-    """Transfer a single file. Returns None on success, or the OSError."""
+    """Transfer a single file. Returns None on success, or the OSError.
+
+    HARDLINK auto-falls-back to symlink then copy when the filesystem
+    refuses the hardlink (EXDEV for cross-device, EPERM/ENOTSUP for FS
+    types like exFAT that don't support hardlinks). Without this, users
+    whose game is on a different drive from their mod staging would see
+    per-file WARN lines and silently broken deployments.
+    """
     try:
         if mode is LinkMode.HARDLINK:
-            os.link(src, dst)
-        elif mode is LinkMode.SYMLINK:
+            try:
+                os.link(src, dst)
+                return None
+            except OSError as exc:
+                if exc.errno not in _HARDLINK_FALLBACK_ERRNOS:
+                    return exc
+                _notify_hardlink_fallback(exc)
+            try:
+                os.symlink(src, dst)
+                return None
+            except OSError:
+                shutil.copy2(src, dst)
+                return None
+        if mode is LinkMode.SYMLINK:
             os.symlink(src, dst)
         else:
             shutil.copy2(src, dst)

@@ -18,6 +18,7 @@ host_env() always strips LD_LIBRARY_PATH from the child environment:
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -46,15 +47,28 @@ def host_env() -> dict[str, str]:
     return env
 
 
+def _in_flatpak() -> bool:
+    return os.path.exists("/.flatpak-info")
+
+
 def xdg_open(path: str | Path, log_fn: Callable[[str], None] | None = None) -> None:
     """Open *path* with the user's default application via xdg-open.
 
     Uses host_env() so that the launched application (e.g. Dolphin) loads
     its own system libraries.  If xdg-open exits non-zero and log_fn is
     provided, the error is reported via log_fn without blocking the UI.
+
+    Inside a Flatpak sandbox the runtime's xdg-open usually can't resolve
+    host MIME associations (or lacks the target app entirely), so we route
+    through ``flatpak-spawn --host`` when available. Fall back to bare
+    xdg-open if flatpak-spawn isn't usable.
     """
+    if _in_flatpak() and shutil.which("flatpak-spawn"):
+        cmd = ["flatpak-spawn", "--host", "xdg-open", str(path)]
+    else:
+        cmd = ["xdg-open", str(path)]
     proc = subprocess.Popen(
-        ["xdg-open", str(path)],
+        cmd,
         env=host_env(),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,

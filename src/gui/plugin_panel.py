@@ -1737,17 +1737,32 @@ class PluginPanel(ctk.CTkFrame):
         self._log(f"Run EXE: launching via Steam (app {steam_id}) ...")
 
         def _worker():
+            from Utils.xdg import host_env
             url = f"steam://rungameid/{steam_id}"
-            candidates = (
-                ["steam", url],
-                ["xdg-open", url],
-                ["flatpak-spawn", "--host", "steam", url],
-            )
+            in_flatpak = Path("/.flatpak-info").exists()
+            # Inside Flatpak, the runtime has neither `steam` nor a working
+            # xdg-open for steam:// URLs — only flatpak-spawn --host can reach
+            # the user's real Steam client. Try host-spawn variants first so
+            # we don't waste attempts on candidates that will always fail.
+            if in_flatpak:
+                candidates = (
+                    ["flatpak-spawn", "--host", "steam", url],
+                    ["flatpak-spawn", "--host", "xdg-open", url],
+                    ["steam", url],
+                    ["xdg-open", url],
+                )
+            else:
+                candidates = (
+                    ["steam", url],
+                    ["xdg-open", url],
+                )
+            env = host_env()
             last_err = None
             for cmd in candidates:
                 try:
                     subprocess.Popen(
                         cmd,
+                        env=env,
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                     )

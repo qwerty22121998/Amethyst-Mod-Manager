@@ -466,24 +466,51 @@ class NxmHandler:
         return "\n".join(new_lines) + ("\n" if new_lines else "")
 
     @classmethod
+    def _host_cmd(cls, in_flatpak: bool, tool: str) -> list[str] | None:
+        """Build a command prefix to run *tool* on the host.
+
+        Outside Flatpak: returns ``[tool]`` if found in PATH, else None.
+        Inside Flatpak: returns ``["flatpak-spawn", "--host", ...]`` if
+        ``flatpak-spawn`` is available. Inside Flatpak we cannot check
+        whether *tool* itself exists on the host (no PATH visibility), so
+        caller must treat rc=127 as "tool missing on host".
+
+        Returns None when the tool cannot be invoked; caller should log
+        and skip.
+        """
+        if in_flatpak:
+            if shutil.which("flatpak-spawn"):
+                return ["flatpak-spawn", "--host", "--directory=/", tool]
+            app_log(f"{tool}: flatpak-spawn unavailable — cannot reach host tool from sandbox")
+            return None
+        if shutil.which(tool):
+            return [tool]
+        return None
+
+    @staticmethod
+    def _is_host_tool_missing(rc: int) -> bool:
+        """flatpak-spawn returns 127 when the host binary isn't installed."""
+        return rc == 127
+
+    @classmethod
     def _gio_register(cls, in_flatpak: bool) -> None:
         """
         Register the handler via ``gio mime`` as well. Many GTK/GNOME tools
         and some browsers (incl. Brave on certain Arch setups) consult gio
         rather than xdg-mime directly. Best-effort — silent on failure.
         """
-        if in_flatpak and shutil.which("flatpak-spawn"):
-            base = ["flatpak-spawn", "--host", "--directory=/", "gio"]
-        elif shutil.which("gio"):
-            base = ["gio"]
-        else:
+        base = cls._host_cmd(in_flatpak, "gio")
+        if base is None:
             return
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [*base, "mime", "x-scheme-handler/nxm", _DESKTOP_FILE_NAME],
                 check=False,
                 capture_output=True,
             )
+            if in_flatpak and cls._is_host_tool_missing(result.returncode):
+                app_log("gio not installed on host — skipping gio mime registration")
+                return
             app_log("Registered nxm:// handler via gio mime")
         except OSError as exc:
             app_log(f"gio mime registration failed: {exc}")
@@ -496,19 +523,19 @@ class NxmHandler:
         is more reliable than xdg-mime on some desktop environments (e.g. KDE
         on Arch/CachyOS) where xdg-open checks xdg-settings first.
         """
-        if in_flatpak and shutil.which("flatpak-spawn"):
-            base = ["flatpak-spawn", "--host", "--directory=/", "xdg-settings"]
-        elif shutil.which("xdg-settings"):
-            base = ["xdg-settings"]
-        else:
+        base = cls._host_cmd(in_flatpak, "xdg-settings")
+        if base is None:
             return
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [*base, "set", "default-url-scheme-handler", "nxm",
                  _DESKTOP_FILE_NAME],
                 check=False,
                 capture_output=True,
             )
+            if in_flatpak and cls._is_host_tool_missing(result.returncode):
+                app_log("xdg-settings not installed on host — skipping registration")
+                return
             app_log("Registered nxm:// handler via xdg-settings")
         except OSError as exc:
             app_log(f"xdg-settings registration failed: {exc}")
@@ -590,24 +617,27 @@ class NxmHandler:
         # Inside a Flatpak sandbox xdg-mime is not available directly; use
         # flatpak-spawn --host to run it on the host system instead.
         in_flatpak = Path("/.flatpak-info").exists()
-        if in_flatpak and shutil.which("flatpak-spawn"):
-            xdg_mime_cmd = ["flatpak-spawn", "--host", "--directory=/", "xdg-mime"]
-        elif shutil.which("xdg-mime"):
-            xdg_mime_cmd = ["xdg-mime"]
-        else:
-            app_log("xdg-mime not found — nxm:// handler not registered")
+        xdg_mime_cmd = cls._host_cmd(in_flatpak, "xdg-mime")
+        if xdg_mime_cmd is None:
+            app_log("xdg-mime not available — nxm:// handler not registered")
             return False
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 [*xdg_mime_cmd, "default", _DESKTOP_FILE_NAME,
                  "x-scheme-handler/nxm"],
-                check=True,
+                check=False,
                 capture_output=True,
             )
+            if in_flatpak and cls._is_host_tool_missing(result.returncode):
+                app_log("xdg-mime not installed on host — nxm:// handler not registered")
+                return False
+            if result.returncode != 0:
+                app_log(f"xdg-mime default failed: {result.stderr.decode(errors='replace').strip()}")
+                return False
             app_log("Registered nxm:// protocol handler via xdg-mime")
-        except subprocess.CalledProcessError as exc:
-            app_log(f"xdg-mime default failed: {exc.stderr}")
+        except OSError as exc:
+            app_log(f"xdg-mime default failed: {exc}")
             return False
 
         # On some distros (e.g. CachyOS / minimal Arch setups without a full
@@ -623,24 +653,29 @@ class NxmHandler:
         cls._xdg_settings_register(in_flatpak)
 
         # Refresh the desktop database so Flatpak apps pick up the new entry.
-        if in_flatpak and shutil.which("flatpak-spawn"):
-            udd_cmd = ["flatpak-spawn", "--host", "--directory=/", "update-desktop-database"]
-            udd_available = True
-        else:
-            udd_cmd = ["update-desktop-database"]
-            udd_available = bool(shutil.which("update-desktop-database"))
-        if udd_available:
+        udd_cmd = cls._host_cmd(in_flatpak, "update-desktop-database")
+        if udd_cmd is not None:
+            host_missing_logged = False
             for db_dir in {desktop_path.parent, flatpak_path.parent}:
-                if db_dir.exists():
-                    try:
-                        subprocess.run(
-                            [*udd_cmd, str(db_dir)],
-                            check=True,
-                            capture_output=True,
-                        )
-                        app_log(f"Updated desktop database: {db_dir}")
-                    except subprocess.CalledProcessError as exc:
-                        app_log(f"update-desktop-database failed for {db_dir}: {exc.stderr}")
+                if not db_dir.exists():
+                    continue
+                try:
+                    result = subprocess.run(
+                        [*udd_cmd, str(db_dir)],
+                        check=False,
+                        capture_output=True,
+                    )
+                    if in_flatpak and cls._is_host_tool_missing(result.returncode):
+                        if not host_missing_logged:
+                            app_log("update-desktop-database not installed on host — desktop database not refreshed")
+                            host_missing_logged = True
+                        continue
+                    if result.returncode != 0:
+                        app_log(f"update-desktop-database failed for {db_dir}: {result.stderr.decode(errors='replace').strip()}")
+                        continue
+                    app_log(f"Updated desktop database: {db_dir}")
+                except OSError as exc:
+                    app_log(f"update-desktop-database failed for {db_dir}: {exc}")
 
         return True
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 _HOME = Path.home()
@@ -22,7 +23,12 @@ _XDG_CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", _HOME / ".config"))
 # GamesConfig/<Appname>.json lives under each root; path varies by install type.
 # ---------------------------------------------------------------------------
 def _heroic_config_candidates() -> list[Path]:
-    """All possible Heroic config roots, ordered by likelihood."""
+    """All possible Heroic config roots, ordered by likelihood.
+
+    Covers Flatpak, native/AppImage (XDG_CONFIG_HOME), Snap, and the common
+    alternate directory name used by some distro packagers
+    ('heroic-games-launcher' instead of 'heroic').
+    """
     candidates: list[Path] = []
 
     # User-configured path takes highest priority
@@ -34,15 +40,60 @@ def _heroic_config_candidates() -> list[Path]:
     except Exception:
         pass
 
-    # Built-in fallbacks
+    # Built-in fallbacks, ordered by likelihood
     candidates += [
         # Flatpak (most common on Steam Deck)
         _HOME / ".var" / "app" / "com.heroicgameslauncher.hgl" / "config" / "heroic",
         # Native / AppImage — respects XDG_CONFIG_HOME
         _XDG_CONFIG / "heroic",
         _HOME / ".config" / "heroic",  # Fallback if XDG_CONFIG was overridden
+        # Alternate directory name used by some distro packages
+        _XDG_CONFIG / "heroic-games-launcher",
+        _HOME / ".config" / "heroic-games-launcher",
+        # Snap
+        _HOME / "snap" / "heroic" / "current" / ".config" / "heroic",
+        _HOME / "snap" / "heroic-games-launcher" / "current" / ".config" / "heroic",
     ]
     return candidates
+
+
+def _heroic_binary_exists() -> bool:
+    """True if a `heroic` binary is reachable from the current PATH.
+
+    Used to distinguish "Heroic not installed" from "Heroic installed but we
+    can't find its config dir" (unusual install location, Nix store, etc.),
+    so we can surface a useful hint instead of silently returning nothing.
+    """
+    for name in ("heroic", "heroic-games-launcher"):
+        if shutil.which(name):
+            return True
+    return False
+
+
+_heroic_missing_config_logged = False
+
+
+def _maybe_log_heroic_config_missing() -> None:
+    """Log once when the heroic binary is on PATH but no config dir was found.
+
+    Points the user at the per-game 'Heroic config path' override rather than
+    leaving them confused about why their installed games aren't detected.
+    """
+    global _heroic_missing_config_logged
+    if _heroic_missing_config_logged:
+        return
+    if not _heroic_binary_exists():
+        return
+    _heroic_missing_config_logged = True
+    try:
+        from Utils.app_log import app_log
+        app_log(
+            "Heroic binary found on PATH but no Heroic config directory was "
+            "located — set a custom Heroic config path in the app's settings "
+            "if Heroic-managed games aren't detected"
+        )
+    except Exception:
+        pass
 
 
 def _find_heroic_config_roots() -> list[Path]:
@@ -53,6 +104,8 @@ def _find_heroic_config_roots() -> list[Path]:
         if p not in seen and p.is_dir():
             seen.add(p)
             out.append(p)
+    if not out:
+        _maybe_log_heroic_config_missing()
     return out
 
 

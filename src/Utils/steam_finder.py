@@ -6,6 +6,7 @@ No UI, no game-specific knowledge.
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -207,15 +208,56 @@ def find_steam_libraries() -> list[Path]:
     return libraries
 
 
+# Warn-once tracking so the same library path doesn't spam the log every time
+# find_steam_libraries() runs (it's called frequently by GUI refreshes).
+_vdf_warned_missing: set[str] = set()
+_vdf_warned_readonly: set[str] = set()
+
+
+def _warn_vdf_library(raw: str, common: Path) -> None:
+    """Log a one-time warning for a library that is listed in VDF but
+    unusable (drive unmounted, read-only, etc.). Best-effort — swallows
+    import errors so this module stays UI-free.
+    """
+    try:
+        from Utils.app_log import app_log
+    except Exception:
+        return
+
+    if not common.is_dir():
+        if raw not in _vdf_warned_missing:
+            _vdf_warned_missing.add(raw)
+            app_log(
+                f"Steam library listed in libraryfolders.vdf but not accessible: "
+                f"{raw} — drive may be unmounted or disconnected"
+            )
+        return
+
+    # Directory exists; check writability. Deploy + install need write access
+    # to the steamapps/common path (and the parent for compatdata etc.).
+    if not os.access(str(common), os.W_OK):
+        if raw not in _vdf_warned_readonly:
+            _vdf_warned_readonly.add(raw)
+            app_log(
+                f"Steam library is read-only: {common} — mod deployment to games "
+                f"in this library will fail until the mount is remounted writable"
+            )
+
+
 def parse_vdf_libraries(vdf_path: Path) -> list[Path]:
     """
     Parse a libraryfolders.vdf file and return all steamapps/common paths
     that currently exist on disk.
 
     The VDF format contains lines like:
-        "path"    "/home/deck/.local/share/Steam"
+        "path"    "/home/user/.local/share/Steam"
     We extract every "path" value and append steamapps/common to each.
     The Steam root containing the VDF is always included as the first entry.
+
+    Libraries listed in the VDF but currently inaccessible (drive unmounted,
+    disconnected USB, NAS offline) or mounted read-only are logged via
+    app_log the first time we see them, so users get a clue when a game
+    that used to work suddenly "vanishes" from the library list.
     """
     libraries: list[Path] = []
     pattern = re.compile(r'"path"\s+"([^"]+)"')
@@ -228,6 +270,7 @@ def parse_vdf_libraries(vdf_path: Path) -> list[Path]:
     for match in pattern.finditer(text):
         raw = match.group(1)
         common = Path(raw) / "steamapps" / "common"
+        _warn_vdf_library(raw, common)
         if common.is_dir():
             libraries.append(common)
 
