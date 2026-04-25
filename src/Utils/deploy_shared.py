@@ -571,14 +571,37 @@ def _restore_from_log(
     placed = [p for p in log_path.read_text(encoding="utf-8").splitlines() if p]
     removed = 0
 
+    # Pre-filter for path traversal (cheap, serial) so the worker pool only
+    # does syscalls.  lstat + S_ISLNK/S_ISREG check + unlink in one worker call
+    # keeps each task to two syscalls; previously is_file()+is_symlink()+unlink
+    # was three.
+    import stat as _stat
+    _target_str = str(target_root)
+    safe_targets: list[str] = []
     for rel_str in placed:
         dst = target_root / rel_str
         if not _path_under_root(dst, target_root):
             _log(f"  SKIP: path traversal blocked — {rel_str}")
             continue
-        if dst.is_file() or dst.is_symlink():
-            dst.unlink()
-            removed += 1
+        safe_targets.append(_target_str + "/" + rel_str)
+
+    def _unlink_one(p: str) -> int:
+        try:
+            st = os.lstat(p)
+        except OSError:
+            return 0
+        if _stat.S_ISLNK(st.st_mode) or _stat.S_ISREG(st.st_mode):
+            try:
+                os.unlink(p)
+                return 1
+            except OSError:
+                return 0
+        return 0
+
+    if safe_targets:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_deploy_workers()) as pool:
+            for n in pool.map(_unlink_one, safe_targets):
+                removed += n
 
     # Restore backed-up originals.
     if backup_dir is not None and backup_dir.is_dir():
@@ -851,10 +874,15 @@ def _write_deploy_snapshot(
     snapshot_path: Path,
     log_fn=None,
 ) -> int:
-    """Walk game_root and record every file as rel_path\\tmtime_ns\\tsize.
+    """Walk game_root and record every file's relative path, one per line.
 
     Written atomically via a .tmp sibling then renamed.  Returns the number
     of files recorded, or 0 on error (the deploy is never aborted).
+
+    The format is one rel_path per line.  Older snapshots also recorded
+    `\\tmtime_ns\\tsize` columns; _load_deploy_snapshot ignores anything past
+    the first tab, so the trailing columns were dead cost (one extra stat
+    per file) and have been dropped.  Old snapshots remain readable.
     """
     _log = _safe_log(log_fn)
     tmp_path = snapshot_path.with_suffix(".tmp")
@@ -864,7 +892,7 @@ def _write_deploy_snapshot(
     try:
         tmp_path.parent.mkdir(parents=True, exist_ok=True)
         with tmp_path.open("w", encoding="utf-8") as fh:
-            fh.write("# deploy_snapshot v1\n")
+            fh.write("# deploy_snapshot v2\n")
             stack = [game_root_str]
             while stack:
                 cur = stack.pop()
@@ -874,9 +902,8 @@ def _write_deploy_snapshot(
                             if entry.is_dir(follow_symlinks=False):
                                 stack.append(entry.path)
                             elif entry.is_file(follow_symlinks=False):
-                                rel = entry.path[prefix_len:]
-                                st = entry.stat(follow_symlinks=False)
-                                fh.write(f"{rel}\t{st.st_mtime_ns}\t{st.st_size}\n")
+                                fh.write(entry.path[prefix_len:])
+                                fh.write("\n")
                                 count += 1
                 except OSError:
                     pass

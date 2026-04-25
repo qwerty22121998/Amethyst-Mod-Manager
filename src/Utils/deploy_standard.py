@@ -240,13 +240,19 @@ def deploy_filemap(
     # put the originals back.  Mirror each dst's absolute path as a relative
     # path inside _custom_backup_dir (strip leading slash) so structure is
     # preserved and files with the same name in different dirs never collide.
+    # One lstat per task instead of islink+isfile (two stat-equivalent calls).
+    import stat as _stat
     _custom_backup_str = str(_custom_backup_dir)
     for _src_s, dst_s, _rel_lower, is_custom, _use_sym in tasks:
         if not is_custom:
             continue
-        if os.path.islink(dst_s):
+        try:
+            _st = os.lstat(dst_s)
+        except OSError:
+            continue
+        if _stat.S_ISLNK(_st.st_mode):
             os.unlink(dst_s)
-        elif os.path.isfile(dst_s):
+        elif _stat.S_ISREG(_st.st_mode):
             dst_p = Path(dst_s)
             bak = _custom_backup_dir / dst_p.relative_to(dst_p.anchor)
             bak.parent.mkdir(parents=True, exist_ok=True)
@@ -441,6 +447,10 @@ def restore_data_core(
     # This handles the xEdit flow: user edits plugin → xEdit saves → xEdit closes
     # and deletes the original from both Data and staging → the edited copy in
     # Data is the only remaining version and must be rescued to overwrite.
+    # If the rescue walk runs it builds core_path as a side-effect, which
+    # gives us the file count for free.  -1 is the sentinel for "rescue walk
+    # didn't run, fall back to a dedicated count walk below".
+    restored = -1
     if overwrite_dir is not None and deploy_dir.is_dir():
         # Build core_lower using os.walk — avoids per-file stat() from rglob+is_file.
         # Also capture (st_ino, st_size, st_mtime_ns) so we can detect when a
@@ -500,6 +510,9 @@ def restore_data_core(
         rescued_to_mod = 0
         rescued_to_overwrite = 0
         rescued_edited_vanilla = 0
+        # Track rel_strs rescued to overwrite/ so we can update modindex.bin
+        # by appending entries instead of re-walking the entire overwrite tree.
+        rescued_overwrite_rels: list[str] = []
         _deploy_str = str(deploy_dir)
         _deploy_plen = len(_deploy_str) + 1
         _overwrite_str = str(overwrite_dir)
@@ -601,6 +614,7 @@ def restore_data_core(
                                 if target_mod == _OVERWRITE_NAME:
                                     dst_str = _overwrite_str + "/" + rel_str
                                     rescued_to_overwrite += 1
+                                    rescued_overwrite_rels.append(rel_str)
                                 else:
                                     dst_str = _staging_str + "/" + target_mod + "/" + rel_str
                                     rescued_to_mod += 1
@@ -616,6 +630,7 @@ def restore_data_core(
                     shutil.move(src_str, dst_str)
                     rescued += 1
                     rescued_to_overwrite += 1
+                    rescued_overwrite_rels.append(rel_str)
         if rescued:
             if rescued_to_mod:
                 _log(f"  Rescued {rescued_to_mod} file(s) back to mod folder(s).")
@@ -625,32 +640,35 @@ def restore_data_core(
                 _log(f"  Preserved {rescued_edited_vanilla} edited vanilla file(s) (e.g. xEdit-cleaned).")
             # Update modindex.bin so the next build_filemap call immediately
             # sees the rescued files under [Overwrite] without a full rescan.
-            if rescued_to_overwrite:
+            # We append the rel_strs we recorded as we rescued — far cheaper
+            # than rglob-ing the entire overwrite tree.
+            if rescued_overwrite_rels:
                 try:
                     from Utils.filemap import update_mod_index, read_mod_index
                     index_path = overwrite_dir.parent / "modindex.bin"
                     existing = read_mod_index(index_path) or {}
                     existing_normal, existing_root = existing.get(_OVERWRITE_NAME, ({}, {}))
-                    # Walk overwrite_dir to build the complete current file list.
                     new_normal: dict[str, str] = dict(existing_normal)
-                    for f in overwrite_dir.rglob("*"):
-                        if f.is_file() and not f.is_symlink():
-                            rel = f.relative_to(overwrite_dir)
-                            rel_str = rel.as_posix()
-                            new_normal[rel_str.lower()] = rel_str
+                    for _rel_str in rescued_overwrite_rels:
+                        # Normalise separators for cross-platform safety
+                        _rel_posix = _rel_str.replace("\\", "/")
+                        new_normal[_rel_posix.lower()] = _rel_posix
                     update_mod_index(index_path, _OVERWRITE_NAME, new_normal, existing_root)
                 except Exception:
                     pass
         print(f"  [TIMER] restore — rescue walk: {_time.perf_counter() - _t_rescue_start:.3f}s")
+        # core_path was populated by the rescue walk above — one entry per
+        # core file, so len() is our return-value count without a second walk.
+        restored = len(core_path)
 
-    # Count core files before we move anything — we need this for the return
-    # value.  Use os.walk instead of rglob to avoid per-entry stat() calls
-    # (os.walk uses scandir which already knows file vs dir from d_type).
-    with _timer("restore — count core files"):
-        _core_str2 = str(core_dir)
-        restored = 0
-        for _dp2, _dns2, _fns2 in os.walk(_core_str2):
-            restored += len(_fns2)
+    # Fallback count walk — only runs when the rescue walk above was skipped
+    # (overwrite_dir is None, or deploy_dir doesn't exist).
+    if restored < 0:
+        with _timer("restore — count core files"):
+            _core_str2 = str(core_dir)
+            restored = 0
+            for _dp2, _dns2, _fns2 in os.walk(_core_str2):
+                restored += len(_fns2)
 
     # Wipe deploy_dir and rename core_dir in its place — single rmtree + O(1)
     # rename on the same filesystem.  No need to clear first then rmtree again.
@@ -706,41 +724,57 @@ def undeploy_mod_files(
     removed = 0
     dirs_to_prune: set[Path] = set()
 
+    # Collect every target up front, then unlink them in parallel.  Each task
+    # is one lstat + (maybe) one unlink — the unlinks dominate cost across
+    # thousands of files for a multi-mod undeploy.
+    import stat as _stat
+    targets: list[Path] = []
+
     for mod_name in mod_names:
         entry = index.get(mod_name)
         if entry is None:
             continue
         normal_files, root_files = entry
 
-        # Normal files — deployed files live inside deploy_dir.
         if deploy_dir is not None and normal_files:
             for rel_str in normal_files.values():
                 target = deploy_dir / rel_str
                 if not _path_under_root(target, deploy_dir):
                     _log(f"  SKIP (path traversal): {rel_str}")
                     continue
-                if target.is_file() or target.is_symlink():
-                    try:
-                        target.unlink()
-                        removed += 1
-                        dirs_to_prune.add(target.parent)
-                    except OSError as exc:
-                        _log(f"  WARN: could not remove deployed file {rel_str}: {exc}")
+                targets.append(target)
 
-        # Root files — deployed files live inside game_root.
         if game_root is not None and root_files:
             for rel_str in root_files.values():
                 target = game_root / rel_str
                 if not _path_under_root(target, game_root):
                     _log(f"  SKIP (path traversal): {rel_str}")
                     continue
-                if target.is_file() or target.is_symlink():
-                    try:
-                        target.unlink()
-                        removed += 1
-                        dirs_to_prune.add(target.parent)
-                    except OSError as exc:
-                        _log(f"  WARN: could not remove root-deployed file {rel_str}: {exc}")
+                targets.append(target)
+
+    def _unlink_one(p: Path) -> tuple[int, Path | None, str | None]:
+        try:
+            st = os.lstat(p)
+        except OSError:
+            return 0, None, None
+        if _stat.S_ISLNK(st.st_mode) or _stat.S_ISREG(st.st_mode):
+            try:
+                os.unlink(p)
+                return 1, p.parent, None
+            except OSError as exc:
+                return 0, None, f"  WARN: could not remove deployed file {p}: {exc}"
+        return 0, None, None
+
+    if targets:
+        import concurrent.futures
+        from Utils.deploy_shared import _deploy_workers
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_deploy_workers()) as pool:
+            for n, parent, warn in pool.map(_unlink_one, targets):
+                removed += n
+                if parent is not None:
+                    dirs_to_prune.add(parent)
+                if warn is not None:
+                    _log(warn)
 
     # Prune empty directories left behind (deepest first).
     roots = set()

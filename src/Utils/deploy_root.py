@@ -7,13 +7,17 @@ Extracted from deploy.py during the 2026-04 refactor. No behaviour changes.
 
 from __future__ import annotations
 
+import concurrent.futures
+import os
 import shutil
+import stat as _stat
 import time as _time
 from pathlib import Path
 
 from Utils.app_log import safe_log as _safe_log
 from Utils.deploy_shared import (
     LinkMode,
+    _deploy_workers,
     _path_under_root,
     _resolve_root_path,
     _transfer,
@@ -276,15 +280,33 @@ def restore_root_folder(
     created_dirs = [d for d in dirs_section.splitlines() if d]
     removed = 0
 
-    # Remove files we placed.
+    # Remove files we placed (parallelised — one lstat + one unlink per worker).
+    _game_root_str = str(game_root)
+    safe_targets: list[str] = []
     for rel_str in placed:
         dst = game_root / rel_str
         if not _path_under_root(dst, game_root):
             _log(f"  SKIP: path traversal blocked — {rel_str}")
             continue
-        if dst.is_file() or dst.is_symlink():
-            dst.unlink()
-            removed += 1
+        safe_targets.append(_game_root_str + "/" + rel_str)
+
+    def _unlink_one(p: str) -> int:
+        try:
+            st = os.lstat(p)
+        except OSError:
+            return 0
+        if _stat.S_ISLNK(st.st_mode) or _stat.S_ISREG(st.st_mode):
+            try:
+                os.unlink(p)
+                return 1
+            except OSError:
+                return 0
+        return 0
+
+    if safe_targets:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_deploy_workers()) as pool:
+            for n in pool.map(_unlink_one, safe_targets):
+                removed += n
 
     # Restore backed-up originals if any.
     if backup_dir.is_dir():

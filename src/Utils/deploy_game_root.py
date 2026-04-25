@@ -217,11 +217,17 @@ def deploy_filemap_to_root(
     _mkdir_leaves(needed_dirs)
 
     # Back up any vanilla files we are about to overwrite (must be serial).
+    # One lstat per task instead of islink+isfile (two stat-equivalent calls).
+    import stat as _stat
     _backup_str = str(backup_dir)
     for _src_s, dst_s, _rel_lower, rel_str in tasks:
-        if os.path.islink(dst_s):
+        try:
+            _st = os.lstat(dst_s)
+        except OSError:
+            continue
+        if _stat.S_ISLNK(_st.st_mode):
             os.unlink(dst_s)
-        elif os.path.isfile(dst_s):
+        elif _stat.S_ISREG(_st.st_mode):
             bak_str = _backup_str + "/" + rel_str
             os.makedirs(os.path.dirname(bak_str), exist_ok=True)
             shutil.move(dst_s, bak_str)
