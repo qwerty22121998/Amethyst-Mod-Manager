@@ -989,6 +989,38 @@ def save_default_staging_path(value: str) -> None:
         parser.write(f)
 
 
+def load_download_cache_path() -> str:
+    """Return the user-configured download cache root, or '' if unset.
+
+    When set, archives downloaded for any game are stored under
+    ``<this>/<game name>/`` instead of the built-in default
+    (~/.config/AmethystModManager/download_cache).
+    """
+    path = get_ui_config_path()
+    if not path.is_file():
+        return ""
+    try:
+        parser = configparser.ConfigParser()
+        parser.read(path)
+        return parser.get(_PATHS_SECTION, "download_cache_path", fallback="").strip()
+    except Exception:
+        return ""
+
+
+def save_download_cache_path(value: str) -> None:
+    """Persist the download cache root to amethyst.ini. Pass '' to clear."""
+    path = get_ui_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    parser = configparser.ConfigParser()
+    if path.is_file():
+        parser.read(path)
+    if _PATHS_SECTION not in parser:
+        parser[_PATHS_SECTION] = {}
+    parser[_PATHS_SECTION]["download_cache_path"] = value.strip()
+    with path.open("w") as f:
+        parser.write(f)
+
+
 # ---------------------------------------------------------------------------
 # Theme colours
 # ---------------------------------------------------------------------------

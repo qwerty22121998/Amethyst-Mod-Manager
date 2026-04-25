@@ -55,7 +55,7 @@ from Utils.ui_config import get_ui_scale
 from gui.mod_name_utils import _suggest_mod_names
 from Utils.modlist import write_modlist, read_modlist, ModEntry
 from Utils.filemap import rebuild_mod_index
-from Utils.config_paths import get_download_cache_dir
+from Utils.config_paths import get_download_cache_dir, get_download_cache_dir_for_game, list_all_cache_dirs
 from Nexus.nexus_download import delete_archive_and_sidecar, DownloadResult, _find_cached_archive, _get_downloads_dir
 from gui.download_locations_overlay import (
     is_default_downloads_disabled,
@@ -2645,9 +2645,13 @@ class CollectionDetailDialog(tk.Frame):
             # after install so the user's copy is preserved.
             # Only runs when the "Check downloads locations" setting is enabled.
             # ------------------------------------------------------------------
-            _cache_dir_resolved = get_download_cache_dir().resolve()
-            _ext_seen: set = {_cache_dir_resolved}
-            _ext_dirs: list[Path] = []
+            # Always include every cache directory (active game folder, root,
+            # and any sibling game subfolders) so archives shared between
+            # games (e.g. SkyrimSE → Enderal SE) get reused.
+            _ext_dirs: list[Path] = list(
+                list_all_cache_dirs(getattr(self._game, "name", "") or "")
+            )
+            _ext_seen: set = {p.resolve() for p in _ext_dirs}
             if _col_cfg.get("check_download_locations", True):
                 if not is_default_downloads_disabled():
                     _sys_dl = _get_downloads_dir()
@@ -2696,7 +2700,7 @@ class CollectionDetailDialog(tk.Frame):
                         cancel=_col_stop,
                         known_file_name=mod.file_name or "",
                         expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
-                        dest_dir=get_download_cache_dir(),
+                        dest_dir=get_download_cache_dir_for_game(getattr(self._game, "name", "") or ""),
                     )
                 err = result.error or ""
                 is_404 = "No Mod Found" in err or "No File found for mod" in err
@@ -2715,7 +2719,7 @@ class CollectionDetailDialog(tk.Frame):
                             cancel=_col_stop,
                             known_file_name=mod.file_name or "",
                             expected_size_bytes=getattr(mod, "size_bytes", 0) or 0,
-                            dest_dir=get_download_cache_dir(),
+                            dest_dir=get_download_cache_dir_for_game(getattr(self._game, "name", "") or ""),
                         )
                         if result.success:
                             effective_domain = fallback_domain
@@ -4435,12 +4439,15 @@ class CollectionDetailDialog(tk.Frame):
         # Step 3: Sequential manual download + install
         # ------------------------------------------------------------------
         def _get_scan_dirs() -> list[Path]:
-            dirs: list[Path] = []
-            seen: set[Path] = set()
+            dirs: list[Path] = list(
+                list_all_cache_dirs(getattr(self._game, "name", "") or "")
+            )
+            seen: set[Path] = {p.resolve() for p in dirs}
             if not is_default_downloads_disabled():
                 default = _get_downloads_dir()
-                dirs.append(default)
-                seen.add(default.resolve())
+                if default.resolve() not in seen:
+                    dirs.append(default)
+                    seen.add(default.resolve())
             for p in load_extra_download_locations():
                 path = Path(p).expanduser().resolve()
                 if path.is_dir() and path not in seen:
@@ -5026,12 +5033,14 @@ class CollectionDetailDialog(tk.Frame):
             except Exception as exc:
                 self._log(f"Cancel: failed to delete profile dir: {exc}")
 
-        # Clear the download cache — only if the user has "remove archive after install" enabled.
+        # Clear this game's download cache — only if the user has "remove
+        # archive after install" enabled.  Other games' subfolders, wine
+        # prefixes, and the md5 cache are preserved.
         if load_clear_archive_after_install():
             try:
-                cache_dir = get_download_cache_dir()
-                if cache_dir and cache_dir.is_dir():
-                    for item in cache_dir.iterdir():
+                game_cache = get_download_cache_dir_for_game(getattr(self._game, "name", "") or "")
+                if game_cache and game_cache.is_dir():
+                    for item in game_cache.iterdir():
                         try:
                             if item.is_file() or item.is_symlink():
                                 item.unlink()

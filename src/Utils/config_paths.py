@@ -197,16 +197,81 @@ def get_custom_game_images_dir() -> Path:
     return d
 
 
+_CACHE_ROOT_RESERVED = {"wine_prefixes"}
+
+
 def get_download_cache_dir() -> Path:
-    """Return the download cache directory, creating it if it doesn't exist.
+    """Return the download cache root directory, creating it if it doesn't exist.
 
-    Used for collection installs so archive files are kept out of ~/Downloads.
+    Honours the user-configured path from ``[paths] download_cache_path`` in
+    amethyst.ini.  When unset (or unwritable) falls back to
+    ``~/.config/AmethystModManager/download_cache/``.
 
-    Result: ~/.config/AmethystModManager/download_cache/
+    The setting is read on every call so a path change in the Settings panel
+    takes effect without restarting.
     """
+    try:
+        from Utils.ui_config import load_download_cache_path  # lazy: avoid cycles
+        custom = load_download_cache_path().strip()
+    except Exception:
+        custom = ""
+    if custom:
+        d = Path(custom).expanduser()
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except OSError:
+            pass  # fall through to default
     d = get_config_dir() / "download_cache"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def get_download_cache_dir_for_game(game_name: str | None) -> Path:
+    """Per-game cache subfolder under :func:`get_download_cache_dir`.
+
+    Falls back to the cache root when *game_name* is empty.  Game name is
+    used as a directory component verbatim, matching the convention used
+    elsewhere (e.g. :func:`get_game_config_path`).
+    """
+    root = get_download_cache_dir()
+    if not game_name:
+        return root
+    d = root / game_name
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def list_all_cache_dirs(active_game_name: str | None = None) -> list[Path]:
+    """Cache directories to scan for already-downloaded archives.
+
+    Returns ``[active-game folder, cache root, every other game subfolder]``,
+    de-duplicated by resolved path.  Reserved subfolders such as
+    ``wine_prefixes/`` are excluded.
+    """
+    root = get_download_cache_dir()
+    out: list[Path] = []
+    seen: set[Path] = set()
+    if active_game_name:
+        active = root / active_game_name
+        if active.is_dir():
+            out.append(active)
+            seen.add(active.resolve())
+    root_resolved = root.resolve()
+    if root_resolved not in seen:
+        out.append(root)
+        seen.add(root_resolved)
+    try:
+        for sub in root.iterdir():
+            if not sub.is_dir() or sub.name in _CACHE_ROOT_RESERVED:
+                continue
+            r = sub.resolve()
+            if r not in seen:
+                out.append(sub)
+                seen.add(r)
+    except OSError:
+        pass
+    return out
 
 
 def get_plugins_dir() -> Path:

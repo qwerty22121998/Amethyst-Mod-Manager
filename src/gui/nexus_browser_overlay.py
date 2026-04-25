@@ -15,7 +15,7 @@ from typing import Callable, Optional
 
 import customtkinter as ctk
 from Utils.xdg import open_url
-from Utils.config_paths import get_download_cache_dir
+from Utils.config_paths import get_download_cache_dir, get_download_cache_dir_for_game
 
 from gui.tracked_mods_panel import TrackedModsPanel
 from gui.endorsed_mods_panel import EndorsedModsPanel
@@ -310,7 +310,7 @@ def install_nexus_mod_from_entry(app, api, game, mod_panel, log_fn, entry,
             ),
             cancel=cancel_ev,
             known_file_name=file_info.file_name,
-            dest_dir=get_download_cache_dir(),
+            dest_dir=get_download_cache_dir_for_game(getattr(game, "name", "") or ""),
         )
 
         if result.success and result.file_path:

@@ -18,8 +18,11 @@ import customtkinter as ctk
 import tkinter as tk
 
 from Nexus.nexus_oauth import NexusOAuthClient, OAuthTokens, CLIENT_ID
-from Utils.config_paths import get_profiles_dir
-from Utils.ui_config import load_default_staging_path, save_default_staging_path
+from Utils.config_paths import get_profiles_dir, get_config_dir
+from Utils.ui_config import (
+    load_default_staging_path, save_default_staging_path,
+    load_download_cache_path, save_download_cache_path,
+)
 from Utils.xdg import open_url
 from gui.theme import (
     BG_DEEP,
@@ -460,6 +463,56 @@ class OnboardingPanel(ctk.CTkFrame):
             text_color=TEXT_DIM,
             justify="center",
             wraplength=scaled(480),
+        ).pack(pady=(0, 16))
+
+        # --- Download cache folder ---
+        ctk.CTkLabel(
+            body,
+            text="Download Cache Folder",
+            font=FONT_BOLD,
+            text_color=TEXT_MAIN,
+        ).pack(pady=(0, 4))
+
+        ctk.CTkLabel(
+            body,
+            text=f"Default: {get_config_dir() / 'download_cache'}",
+            font=FONT_SMALL,
+            text_color=TEXT_DIM,
+            justify="center",
+            wraplength=scaled(480),
+        ).pack(pady=(0, 6))
+
+        cache_row = ctk.CTkFrame(body, fg_color="transparent")
+        cache_row.pack(pady=(0, 4))
+
+        self._onb_download_cache_var = tk.StringVar(value=load_download_cache_path())
+        ctk.CTkEntry(
+            cache_row, textvariable=self._onb_download_cache_var,
+            font=FONT_NORMAL, width=scaled(340),
+            placeholder_text="Leave blank to use the default",
+            height=scaled(28),
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            cache_row, text="Browse", width=scaled(70), height=scaled(28),
+            font=FONT_NORMAL, fg_color=BG_HOVER, hover_color=ACCENT, text_color=TEXT_MAIN,
+            command=self._browse_download_cache,
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            cache_row, text="Clear", width=scaled(56), height=scaled(28),
+            font=FONT_NORMAL, fg_color=BG_DEEP, hover_color=BG_HOVER, text_color=TEXT_DIM,
+            command=lambda: self._onb_download_cache_var.set(""),
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            body,
+            text="Where downloaded mod archives are stored.\n"
+                 "Each game gets its own subfolder.",
+            font=FONT_SMALL,
+            text_color=TEXT_DIM,
+            justify="center",
+            wraplength=scaled(480),
         ).pack(pady=(0, 24))
 
         ctk.CTkLabel(
@@ -504,9 +557,25 @@ class OnboardingPanel(ctk.CTkFrame):
 
         pick_folder("Select Default Mod Staging Folder", _on_chosen)
 
+    def _browse_download_cache(self):
+        from Utils.portal_filechooser import pick_folder
+
+        def _on_chosen(chosen):
+            if chosen:
+                try:
+                    self._onb_download_cache_var.set(str(chosen))
+                except Exception:
+                    pass
+
+        pick_folder("Select Download Cache Folder", _on_chosen)
+
     def _on_add_game_clicked(self):
         try:
             save_default_staging_path(self._onb_staging_var.get())
+        except Exception:
+            pass
+        try:
+            save_download_cache_path(self._onb_download_cache_var.get())
         except Exception:
             pass
         if self._oauth_client:

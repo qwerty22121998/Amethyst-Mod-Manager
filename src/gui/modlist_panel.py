@@ -149,7 +149,7 @@ from gui.changelog_overlay import ChangelogOverlay
 from gui.mod_files_overlay import ModFilesOverlay
 from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
 from Nexus.nexus_download import delete_archive_and_sidecar
-from Utils.config_paths import get_download_cache_dir
+from Utils.config_paths import get_download_cache_dir, get_download_cache_dir_for_game, list_all_cache_dirs
 from Utils.ui_config import load_column_widths, save_column_widths, load_column_order, save_column_order, load_normalize_folder_case, load_sort_state, save_sort_state, load_column_hidden, save_column_hidden
 from Nexus.nexus_update_checker import check_for_updates
 
@@ -4878,6 +4878,7 @@ class ModListPanel(ctk.CTkFrame):
                     if not _is_multi and _ctx_meta.installation_file:
                         _xdg = os.environ.get("XDG_DOWNLOAD_DIR")
                         _dl_dir = Path(_xdg) if _xdg else Path.home() / "Downloads"
+                        _active_game_name = getattr(self._game, "name", "") or ""
                         _search_dirs: list[Path] = []
                         try:
                             from gui.download_locations_overlay import (
@@ -4886,12 +4887,13 @@ class ModListPanel(ctk.CTkFrame):
                             )
                             if not is_default_downloads_disabled():
                                 _search_dirs.append(_dl_dir)
-                            _search_dirs.append(get_download_cache_dir())
+                            _search_dirs.extend(list_all_cache_dirs(_active_game_name))
                             _search_dirs.extend(
                                 Path(_p) for _p in load_extra_download_locations()
                             )
                         except Exception:
-                            _search_dirs = [_dl_dir, get_download_cache_dir()]
+                            _search_dirs = [_dl_dir]
+                            _search_dirs.extend(list_all_cache_dirs(_active_game_name))
                         _arc = None
                         for _d in _search_dirs:
                             _cand = Path(_d) / _ctx_meta.installation_file
@@ -6812,7 +6814,7 @@ class ModListPanel(ctk.CTkFrame):
                     0, lambda c=cur, t=total: mod_panel.update_download_progress(c, t, cancel=cancel_event)
                 ),
                 cancel=cancel_event,
-                dest_dir=get_download_cache_dir(),
+                dest_dir=get_download_cache_dir_for_game(getattr(game, "name", "") or ""),
             )
 
             if result.success and result.file_path:

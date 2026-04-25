@@ -13,7 +13,14 @@ import customtkinter as ctk
 
 from pathlib import Path
 
-from Utils.config_paths import get_logs_dir, get_download_cache_dir, get_profiles_dir, get_config_dir
+from Utils.config_paths import (
+    get_logs_dir,
+    get_download_cache_dir,
+    get_download_cache_dir_for_game,
+    get_profiles_dir,
+    get_config_dir,
+    _CACHE_ROOT_RESERVED,
+)
 from Utils.xdg import xdg_open
 from Utils.ui_config import (
     load_ui_scale, save_ui_scale, detect_hidpi_scale,
@@ -28,6 +35,7 @@ from Utils.ui_config import (
     load_heroic_config_path, save_heroic_config_path,
     load_steam_libraries_vdf_path, save_steam_libraries_vdf_path,
     load_default_staging_path, save_default_staging_path,
+    load_download_cache_path, save_download_cache_path,
     load_font_family, save_font_family, get_font_family,
     THEME_DEFAULTS, get_theme_color, save_theme_color,
     get_appearance_mode, save_appearance_mode,
@@ -814,12 +822,25 @@ class SettingsPanel(ctk.CTkFrame):
         cache_row.pack(anchor="w")
 
         self._clear_cache_btn = ctk.CTkButton(
-            cache_row, text="Clear Cache (—)",
+            cache_row, text="Clear All Caches (—)",
             height=scaled(28), font=FONT_NORMAL,
             fg_color="#5a3a00", hover_color="#7a5200", text_color="#ffffff",
             command=self._on_clear_cache,
         )
         self._clear_cache_btn.pack(side="left")
+
+        # Per-game clear button — only meaningful when a game is selected.
+        _active_game = self._active_game_name()
+        self._clear_active_cache_btn = ctk.CTkButton(
+            cache_row,
+            text=(f"Clear {_active_game} Cache (—)" if _active_game
+                  else "Clear Active Game Cache"),
+            height=scaled(28), font=FONT_NORMAL,
+            fg_color="#3a4a5a", hover_color="#4a6a7a", text_color="#ffffff",
+            command=self._on_clear_active_game_cache,
+            state=("normal" if _active_game else "disabled"),
+        )
+        self._clear_active_cache_btn.pack(side="left", padx=(8, 0))
 
         self._cache_status_lbl = ctk.CTkLabel(
             cache_row, text="", font=FONT_SMALL, text_color=TEXT_DIM, anchor="w")
@@ -1164,6 +1185,45 @@ class SettingsPanel(ctk.CTkFrame):
 
         ctk.CTkFrame(paths_sec, fg_color=BORDER, height=1).pack(fill="x", pady=(12, 8))
 
+        # ---- Download Cache Folder ----
+        ctk.CTkLabel(paths_sec, text="Download Cache Folder:", font=FONT_NORMAL,
+                     text_color=TEXT_MAIN, anchor="w").pack(anchor="w", pady=(0, 4))
+
+        cache_entry_row = ctk.CTkFrame(paths_sec, fg_color="transparent")
+        cache_entry_row.pack(fill="x")
+
+        self._download_cache_var = tk.StringVar(value=load_download_cache_path())
+        # Remember the loaded value so _save can detect a path change and offer
+        # to migrate the existing cache contents.
+        self._download_cache_initial = self._download_cache_var.get()
+        ctk.CTkEntry(
+            cache_entry_row, textvariable=self._download_cache_var,
+            font=FONT_NORMAL,
+            placeholder_text=f"Default: {get_config_dir() / 'download_cache'}",
+            height=scaled(28),
+        ).pack(side="left", fill="x", expand=True, padx=(0, 4))
+
+        ctk.CTkButton(
+            cache_entry_row, text="Browse", width=scaled(70), height=scaled(28),
+            font=FONT_NORMAL, fg_color=BG_HOVER, hover_color=ACCENT, text_color=TEXT_MAIN,
+            command=self._browse_download_cache,
+        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(
+            cache_entry_row, text="Clear", width=scaled(56), height=scaled(28),
+            font=FONT_NORMAL, fg_color=BG_DEEP, hover_color=BG_HOVER, text_color=TEXT_DIM,
+            command=lambda: self._download_cache_var.set(""),
+        ).pack(side="left")
+
+        ctk.CTkLabel(
+            paths_sec,
+            text="Where downloaded mod archives are stored. Each game gets its own\n"
+                 "subfolder; wine prefixes and the md5 cache stay alongside.",
+            font=FONT_SMALL, text_color=TEXT_DIM, anchor="w", justify="left",
+        ).pack(anchor="w", pady=(6, 0))
+
+        ctk.CTkFrame(paths_sec, fg_color=BORDER, height=1).pack(fill="x", pady=(12, 8))
+
         ctk.CTkLabel(paths_sec, text="Heroic Config Location (Folder Containing config.json):", font=FONT_NORMAL,
                      text_color=TEXT_MAIN, anchor="w").pack(anchor="w", pady=(0, 4))
 
@@ -1276,24 +1336,56 @@ class SettingsPanel(ctk.CTkFrame):
     def _update_slider_state(self):
         self._slider.configure(state="disabled" if self._auto_var.get() else "normal")
 
+    # Entries at the cache root that "Clear All Caches" must preserve.
+    # wine_prefixes/ (used by VRAMR/Bendr/Parallaxr wrappers) and the
+    # md5_cache.json hash sidecar are global, not per-game archives.
+    _CLEAR_ALL_PRESERVE = _CACHE_ROOT_RESERVED | {"md5_cache.json"}
+
+    def _active_game_name(self) -> str:
+        """Return the currently selected game name, or '' if none."""
+        try:
+            app = self.winfo_toplevel()
+            topbar = getattr(app, "_topbar", None)
+            if topbar is None:
+                return ""
+            return (topbar._game_var.get() or "").strip()
+        except Exception:
+            return ""
+
     def _refresh_cache_size(self):
         cache_dir = get_download_cache_dir()
+        active_name = self._active_game_name()
+        active_dir = cache_dir / active_name if active_name else None
 
         def _worker():
             orphans = _get_orphaned_tmp_dirs()
             size = _get_dir_size(cache_dir) + sum(_get_dir_size(d) for d in orphans)
+            active_size = _get_dir_size(active_dir) if active_dir else 0
             try:
-                self.after(0, lambda: self._update_clear_cache_btn(size))
+                self.after(0, lambda: self._update_clear_cache_btn(size, active_size))
             except Exception:
                 pass
 
         import threading
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _update_clear_cache_btn(self, size_bytes: int):
+    def _update_clear_cache_btn(self, size_bytes: int, active_size_bytes: int = 0):
         try:
             if hasattr(self, "_clear_cache_btn") and self._clear_cache_btn.winfo_exists():
-                self._clear_cache_btn.configure(text=f"Clear Cache ({_fmt_size(size_bytes)})")
+                self._clear_cache_btn.configure(text=f"Clear All Caches ({_fmt_size(size_bytes)})")
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "_clear_active_cache_btn") and self._clear_active_cache_btn.winfo_exists():
+                active_name = self._active_game_name()
+                if active_name:
+                    self._clear_active_cache_btn.configure(
+                        text=f"Clear {active_name} Cache ({_fmt_size(active_size_bytes)})",
+                        state="normal",
+                    )
+                else:
+                    self._clear_active_cache_btn.configure(
+                        text="Clear Active Game Cache", state="disabled")
         except Exception:
             pass
 
@@ -1320,12 +1412,12 @@ class SettingsPanel(ctk.CTkFrame):
 
             alert = CTkAlert(
                 state="warning",
-                title="Clear Download Cache",
+                title="Clear All Download Caches",
                 body_text=(
-                    f"Clear {_fmt_size(size)} of cached downloads?\n\n"
+                    f"Clear {_fmt_size(size)} of cached downloads across every game?\n\n"
                     f"Location: {cache_dir}\n\n"
-                    "This removes archives downloaded for collection installs. "
-                    "They will be re-downloaded if you install collections again."
+                    "Wine prefixes and the md5 cache are preserved. "
+                    "Archives will be re-downloaded as needed."
                 ),
                 btn1="Clear",
                 btn2="Cancel",
@@ -1339,6 +1431,8 @@ class SettingsPanel(ctk.CTkFrame):
                 cleared = 0
                 try:
                     for p in cache_dir.iterdir():
+                        if p.name in self._CLEAR_ALL_PRESERVE:
+                            continue
                         try:
                             if p.is_file():
                                 p.unlink(missing_ok=True)
@@ -1369,6 +1463,158 @@ class SettingsPanel(ctk.CTkFrame):
             threading.Thread(target=_clear_worker, daemon=True).start()
 
         threading.Thread(target=_size_worker, daemon=True).start()
+
+    def _on_clear_active_game_cache(self):
+        """Wipe just the per-game subfolder for the currently selected game."""
+        import shutil, threading
+        active_name = self._active_game_name()
+        if not active_name:
+            self._cache_status_lbl.configure(
+                text="No active game.", text_color=TEXT_DIM)
+            return
+        game_dir = get_download_cache_dir() / active_name
+        self._cache_status_lbl.configure(text="Calculating…", text_color=TEXT_DIM)
+
+        def _size_worker():
+            size = _get_dir_size(game_dir)
+            self.after(0, lambda: _show_confirm(size))
+
+        def _show_confirm(size):
+            try:
+                if not self._cache_status_lbl.winfo_exists():
+                    return
+            except Exception:
+                return
+            self._cache_status_lbl.configure(text="", text_color=TEXT_DIM)
+            if size <= 0:
+                self._cache_status_lbl.configure(
+                    text=f"{active_name} cache is empty.", text_color=TEXT_DIM)
+                return
+
+            alert = CTkAlert(
+                state="warning",
+                title=f"Clear {active_name} Download Cache",
+                body_text=(
+                    f"Clear {_fmt_size(size)} of cached downloads for {active_name}?\n\n"
+                    f"Location: {game_dir}\n\n"
+                    "Other games' caches are unaffected."
+                ),
+                btn1="Clear",
+                btn2="Cancel",
+                parent=self.winfo_toplevel(),
+                height=260,
+            )
+            if alert.get() != "Clear":
+                return
+
+            def _clear_worker():
+                try:
+                    if game_dir.is_dir():
+                        shutil.rmtree(game_dir, ignore_errors=True)
+                    self.after(0, _done)
+                except Exception as exc:
+                    self.after(0, lambda e=exc: self._cache_status_lbl.configure(
+                        text=f"Failed: {e}", text_color=TEXT_ERR))
+
+            def _done():
+                self._cache_status_lbl.configure(
+                    text=f"Cleared {active_name} cache.", text_color=TEXT_OK)
+                self._refresh_cache_size()
+
+            self._cache_status_lbl.configure(text="Clearing…", text_color=TEXT_DIM)
+            threading.Thread(target=_clear_worker, daemon=True).start()
+
+        threading.Thread(target=_size_worker, daemon=True).start()
+
+    def _browse_download_cache(self):
+        from Utils.portal_filechooser import pick_folder
+
+        def _on_chosen(chosen):
+            if chosen:
+                try:
+                    self._download_cache_var.set(str(chosen))
+                except Exception:
+                    pass
+
+        pick_folder("Select Download Cache Folder", _on_chosen)
+
+    def _save_download_cache_path_with_migration(self) -> None:
+        """Persist the new cache path, offering to move existing contents.
+
+        Called from both ``_save_no_restart`` and ``_apply``.  When the value
+        is unchanged this is just a no-op write; when it changes and the old
+        root has contents we surface a ``CTkAlert`` and (on confirm) move
+        every immediate child into the new root in a worker thread.
+        """
+        new_value = self._download_cache_var.get().strip()
+        old_value = (self._download_cache_initial or "").strip()
+        if new_value == old_value:
+            save_download_cache_path(new_value)
+            return
+
+        # Resolve old root before saving the new value so we don't lose track
+        # of where the existing archives live.
+        old_root = get_download_cache_dir()
+        save_download_cache_path(new_value)
+        new_root = get_download_cache_dir()
+        try:
+            if old_root.resolve() == new_root.resolve():
+                self._download_cache_initial = new_value
+                return
+        except Exception:
+            pass
+
+        # Anything to migrate?
+        try:
+            children = [p for p in old_root.iterdir()]
+        except OSError:
+            children = []
+        if not children:
+            self._download_cache_initial = new_value
+            return
+
+        old_size = _get_dir_size(old_root)
+        alert = CTkAlert(
+            state="warning",
+            title="Move Cached Downloads?",
+            body_text=(
+                f"Move {_fmt_size(old_size)} of cached files from\n"
+                f"{old_root}\nto\n{new_root}?\n\n"
+                "Existing items at the destination are kept; only items not "
+                "already present at the new location are moved."
+            ),
+            btn1="Move",
+            btn2="Skip",
+            parent=self.winfo_toplevel(),
+            height=320,
+        )
+        if alert.get() != "Move":
+            self._download_cache_initial = new_value
+            return
+
+        import shutil, threading
+
+        def _migrate_worker():
+            moved = 0
+            failed = 0
+            for src in children:
+                dst = new_root / src.name
+                if dst.exists():
+                    continue
+                try:
+                    shutil.move(str(src), str(dst))
+                    moved += 1
+                except Exception:
+                    failed += 1
+            self.after(0, lambda: self._cache_status_lbl.configure(
+                text=f"Moved {moved} item(s)" + (f" ({failed} failed)" if failed else "."),
+                text_color=(TEXT_WARN if failed else TEXT_OK),
+            ))
+            self.after(0, self._refresh_cache_size)
+
+        self._cache_status_lbl.configure(text="Moving cache…", text_color=TEXT_DIM)
+        threading.Thread(target=_migrate_worker, daemon=True).start()
+        self._download_cache_initial = new_value
 
     def _browse_default_staging(self):
         from Utils.portal_filechooser import pick_folder
@@ -1453,6 +1699,7 @@ class SettingsPanel(ctk.CTkFrame):
         save_heroic_config_path(self._heroic_path_var.get())
         save_steam_libraries_vdf_path(self._steam_vdf_var.get())
         save_default_staging_path(self._default_staging_var.get())
+        self._save_download_cache_path_with_migration()
         self._on_done(self)
 
     def _on_close(self):
@@ -1481,6 +1728,7 @@ class SettingsPanel(ctk.CTkFrame):
         save_heroic_config_path(self._heroic_path_var.get())
         save_steam_libraries_vdf_path(self._steam_vdf_var.get())
         save_default_staging_path(self._default_staging_var.get())
+        self._save_download_cache_path_with_migration()
         self._on_done(self)
         python = sys.executable
         os.execv(python, [python] + sys.argv)

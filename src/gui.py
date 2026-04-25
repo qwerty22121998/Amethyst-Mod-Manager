@@ -96,7 +96,7 @@ from Nexus.nexus_oauth import load_oauth_tokens, clear_oauth_tokens
 from Nexus.nexus_download import NexusDownloader, delete_archive_and_sidecar
 from Nexus.nxm_handler import NxmLink, NxmCollectionLink, NxmHandler, NxmIPC, parse_nxm_url
 from Nexus.nexus_meta import build_meta_from_download, write_meta
-from Utils.config_paths import get_download_cache_dir
+from Utils.config_paths import get_download_cache_dir, get_download_cache_dir_for_game
 
 from Utils.ui_config import get_appearance_mode as _get_appearance_mode
 from gui.themes import get_ctk_appearance as _get_ctk_appearance
@@ -769,6 +769,7 @@ class App(ctk.CTk):
                 self.after(0, lambda m=str(exc): log(
                     f"Nexus: Could not fetch mod info ({m}) — metadata will be partial."))
 
+            _dest_game_name = matched_game[0] if matched_game else ""
             result = self._nexus_downloader.download_from_nxm(
                 link,
                 known_file_name=file_info.file_name if file_info else "",
@@ -779,7 +780,7 @@ class App(ctk.CTk):
                     )
                 ),
                 cancel=cancel_event,
-                dest_dir=get_download_cache_dir(),
+                dest_dir=get_download_cache_dir_for_game(_dest_game_name),
             )
             if result.success and result.file_path:
                 self.after(0, lambda: (
