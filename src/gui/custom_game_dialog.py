@@ -480,7 +480,10 @@ class CustomGamePanel(ctk.CTkFrame):
                 self._conflict_var,
                 "Conflict Ignore Filenames",
                 "Comma-separated filenames excluded from conflict detection.  "
-                "e.g. modinfo.ini, manifest.json",
+                "Supports glob patterns: *.<ext> matches any file with that "
+                "extension, <name>.* matches that name with any extension or "
+                "no extension at all.  e.g. modinfo.ini, manifest.json, "
+                "*.txt, LICENCE.*",
             ),
             (
                 "mod_folder_strip_prefixes_post",
@@ -649,7 +652,8 @@ class CustomGamePanel(ctk.CTkFrame):
             text="Route specific files to alternate destinations during deploy. "
                  "Each rule maps files (by extension or folder) to a game-root-relative directory. "
                  "For extensions, append (.ext, .ext) to also route same-stem siblings "
-                 "(e.g. .asi (.ini) sends Foo.ini alongside Foo.asi).",
+                 "(e.g. .asi (.ini) sends Foo.ini alongside Foo.asi). "
+                 "Enable Flatten to drop subfolders below the matched folder so files land flat under the destination.",
             font=FONT_SMALL, text_color=TEXT_DIM, anchor="center",
             wraplength=WRAP,
         ).grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 4))
@@ -688,6 +692,7 @@ class CustomGamePanel(ctk.CTkFrame):
                     match_type=mt,
                     match_value=mv,
                     loose_only=bool(rule_data.get("loose_only", False)),
+                    flatten=bool(rule_data.get("flatten", False)),
                 )
 
         # ---- Framework Detection ----
@@ -810,7 +815,8 @@ class CustomGamePanel(ctk.CTkFrame):
             self._data_path_entry.configure(placeholder_text="e.g. Data   (leave empty for game root)")
 
     def _add_routing_rule_row(self, dest: str = "", match_type: str = "extensions",
-                              match_value: str = "", loose_only: bool = False) -> None:
+                              match_value: str = "", loose_only: bool = False,
+                              flatten: bool = False) -> None:
         """Add a routing rule row to the container."""
         container = self._routing_rules_container
         if not self._routing_rules_rows:
@@ -824,6 +830,7 @@ class CustomGamePanel(ctk.CTkFrame):
             hdr.grid_columnconfigure(2, weight=1)
             hdr.grid_columnconfigure(3, weight=0)
             hdr.grid_columnconfigure(4, weight=0)
+            hdr.grid_columnconfigure(5, weight=0)
             ctk.CTkLabel(hdr, text="Path", font=FONT_SMALL, text_color=TEXT_DIM,
                          anchor="w").grid(row=0, column=0, sticky="w", padx=(6, 0))
             ctk.CTkLabel(hdr, text="Match Value", font=FONT_SMALL, text_color=TEXT_DIM,
@@ -838,11 +845,13 @@ class CustomGamePanel(ctk.CTkFrame):
         row_frame.grid_columnconfigure(2, weight=1)
         row_frame.grid_columnconfigure(3, weight=0)
         row_frame.grid_columnconfigure(4, weight=0)
+        row_frame.grid_columnconfigure(5, weight=0)
 
-        dest_var  = tk.StringVar(value=dest)
-        type_var  = tk.StringVar(value=match_type)
-        value_var = tk.StringVar(value=match_value)
-        loose_var = tk.BooleanVar(value=loose_only)
+        dest_var    = tk.StringVar(value=dest)
+        type_var    = tk.StringVar(value=match_type)
+        value_var   = tk.StringVar(value=match_value)
+        loose_var   = tk.BooleanVar(value=loose_only)
+        flatten_var = tk.BooleanVar(value=flatten)
 
         ctk.CTkEntry(
             row_frame, textvariable=dest_var, font=FONT_MONO,
@@ -869,15 +878,22 @@ class CustomGamePanel(ctk.CTkFrame):
             fg_color=BG_DEEP, progress_color=ACCENT, width=40,
         ).grid(row=0, column=3, padx=(4, 2), pady=4)
 
+        ctk.CTkSwitch(
+            row_frame, text="Flatten", variable=flatten_var,
+            font=FONT_SMALL, text_color=TEXT_MAIN,
+            fg_color=BG_DEEP, progress_color=ACCENT, width=40,
+        ).grid(row=0, column=4, padx=(4, 2), pady=4)
+
         row_data = {"frame": row_frame, "dest": dest_var, "type": type_var,
-                    "value": value_var, "loose_only": loose_var}
+                    "value": value_var, "loose_only": loose_var,
+                    "flatten": flatten_var}
         self._routing_rules_rows.append(row_data)
 
         ctk.CTkButton(
             row_frame, text="X", width=28, height=28, font=FONT_SMALL,
             fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
             command=lambda rd=row_data: self._remove_routing_rule_row(rd),
-        ).grid(row=0, column=4, padx=(2, 6), pady=4)
+        ).grid(row=0, column=5, padx=(2, 6), pady=4)
 
     def _remove_routing_rule_row(self, row_data: dict) -> None:
         """Remove a routing rule row."""
@@ -926,6 +942,8 @@ class CustomGamePanel(ctk.CTkFrame):
                 rule["folders"] = values
             if rd["loose_only"].get():
                 rule["loose_only"] = True
+            if rd["flatten"].get():
+                rule["flatten"] = True
             rules.append(rule)
         return rules
 

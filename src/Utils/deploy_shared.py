@@ -330,6 +330,10 @@ class CustomRule:
                  plugins where "Foo.asi" and "Foo.ini" must both live at the
                  game root even though the ``.ini`` extension is too generic
                  to route unconditionally.
+    flatten    — when True, folder matches drop all directory components
+                 below the matched folder so the file lands flat under
+                 ``dest``.  Default False (preserve subfolders, the historical
+                 behaviour).
 
     Placement behaviour:
     - extension-only match: file placed as game_root/dest/<filename> (flat)
@@ -344,6 +348,7 @@ class CustomRule:
     filenames: list[str] = field(default_factory=list)
     loose_only: bool = False
     companion_extensions: list[str] = field(default_factory=list)
+    flatten: bool = False
 
 
 def _default_core(deploy_dir: Path) -> Path:

@@ -8,6 +8,7 @@ Extracted from deploy.py during the 2026-04 refactor. No behaviour changes.
 from __future__ import annotations
 
 import concurrent.futures
+import fnmatch
 import os
 import shutil
 from pathlib import Path
@@ -66,23 +67,52 @@ def deploy_custom_rules(
     nocase_cache: dict[Path, dict[str, list[Path]]] = {}
     sorted_strip   = sorted(_strip) if _strip else []
 
-    # Pre-process rules into normalised form for fast matching
-    _rules: list[tuple[CustomRule, set[str], set[str], set[str]]] = []
+    # Pre-process rules into normalised form for fast matching.
+    # Extensions are kept as a list sorted longest-first so that multi-dot
+    # extensions like ".dekcns.json" win over their plain ".json" suffix.
+    _rules: list[tuple[CustomRule, set[str], list[str], set[str]]] = []
     for rule in rules:
+        ext_list = sorted({e.lower() for e in rule.extensions}, key=len, reverse=True)
         _rules.append((
             rule,
             {f.lower() for f in rule.folders},
-            {e.lower() for e in rule.extensions},
+            ext_list,
             {n.lower() for n in rule.filenames},
         ))
 
-    def _match_rule(rel_lower: str) -> tuple[CustomRule, int] | None:
-        """Return (rule, strip_len) for the first match, or None.
+    def _ext_match(filename: str, exts: list[str]) -> str | None:
+        """Return the longest extension in ``exts`` that ``filename`` ends with
+        (as ``.something``), or None. ``exts`` must be sorted longest-first.
+        """
+        for e in exts:
+            if filename.endswith(e) and len(filename) > len(e):
+                return e
+        return None
+
+    def _name_match(filename: str, names: set[str]) -> bool:
+        """Match ``filename`` (lowercased) against the rule's filenames.
+        Glob characters (``*``, ``?``, ``[seq]``) are honoured so a rule can
+        target e.g. ``*.dekcns.json``; plain entries match by exact equality.
+        """
+        for n in names:
+            if any(c in n for c in "*?["):
+                if fnmatch.fnmatchcase(filename, n):
+                    return True
+            elif filename == n:
+                return True
+        return False
+
+    def _match_rule(rel_lower: str) -> tuple[CustomRule, int, str] | None:
+        """Return (rule, strip_len, matched_ext) for the first match, or None.
 
         strip_len is the number of leading characters to strip from rel_str
         so the folder itself (and its contents) are preserved under dest.
         For extension/filename matches strip_len is -1 (sentinel for flat
         placement).
+
+        matched_ext is the extension that matched (e.g. ".dekcns.json"), or
+        an empty string for folder/filename-only matches. Used to derive the
+        correct stem for companion-file resolution.
 
         Example with folder "logicmods":
           "logicmods/file.pak"              → strip_len=0 (keep as-is)
@@ -90,7 +120,6 @@ def deploy_custom_rules(
           "content/paks/logicmods/file.pak" → strip_len=13 (strip "content/paks/")
         """
         parts = rel_lower.split("/")
-        ext = os.path.splitext(rel_lower)[1]
         filename = parts[-1]
         is_loose = len(parts) == 1
         for rule, folders, exts, filenames in _rules:
@@ -120,13 +149,13 @@ def deploy_custom_rules(
                                 break
                         if folder_hit:
                             break
-            ext_match = bool(exts and ext in exts)
-            if folder_hit and (not exts or ext_match):
-                return rule, strip_len
-            if ext_match and not folders and not filenames:
-                return rule, -1
-            if filenames and filename in filenames:
-                return rule, -1
+            matched_ext = _ext_match(filename, exts) if exts else None
+            if folder_hit and (not exts or matched_ext is not None):
+                return rule, strip_len, matched_ext or ""
+            if matched_ext is not None and not folders and not filenames:
+                return rule, -1, matched_ext
+            if filenames and _name_match(filename, filenames):
+                return rule, -1, ""
         return None
 
     already_seen: set[str] = set()
@@ -134,10 +163,13 @@ def deploy_custom_rules(
     handled_lower: set[str] = set()
     # Retain primary matches and all entries so we can resolve companions
     # after the first pass.
-    # primary_matches: rel_lower -> (rule, strip_len, rel_str, mod_name)
-    primary_matches: dict[str, tuple[CustomRule, int, str, str]] = {}
-    # entries_by_key: (parent_lower, stem_lower) -> list of (rel_str, mod_name, ext_lower)
-    entries_by_key: dict[tuple[str, str], list[tuple[str, str, str]]] = {}
+    # primary_matches: rel_lower -> (rule, strip_len, rel_str, mod_name, matched_ext)
+    primary_matches: dict[str, tuple[CustomRule, int, str, str, str]] = {}
+    # entries_by_parent: parent_lower -> list of (rel_str, mod_name, name_lower)
+    # We index by parent only and resolve siblings by name suffix at companion
+    # time, since a multi-dot extension means a single file has multiple valid
+    # "stems" (e.g. "foo.dekcns.json" has stems "foo" and "foo.dekcns").
+    entries_by_parent: dict[str, list[tuple[str, str, str]]] = {}
 
     with filemap_path.open(encoding="utf-8") as f:
         for line in f:
@@ -150,18 +182,17 @@ def deploy_custom_rules(
                 continue
             already_seen.add(rel_lower)
 
-            # Index every entry by (parent, stem) for companion resolution.
+            # Index every entry by parent dir for companion resolution.
             parent_lower, _, name_lower = rel_lower.rpartition("/")
-            stem_lower, _ext = os.path.splitext(name_lower)
-            entries_by_key.setdefault(
-                (parent_lower, stem_lower), []
-            ).append((rel_str, mod_name, _ext))
+            entries_by_parent.setdefault(parent_lower, []).append(
+                (rel_str, mod_name, name_lower)
+            )
 
             match = _match_rule(rel_lower)
             if match is None:
                 continue
-            rule, strip_len = match
-            primary_matches[rel_lower] = (rule, strip_len, rel_str, mod_name)
+            rule, strip_len, matched_ext = match
+            primary_matches[rel_lower] = (rule, strip_len, rel_str, mod_name, matched_ext)
 
             src_str = _resolve_source(
                 mod_name, rel_str, rel_lower, overwrite_dir, staging_root,
@@ -174,7 +205,7 @@ def deploy_custom_rules(
             src = Path(src_str)
 
             dest_base = game_root / rule.dest if rule.dest else game_root
-            if strip_len >= 0:
+            if strip_len >= 0 and not rule.flatten:
                 # Folder match — strip the prefix above the matched
                 # folder and place the folder + contents under dest.
                 #   strip_len=0: LogicMods/f → dest/LogicMods/f
@@ -182,24 +213,42 @@ def deploy_custom_rules(
                 kept = rel_str[strip_len:].lstrip("/")
                 dst = dest_base / kept if kept else dest_base
             else:
-                # Extension/filename-only: place flat (filename only)
+                # Extension/filename-only OR flatten=True: place flat (filename only)
                 dst = dest_base / src.name
             tasks.append((src, dst))
             handled_lower.add(rel_lower)
 
     # Second pass: companion files ride along with their primary match.
-    for rel_lower, (rule, strip_len, rel_str, _mod_name) in list(primary_matches.items()):
-        companions = {c.lower() for c in rule.companion_extensions}
+    # Companions are matched longest-first too so a ".dekcns.json" companion
+    # would beat a ".json" one.
+    for rel_lower, (rule, strip_len, rel_str, _mod_name, matched_ext) in list(primary_matches.items()):
+        companions = sorted(
+            {c.lower() for c in rule.companion_extensions}, key=len, reverse=True
+        )
         if not companions:
             continue
         parent_lower, _, name_lower = rel_lower.rpartition("/")
-        stem_lower, _ = os.path.splitext(name_lower)
-        siblings = entries_by_key.get((parent_lower, stem_lower), ())
-        for sib_rel_str, sib_mod_name, sib_ext in siblings:
+        # Stem is the primary filename minus the extension that matched.
+        # Falls back to splitext when there was no extension match (folder/
+        # filename rules) — companions remain stem-relative in that case.
+        if matched_ext and name_lower.endswith(matched_ext):
+            stem_lower = name_lower[: -len(matched_ext)]
+        else:
+            stem_lower, _ = os.path.splitext(name_lower)
+        siblings = entries_by_parent.get(parent_lower, ())
+        stem_dot = stem_lower + "."
+        for sib_rel_str, sib_mod_name, sib_name_lower in siblings:
             sib_lower = sib_rel_str.lower()
             if sib_lower in handled_lower:
                 continue
-            if sib_ext not in companions:
+            if not sib_name_lower.startswith(stem_dot):
+                continue
+            sib_ext = None
+            for c in companions:
+                if sib_name_lower.endswith(c) and len(sib_name_lower) > len(c):
+                    sib_ext = c
+                    break
+            if sib_ext is None:
                 continue
             src_str = _resolve_source(
                 sib_mod_name, sib_rel_str, sib_lower, overwrite_dir, staging_root,
@@ -211,7 +260,7 @@ def deploy_custom_rules(
                 continue
             src = Path(src_str)
             dest_base = game_root / rule.dest if rule.dest else game_root
-            if strip_len >= 0:
+            if strip_len >= 0 and not rule.flatten:
                 kept = sib_rel_str[strip_len:].lstrip("/")
                 dst = dest_base / kept if kept else dest_base
             else:

@@ -124,13 +124,15 @@ def _defn_to_custom_rules(defn: dict) -> list[CustomRule]:
         folders = [s.strip().lower() for s in entry.get("folders", []) if s.strip()]
         filenames = [s.strip().lower() for s in entry.get("filenames", []) if s.strip()]
         loose_only = bool(entry.get("loose_only", False))
+        flatten = bool(entry.get("flatten", False))
         companion_extensions = [
             s.strip().lower() for s in entry.get("companion_extensions", []) if s.strip()
         ]
         if dest or extensions or folders or filenames:
             rules.append(CustomRule(dest=dest, extensions=extensions, folders=folders,
                                     filenames=filenames, loose_only=loose_only,
-                                    companion_extensions=companion_extensions))
+                                    companion_extensions=companion_extensions,
+                                    flatten=flatten))
     return rules
 
 
@@ -759,15 +761,17 @@ class Ue5CustomGame(UE5Game):
                             prefix=norm_folder, filenames=fnames,
                             strip=[norm_folder],
                             loose_only=cr.loose_only,
+                            flatten=cr.flatten,
                         ))
                     else:
                         # Single-segment: match as first path segment.
                         # No strip — the folder name is preserved under
-                        # dest.
+                        # dest unless flatten is set.
                         rules.append(UE5Rule(
                             dest=cr.dest, extensions=exts,
                             folder=norm_folder, filenames=fnames,
                             loose_only=cr.loose_only,
+                            flatten=cr.flatten,
                         ))
                     # Generate extra prefix rules for common UE5 packaging
                     # prefixes above the target folder.
@@ -781,6 +785,7 @@ class Ue5CustomGame(UE5Game):
                             prefix=full, filenames=fnames,
                             strip=[ue_pfx],
                             loose_only=cr.loose_only,
+                            flatten=cr.flatten,
                         ))
             elif cr.filenames:
                 rules.append(UE5Rule(
@@ -788,17 +793,26 @@ class Ue5CustomGame(UE5Game):
                     extensions=list(cr.extensions),
                     filenames=list(cr.filenames),
                     loose_only=cr.loose_only,
+                    flatten=cr.flatten,
                 ))
             else:
                 rules.append(UE5Rule(
                     dest=cr.dest,
                     extensions=list(cr.extensions),
                     loose_only=cr.loose_only,
+                    flatten=cr.flatten,
                 ))
 
         # Built-in UE5 defaults follow — they act as fallbacks when no
         # custom rule matched.
         rules.extend([
+            # LogicMods folder → Content/Paks/LogicMods/ (preserved as a folder
+            # under Paks). Must come before the .pak extension rule so files
+            # inside LogicMods don't get routed to ~mods/.
+            UE5Rule(dest="Content/Paks", prefix="Content/Paks/LogicMods",
+                    strip=["Content/Paks"]),
+            UE5Rule(dest="Content/Paks", prefix="Paks/LogicMods", strip=["Paks"]),
+            UE5Rule(dest="Content/Paks", folder="LogicMods"),
             # Pak / streaming files → Content/Paks/~mods/  (checked before the
             # generic folder="content" catch-all so mods shipped as
             # Content/Paks/… are routed here rather than to the game root as-is)

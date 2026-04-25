@@ -47,6 +47,7 @@ Restore:
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import shutil
 from abc import abstractmethod
@@ -237,30 +238,57 @@ class UE5Game(BaseGame):
     # -----------------------------------------------------------------------
 
     def _match_rule(self, rel_str: str) -> UE5Rule | None:
-        """Return the first rule that matches rel_str, or None."""
+        """Return the first rule that matches rel_str, or None.
+
+        Extension matching uses filename-suffix logic so multi-dot extensions
+        like ".dekcns.json" can be configured (Path.suffix returns only the
+        last suffix). Within a rule, the longest extension is matched first.
+        """
         norm = rel_str.replace("\\", "/")
         parts = norm.split("/")
         first_seg = parts[0].lower() if parts else ""
-        ext = Path(rel_str).suffix.lower()
-
         basename = parts[-1].lower() if parts else ""
         is_loose = len(parts) == 1
+
+        def _ext_hit(exts: list[str]) -> bool:
+            # Longest-first so ".dekcns.json" wins over ".json" within the
+            # rule's own list. Comparison is case-insensitive (basename is
+            # already lowercased; rule.extensions is normalised on entry).
+            for e in sorted(exts, key=len, reverse=True):
+                el = e.lower()
+                if basename.endswith(el) and len(basename) > len(el):
+                    return True
+            return False
+
+        def _name_hit(names: list[str]) -> bool:
+            # Filenames support glob patterns (``*``, ``?``, ``[seq]``) so
+            # rules can target e.g. ``*.dekcns.json``. Plain names still match
+            # by exact case-insensitive equality.
+            for n in names:
+                nl = n.lower()
+                if any(c in nl for c in "*?["):
+                    if fnmatch.fnmatchcase(basename, nl):
+                        return True
+                elif basename == nl:
+                    return True
+            return False
+
         for rule in self.ue5_routing_rules:
             if rule.loose_only and not is_loose:
                 continue
             if rule.prefix and norm.lower().startswith(rule.prefix.lower() + "/"):
                 # If the rule also has an extension filter, only match when
                 # the file's extension is in the list.
-                if rule.extensions and ext not in rule.extensions:
+                if rule.extensions and not _ext_hit(rule.extensions):
                     continue
                 return rule
             if rule.folder and first_seg == rule.folder.lower():
-                if rule.extensions and ext not in rule.extensions:
+                if rule.extensions and not _ext_hit(rule.extensions):
                     continue
                 return rule
-            if rule.filenames and basename in {f.lower() for f in rule.filenames}:
+            if rule.filenames and _name_hit(rule.filenames):
                 return rule
-            if rule.extensions and ext in rule.extensions:
+            if rule.extensions and _ext_hit(rule.extensions):
                 return rule
         return None
 
@@ -345,23 +373,45 @@ class UE5Game(BaseGame):
             for line in filemap.read_text(encoding="utf-8").splitlines()
             if "\t" in line
         ]
-        total = len(lines)
 
-        for i, line in enumerate(lines):
+        # Build priority map so flatten/strip collisions resolve to the highest
+        # priority mod's file rather than whichever line happens to deploy last.
+        # Index 0 in modlist == top priority, so lower rank wins.
+        modlist_path = profile_dir / "modlist.txt"
+        priority_map: dict[str, int] = {}
+        if modlist_path.is_file():
+            for rank, e in enumerate(read_modlist(modlist_path)):
+                priority_map[e.name] = rank
+        # Pre-resolve every entry and dedupe by final destination path.
+        # When multiple staged paths resolve to the same on-disk target
+        # (typical with flatten=True), the higher-priority mod wins.
+        resolved_by_dest: dict[str, tuple[int, str, str, str, Path, Path, bool, str]] = {}
+        for line in lines:
             staged_rel, mod_name = line.split("\t", 1)
-
             base_dir = per_mod_deploy.get(mod_name, game_path)
             in_custom_dir = base_dir != game_path
-
             if mod_name in per_mod_raw:
-                # Raw deploy: ignore routing rules, place file as-is
                 final_rel = staged_rel.replace("\\", "/")
+                dest_rel = ""
                 dest_dir = base_dir
                 dest_file = dest_dir / final_rel
             else:
                 dest_rel, final_rel = self._resolve_entry(staged_rel)
                 dest_dir = (base_dir / dest_rel) if dest_rel else base_dir
                 dest_file = dest_dir / final_rel
+            key = str(dest_file)
+            rank = priority_map.get(mod_name, 1 << 30)
+            existing = resolved_by_dest.get(key)
+            if existing is None or rank < existing[0]:
+                resolved_by_dest[key] = (
+                    rank, staged_rel, mod_name, final_rel,
+                    dest_dir, dest_file, in_custom_dir, dest_rel,
+                )
+        deploy_order = list(resolved_by_dest.values())
+        total = len(deploy_order)
+
+        for i, (_rank, staged_rel, mod_name, final_rel,
+                dest_dir, dest_file, in_custom_dir, dest_rel) in enumerate(deploy_order):
 
             src = self._find_staged_file(
                 staging, mod_name, staged_rel,

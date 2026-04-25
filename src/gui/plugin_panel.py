@@ -4016,37 +4016,76 @@ class PluginPanel(ctk.CTkFrame):
         from Games.ue5_game import UE5Game
         game = self._game
         if isinstance(game, UE5Game):
-            resolved = []
+            # Build priority map so flatten collisions show only the winner.
+            priority_map: dict[str, int] = {}
+            filemap_path_str = self._get_filemap_path()
+            if filemap_path_str:
+                profile_dir = (
+                    getattr(game, "_active_profile_dir", None)
+                    or Path(filemap_path_str).parent
+                )
+                modlist_path = profile_dir / "modlist.txt"
+                if modlist_path.is_file():
+                    try:
+                        from Utils.modlist import read_modlist
+                        for rank, e in enumerate(read_modlist(modlist_path)):
+                            priority_map[e.name] = rank
+                    except Exception:
+                        pass
+            winners: dict[str, tuple[int, str, str]] = {}
             for rel_path, mod_name in entries:
                 dest, final_rel = game._resolve_entry(rel_path)
                 full_path = dest + "/" + final_rel if dest else final_rel
-                resolved.append((full_path, mod_name))
-            return resolved
+                rank = priority_map.get(mod_name, 1 << 30)
+                existing = winners.get(full_path)
+                if existing is None or rank < existing[0]:
+                    winners[full_path] = (rank, full_path, mod_name)
+            return [(p, m) for _r, p, m in winners.values()]
 
         rules = getattr(game, "custom_routing_rules", None)
         if not rules:
             return entries
 
+        import fnmatch
         import os
-        # Pre-process rules (mirrors deploy_custom_rules logic)
+        # Pre-process rules (mirrors deploy_custom_rules logic).
+        # Extensions sorted longest-first so multi-dot extensions like
+        # ".dekcns.json" win over their plain ".json" suffix.
         _rules = [
             (r,
              {f.lower() for f in r.folders},
-             {e.lower() for e in r.extensions},
+             sorted({e.lower() for e in r.extensions}, key=len, reverse=True),
              {n.lower() for n in r.filenames})
             for r in rules
         ]
 
+        def _ext_match(filename: str, exts: list[str]) -> str | None:
+            for e in exts:
+                if filename.endswith(e) and len(filename) > len(e):
+                    return e
+            return None
+
+        def _name_match(filename: str, names: set[str]) -> bool:
+            # Filenames may be glob patterns (``*``, ``?``, ``[seq]``); plain
+            # entries match by exact equality. Mirrors deploy_custom_rules.
+            for n in names:
+                if any(c in n for c in "*?["):
+                    if fnmatch.fnmatchcase(filename, n):
+                        return True
+                elif filename == n:
+                    return True
+            return False
+
         def _match(rel_lower: str):
-            """Return (rule, strip_len) or (None, -1).
+            """Return (rule, strip_len, matched_ext) or (None, -1, "").
 
             Mirrors deploy_custom_rules._match_rule: folders are matched
             as any path segment (not just the first), and strip_len is the
             number of leading characters to remove so the folder itself is
-            preserved under dest.
+            preserved under dest. matched_ext is the extension that matched
+            (used to derive companion stems for multi-dot extensions).
             """
             parts = rel_lower.split("/")
-            ext = os.path.splitext(rel_lower)[1]
             filename = parts[-1]
             is_loose = len(parts) == 1
             for rule, folders, exts, filenames in _rules:
@@ -4072,60 +4111,70 @@ class PluginPanel(ctk.CTkFrame):
                                     break
                             if folder_hit:
                                 break
-                ext_match = bool(exts and ext in exts)
-                if folder_hit and (not exts or ext_match):
-                    return rule, strip_len
-                if ext_match and not folders and not filenames:
-                    return rule, -1
-                if filenames and filename in filenames:
-                    return rule, -1
-            return None, -1
+                matched_ext = _ext_match(filename, exts) if exts else None
+                if folder_hit and (not exts or matched_ext is not None):
+                    return rule, strip_len, matched_ext or ""
+                if matched_ext is not None and not folders and not filenames:
+                    return rule, -1, matched_ext
+                if filenames and _name_match(filename, filenames):
+                    return rule, -1, ""
+            return None, -1, ""
 
         # First pass: record each entry's primary rule match so companions
-        # can ride along on the second pass.  Index entries by (parent, stem)
-        # so we can find siblings cheaply.
-        # primary_rules maps index -> (rule, strip_len); companions_by_key
-        # maps (parent_lower, stem_lower) -> list of (index, ext_lower).
+        # can ride along on the second pass.  Index entries by parent dir
+        # so we can find siblings cheaply (multi-dot extensions mean a
+        # single file can have multiple valid stems, so name-suffix matching
+        # is done per-companion at resolution time).
+        # primary_rules maps index -> (rule, strip_len, matched_ext);
+        # entries_by_parent maps parent_lower -> list of (index, name_lower).
         primary_rules: dict[int, tuple] = {}
-        companions_by_key: dict[tuple[str, str], list[tuple[int, str]]] = {}
+        entries_by_parent: dict[str, list[tuple[int, str]]] = {}
         normalised: list[str] = []
         for idx, (rel_path, _mod_name) in enumerate(entries):
             rel_norm = rel_path.replace("\\", "/")
             normalised.append(rel_norm)
             rel_lower = rel_norm.lower()
             parent_lower, _, name_lower = rel_lower.rpartition("/")
-            stem_lower, ext_lower = os.path.splitext(name_lower)
-            companions_by_key.setdefault(
-                (parent_lower, stem_lower), []
-            ).append((idx, ext_lower))
-            rule, strip_len = _match(rel_lower)
+            entries_by_parent.setdefault(parent_lower, []).append((idx, name_lower))
+            rule, strip_len, matched_ext = _match(rel_lower)
             if rule is not None:
-                primary_rules[idx] = (rule, strip_len)
+                primary_rules[idx] = (rule, strip_len, matched_ext)
 
         # Second pass: mark companions (same folder, same stem, companion ext)
         # with their primary's rule.
-        for idx, (rule, strip_len) in list(primary_rules.items()):
-            companions = {c.lower() for c in getattr(rule, "companion_extensions", [])}
+        for idx, (rule, strip_len, matched_ext) in list(primary_rules.items()):
+            companions = sorted(
+                {c.lower() for c in getattr(rule, "companion_extensions", [])},
+                key=len, reverse=True,
+            )
             if not companions:
                 continue
             rel_norm = normalised[idx]
             rel_lower = rel_norm.lower()
             parent_lower, _, name_lower = rel_lower.rpartition("/")
-            stem_lower, _ = os.path.splitext(name_lower)
-            for sib_idx, sib_ext in companions_by_key.get((parent_lower, stem_lower), ()):
+            if matched_ext and name_lower.endswith(matched_ext):
+                stem_lower = name_lower[: -len(matched_ext)]
+            else:
+                stem_lower, _ = os.path.splitext(name_lower)
+            stem_dot = stem_lower + "."
+            for sib_idx, sib_name_lower in entries_by_parent.get(parent_lower, ()):
                 if sib_idx == idx:
                     continue
                 if sib_idx in primary_rules:
                     continue
-                if sib_ext in companions:
-                    primary_rules[sib_idx] = (rule, strip_len)
+                if not sib_name_lower.startswith(stem_dot):
+                    continue
+                for c in companions:
+                    if sib_name_lower.endswith(c) and len(sib_name_lower) > len(c):
+                        primary_rules[sib_idx] = (rule, strip_len, c)
+                        break
 
         resolved = []
         for idx, (rel_path, mod_name) in enumerate(entries):
             rel_norm = normalised[idx]
             match = primary_rules.get(idx)
             if match is not None:
-                rule, strip_len = match
+                rule, strip_len, _matched_ext = match
                 dest = rule.dest
                 if strip_len >= 0:
                     # Folder match — strip prefix above the folder,

@@ -80,6 +80,13 @@ class HogwartsLegacy(UE5Game):
     @property
     def ue5_routing_rules(self) -> list[UE5Rule]:
         return [
+            # LogicMods folder → Content/Paks/LogicMods/ (preserved as a folder
+            # under Paks). Must come before the .pak extension rule so files
+            # inside LogicMods don't get routed to ~mods/.
+            UE5Rule(dest="Content/Paks", prefix="Content/Paks/LogicMods",
+                    strip=["Content/Paks"]),
+            UE5Rule(dest="Content/Paks", prefix="Paks/LogicMods", strip=["Paks"]),
+            UE5Rule(dest="Content/Paks", folder="LogicMods"),
             # Pak / streaming files → Content/Paks/~mods/  (checked before the
             # generic folder="content" catch-all so mods shipped as
             # Content/Paks/… are routed here rather than to the game root as-is)

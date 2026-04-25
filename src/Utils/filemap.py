@@ -170,10 +170,16 @@ def _scan_dir(
                                     rel_str = remainder
                                 else:
                                     break
-                        # Extension filter — drop files not in the allowed set
+                        # Extension filter — drop files not in the allowed set.
+                        # Use suffix matching so multi-dot extensions like
+                        # ".dekcns.json" are honoured (splitext only returns
+                        # the last suffix).
                         if allowed_extensions:
-                            ext = os.path.splitext(entry.name)[1].lower()
-                            if ext not in allowed_extensions:
+                            name_lower = entry.name.lower()
+                            if not any(
+                                name_lower.endswith(e) and len(name_lower) > len(e)
+                                for e in allowed_extensions
+                            ):
                                 continue
                         key = rel_str.lower()
                         if key in result:
@@ -697,9 +703,16 @@ def build_filemap(
         index = read_mod_index(index_path) or {}
 
     # Pre-compile ignore patterns once into a single regex for O(1) matching.
+    # `<name>.*` is expanded to also match the extensionless `<name>` so users
+    # can ignore e.g. both `LICENCE` and `LICENCE.txt` with one pattern.
     _ignore_re: re.Pattern[str] | None = None
     if conflict_ignore_filenames:
-        parts = [fnmatch.translate(p.lower()) for p in conflict_ignore_filenames]
+        parts: list[str] = []
+        for p in conflict_ignore_filenames:
+            pl = p.lower()
+            parts.append(fnmatch.translate(pl))
+            if pl.endswith(".*") and "*" not in pl[:-2] and "?" not in pl[:-2]:
+                parts.append(fnmatch.translate(pl[:-2]))
         _ignore_re = re.compile("|".join(parts))
 
     def _is_ignored(rel_key: str) -> bool:
