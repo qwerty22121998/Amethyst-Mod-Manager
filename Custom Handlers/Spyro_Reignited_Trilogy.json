@@ -18,7 +18,9 @@
   "mod_install_prefix": "",
   "mod_required_top_level_folders": [],
   "mod_auto_strip_until_required": true,
-  "mod_required_file_types": [],
+  "mod_required_file_types": [
+    ".pak"
+  ],
   "mod_install_as_is_if_no_match": true,
   "restore_before_deploy": true,
   "normalize_folder_case": true,
