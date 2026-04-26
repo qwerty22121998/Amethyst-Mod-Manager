@@ -7,6 +7,9 @@
 - Option to remove the default downloads folder from the downloads locations menu
 - Added the ability to upgrade/downgrade a collections revision. Stale mods will be removed/updated and new ones will be added. Manually installed mods not in the collection will be kept. This will not work on collections installed before this update as new meta info is needed to this to work properly
 - Separators can now be locked via a right click option.
+- The downloads/cache location can now be changed and is now split per game
+- Added a clear log button when the log panel is open, Clears the current log output. The log file itself is not changed
+- Added a notes feature to mods, Notes can be added to mods and are displayed as a flag/tooltip
 
 - v1.2.11
 - Added Red Dead Redemption 2
