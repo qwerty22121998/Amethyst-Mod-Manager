@@ -1,3 +1,7 @@
+- v1.2.13
+- Fixed instances of collections installing the wrong mod if a cached mod happened to have the same fileid caused in the last update
+- Fixed some inconsistency between deploy types related to routing rules caused in the previous update
+
 - v1.2.12
 - Fixed vanilla plugins modified by quick auto clean not returning to the data folder
 - Added some missing required top level folders for bethesda games to reduce bad installs
