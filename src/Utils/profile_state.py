@@ -292,6 +292,21 @@ def read_excluded_mod_files(profile_dir: Path, state: dict | None = None) -> dic
     return out
 
 
+def read_mod_notes(profile_dir: Path, state: dict | None = None) -> dict[str, str]:
+    """Read mod_notes. Returns {} if absent or corrupt.
+
+    Format: {mod_name: note_text}. Empty/whitespace-only entries are dropped on read.
+    """
+    raw = _read_key(profile_dir, state, "mod_notes")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for k, v in raw.items():
+        if isinstance(k, str) and isinstance(v, str) and v.strip():
+            out[k] = v
+    return out
+
+
 def read_profile_settings(profile_dir: Path, state: dict | None = None) -> dict:
     """Read profile_settings (flags and metadata). Returns {} if absent or corrupt.
 
@@ -397,6 +412,18 @@ def write_excluded_mod_files(profile_dir: Path, value: dict[str, list[str]]) -> 
     else:
         state = read_profile_state(profile_dir)
         state.pop("excluded_mod_files", None)
+        write_profile_state(profile_dir, state)
+
+
+def write_mod_notes(profile_dir: Path, value: dict[str, str]) -> None:
+    """Persist mod_notes to profile_state.json. Empty/whitespace-only entries are dropped."""
+    cleaned = {k: v for k, v in value.items()
+               if isinstance(k, str) and isinstance(v, str) and v.strip()}
+    if cleaned:
+        _update_key(profile_dir, "mod_notes", cleaned)
+    else:
+        state = read_profile_state(profile_dir)
+        state.pop("mod_notes", None)
         write_profile_state(profile_dir, state)
 
 

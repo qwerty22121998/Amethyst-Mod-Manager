@@ -332,6 +332,9 @@ class PluginPanel(ctk.CTkFrame):
             font=(_theme.FONT_FAMILY, _theme.FS10),
         )
 
+        # Mod note editor overlay (instantiated on demand, see show_notes_editor)
+        self._notes_overlay = None
+
         # Canvas column x-positions (patched in _layout_plugin_cols)
         self._pcol_x = [scaled(4), scaled(32), 0, 0, 0]  # checkbox, name, flags, lock, index
 
@@ -8241,3 +8244,38 @@ class PluginPanel(ctk.CTkFrame):
         self._drag_moved = False
         self._drag_slot = -1
         self._predraw()
+
+    # ------------------------------------------------------------------
+    # Mod note editor overlay
+    # ------------------------------------------------------------------
+
+    def show_notes_editor(self, mod_name: str, initial_text: str,
+                          on_save, on_remove) -> None:
+        """Show the mod-note editor over this panel. Replaces any existing overlay."""
+        from gui.mod_note_overlay import ModNoteOverlay
+
+        if self._notes_overlay is not None:
+            try:
+                self._notes_overlay.destroy()
+            except tk.TclError:
+                pass
+            self._notes_overlay = None
+
+        def _close():
+            if self._notes_overlay is not None:
+                try:
+                    self._notes_overlay.destroy()
+                except tk.TclError:
+                    pass
+                self._notes_overlay = None
+
+        self._notes_overlay = ModNoteOverlay(
+            self,
+            mod_name=mod_name,
+            initial_text=initial_text,
+            on_save=on_save,
+            on_remove=on_remove,
+            on_close=_close,
+        )
+        self._notes_overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._notes_overlay.lift()

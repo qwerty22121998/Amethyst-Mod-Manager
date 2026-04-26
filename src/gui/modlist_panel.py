@@ -130,6 +130,7 @@ from Utils.profile_state import (
     read_mod_strip_prefixes,
     read_disabled_plugins,
     read_excluded_mod_files,
+    read_mod_notes,
     read_ignored_missing_requirements,
     write_collapsed_seps,
     write_separator_locks,
@@ -139,6 +140,7 @@ from Utils.profile_state import (
     write_mod_strip_prefixes,
     write_disabled_plugins,
     write_excluded_mod_files,
+    write_mod_notes,
     write_ignored_missing_requirements,
 )
 from Nexus.nexus_api import NexusAPI, NexusAPIError, NexusModRequirement
@@ -351,6 +353,13 @@ class ModListPanel(ctk.CTkFrame):
             self._icon_root_folder = ImageTk.PhotoImage(
                 PilImage.open(_root_path).convert("RGBA").resize((_icon_sz, _icon_sz), PilImage.LANCZOS))
 
+        # Mod-note flag icon — shown when a mod has a note saved in profile_state
+        self._icon_note: ImageTk.PhotoImage | None = None
+        _note_path = _ICONS_DIR / "note.png"
+        if _note_path.is_file():
+            self._icon_note = ImageTk.PhotoImage(
+                PilImage.open(_note_path).convert("RGBA").resize((_icon_sz, _icon_sz), PilImage.LANCZOS))
+
         # Separator collapse/expand arrows (right = collapsed, arrow = expanded)
         self._icon_sep_right: ImageTk.PhotoImage | None = None
         self._icon_sep_arrow: ImageTk.PhotoImage | None = None
@@ -484,8 +493,10 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_fomod_only: bool = False
         self._filter_has_bsa: bool = False
         self._filter_categories: frozenset[str] = frozenset()  # when non-empty, show only these categories
+        self._filter_has_notes: bool = False
         self._disabled_plugins_map: dict[str, list[str]] = {}  # mod_name → [plugin, ...]
         self._excluded_mod_files_map: dict[str, list[str]] = {}  # mod_name → [rel_key, ...]
+        self._mod_notes_map: dict[str, str] = {}  # mod_name → note text (profile_state.json)
         self._visible_indices: list[int] = []  # entry indices matching current filter
         self._vis_dirty: bool = True           # True when _visible_indices needs recomputing
         self._priorities: dict[int, int] = {}  # entry index → priority number (cached)
@@ -532,6 +543,7 @@ class ModListPanel(ctk.CTkFrame):
         self._pool_flag_icon2: list[int] = []        # image canvas item ids (flags column, slot 2)
         self._pool_flag_icon3: list[int] = []        # image canvas item ids (flags column, slot 3)
         self._pool_flag_icon4: list[int] = []        # image canvas item ids (flags column, slot 4)
+        self._pool_flag_icon5: list[int] = []        # image canvas item ids (flags column, slot 5)
         self._pool_flag_star: list[int] = []         # text canvas item ids (lock star in flags column)
         self._pool_conflict_icon1: list[int] = []    # image canvas item ids (conflict col left)
         self._pool_conflict_icon2: list[int] = []    # image canvas item ids (conflict col right)
@@ -947,6 +959,7 @@ class ModListPanel(ctk.CTkFrame):
             ("filter_has_plugins",         "Show only mods with plugins"),
             ("filter_has_disabled_files",  "Show mods modified in Mod Files tab"),
             ("filter_has_updates",         "Show only mods with updates"),
+            ("filter_has_notes",           "Show only mods with notes"),
             ("filter_fomod_only",          "Show only FOMOD mods"),
             ("filter_has_bsa",             "Show only mods with BSA archives"),
         ]
@@ -1885,6 +1898,7 @@ class ModListPanel(ctk.CTkFrame):
             self._disabled_plugins_map = read_disabled_plugins(self._modlist_path.parent, self.__profile_state)
             _exc = read_excluded_mod_files(self._modlist_path.parent, self.__profile_state)
             self._excluded_mod_files_map = _exc or {}
+            self._mod_notes_map = read_mod_notes(self._modlist_path.parent, self.__profile_state)
         self._load_sep_locks()
         self._load_sep_colors()
         self._load_collapsed()
@@ -2040,6 +2054,7 @@ class ModListPanel(ctk.CTkFrame):
             flag2_id = c.create_image(0, -200, anchor="center", state="hidden")
             flag3_id = c.create_image(0, -200, anchor="center", state="hidden")
             flag4_id = c.create_image(0, -200, anchor="center", state="hidden")
+            flag5_id = c.create_image(0, -200, anchor="center", state="hidden")
             flag_star_id = c.create_text(0, -200, text="★", anchor="center", fill=TONE_FLAG,
                                          font=(_theme.FONT_FAMILY, _theme.FS11), state="hidden")
             # Conflict icons (left slot and right slot)
@@ -2083,6 +2098,7 @@ class ModListPanel(ctk.CTkFrame):
             self._pool_flag_icon2.append(flag2_id)
             self._pool_flag_icon3.append(flag3_id)
             self._pool_flag_icon4.append(flag4_id)
+            self._pool_flag_icon5.append(flag5_id)
             self._pool_flag_star.append(flag_star_id)
             self._pool_conflict_icon1.append(conf1_id)
             self._pool_conflict_icon2.append(conf2_id)
@@ -2489,6 +2505,7 @@ class ModListPanel(ctk.CTkFrame):
                         c.itemconfigure(self._pool_flag_icon2[s], state="hidden")
                         c.itemconfigure(self._pool_flag_icon3[s], state="hidden")
                         c.itemconfigure(self._pool_flag_icon4[s], state="hidden")
+                        c.itemconfigure(self._pool_flag_icon5[s], state="hidden")
                         c.itemconfigure(self._pool_flag_star[s], state="hidden")
                     elif is_overwrite:
                         # No conflict overrides — still show modified flag if present.
@@ -2509,6 +2526,7 @@ class ModListPanel(ctk.CTkFrame):
                         c.itemconfigure(self._pool_flag_icon2[s], state="hidden")
                         c.itemconfigure(self._pool_flag_icon3[s], state="hidden")
                         c.itemconfigure(self._pool_flag_icon4[s], state="hidden")
+                        c.itemconfigure(self._pool_flag_icon5[s], state="hidden")
                         c.itemconfigure(self._pool_flag_star[s], state="hidden")
                     elif _sep_is_collapsed:
                         # Aggregate conflict/flag state from all mods in this block
@@ -2617,6 +2635,10 @@ class ModListPanel(ctk.CTkFrame):
                             _be = self._entries[_bi]
                             if _be.is_separator:
                                 continue
+                            if (_be.name in self._mod_notes_map and self._icon_note
+                                    and "note" not in _seen_flag):
+                                _agg_flags.append(("img", self._icon_note))
+                                _seen_flag.add("note")
                             _has_missing = (_be.name in self._missing_reqs
                                            and _be.name not in self._ignored_missing_reqs)
                             if _has_missing and self._icon_warning and "warning" not in _seen_flag:
@@ -2639,11 +2661,11 @@ class ModListPanel(ctk.CTkFrame):
                             if _be.name in self._root_folder_mods and self._icon_root_folder and "root" not in _seen_flag:
                                 _agg_flags.append(("img", self._icon_root_folder))
                                 _seen_flag.add("root")
-                        # Only 4 image slots exist in the pool — cap before the
+                        # Only 5 image slots exist in the pool — cap before the
                         # star insert so later img flags can't push earlier ones
                         # off the end of the renderer.
-                        if len(_agg_flags) > 4:
-                            _agg_flags = _agg_flags[:4]
+                        if len(_agg_flags) > 5:
+                            _agg_flags = _agg_flags[:5]
                         # Insert star after warning if any locked mod exists
                         if _any_locked and "star" not in _seen_flag:
                             _ins = 1 if (_agg_flags and _agg_flags[0][0] == "img"
@@ -2658,6 +2680,7 @@ class ModListPanel(ctk.CTkFrame):
                             (self._pool_flag_icon2[s], "img"),
                             (self._pool_flag_icon3[s], "img"),
                             (self._pool_flag_icon4[s], "img"),
+                            (self._pool_flag_icon5[s], "img"),
                         ]
                         _flag_star_slot = self._pool_flag_star[s]
                         _n_flags = len(_agg_flags)
@@ -2694,6 +2717,7 @@ class ModListPanel(ctk.CTkFrame):
                         c.itemconfigure(self._pool_flag_icon2[s], state="hidden")
                         c.itemconfigure(self._pool_flag_icon3[s], state="hidden")
                         c.itemconfigure(self._pool_flag_icon4[s], state="hidden")
+                        c.itemconfigure(self._pool_flag_icon5[s], state="hidden")
                         c.itemconfigure(self._pool_flag_star[s], state="hidden")
 
                     # Hide other mod-only items on separators
@@ -2874,7 +2898,10 @@ class ModListPanel(ctk.CTkFrame):
 
                     # Flags column — collect ordered list of icons/items to show side by side.
                     # Each flag is a tuple: ("img", image_obj) or ("star",).
+                    # Note flag goes first so it's leftmost and never elided by the 5-slot cap.
                     _flags: list = []
+                    if entry.name in self._mod_notes_map and self._icon_note:
+                        _flags.append(("img", self._icon_note))
                     has_missing = (entry.name in self._missing_reqs
                                    and entry.name not in self._ignored_missing_reqs)
                     if has_missing and self._icon_warning:
@@ -2899,6 +2926,7 @@ class ModListPanel(ctk.CTkFrame):
                         (self._pool_flag_icon2[s], "img"),
                         (self._pool_flag_icon3[s], "img"),
                         (self._pool_flag_icon4[s], "img"),
+                        (self._pool_flag_icon5[s], "img"),
                     ]
                     _flag_star_slot = self._pool_flag_star[s]
                     # Centre the group within the column
@@ -3092,6 +3120,7 @@ class ModListPanel(ctk.CTkFrame):
                 c.itemconfigure(self._pool_flag_icon2[s], state="hidden")
                 c.itemconfigure(self._pool_flag_icon3[s], state="hidden")
                 c.itemconfigure(self._pool_flag_icon4[s], state="hidden")
+                c.itemconfigure(self._pool_flag_icon5[s], state="hidden")
                 c.itemconfigure(self._pool_flag_star[s], state="hidden")
                 c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
                 c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
@@ -3343,6 +3372,18 @@ class ModListPanel(ctk.CTkFrame):
                     if self._sep_block_has_disabled_plugins(i):
                         result.append(i)
                 elif entry.name in self._disabled_plugins_map:
+                    result.append(i)
+            base = result
+
+        # Step 4c1: notes filter (show only mods with a saved note)
+        if self._filter_has_notes:
+            result = []
+            for i in base:
+                entry = self._entries[i]
+                if entry.is_separator:
+                    if self._sep_block_has_notes(i):
+                        result.append(i)
+                elif entry.name in self._mod_notes_map:
                     result.append(i)
             base = result
 
@@ -3842,6 +3883,8 @@ class ModListPanel(ctk.CTkFrame):
                 has_missing = (entry.name in self._missing_reqs
                                and entry.name not in self._ignored_missing_reqs)
                 _items: list[str] = []
+                if entry.name in self._mod_notes_map:
+                    _items.append("note")
                 if has_missing:
                     _items.append("missing")
                 if entry.locked:
@@ -3863,7 +3906,10 @@ class ModListPanel(ctk.CTkFrame):
                     for _fi, _kind in enumerate(_items):
                         _fx = _fx_start + _fi * _FLAG_ICON_SPACING
                         if abs(event.x - _fx) <= _HIT_RADIUS:
-                            if _kind == "missing":
+                            if _kind == "note":
+                                self._open_note_editor_by_name(entry.name)
+                                return
+                            elif _kind == "missing":
                                 dep_names = self._missing_reqs_detail.get(entry.name, [])
                                 self._show_missing_reqs(entry.name, dep_names)
                                 return
@@ -4267,6 +4313,14 @@ class ModListPanel(ctk.CTkFrame):
                     return True
         return False
 
+    def _sep_block_has_notes(self, sep_idx: int) -> bool:
+        """True if this separator's block contains at least one mod with a note."""
+        for i in self._sep_block_range(sep_idx):
+            if not self._entries[i].is_separator:
+                if self._entries[i].name in self._mod_notes_map:
+                    return True
+        return False
+
     def _get_mods_with_plugins(self) -> set[str]:
         """Return the set of mod names that have at least one plugin (from plugin panel's filemap)."""
         app = self.winfo_toplevel()
@@ -4603,6 +4657,8 @@ class ModListPanel(ctk.CTkFrame):
                 has_missing = (entry.name in self._missing_reqs
                                and entry.name not in self._ignored_missing_reqs)
                 _items: list[str] = []
+                if entry.name in self._mod_notes_map:
+                    _items.append("note")
                 if has_missing:
                     _items.append("missing")
                 if entry.locked:
@@ -4623,7 +4679,12 @@ class ModListPanel(ctk.CTkFrame):
                     _fx_start = _FLAG_X + _FLAG_W // 2 - _group_w // 2
                     for _fi, _kind in enumerate(_items):
                         _fx = _fx_start + _fi * _FLAG_ICON_SPACING
-                        if _kind == "missing":
+                        if _kind == "note":
+                            _txt = self._mod_notes_map.get(entry.name, "")
+                            tip = (_txt[:500] + "…") if len(_txt) > 500 else _txt
+                            if not tip:
+                                tip = "Note"
+                        elif _kind == "missing":
                             missing = self._missing_reqs_detail.get(entry.name, [])
                             tip = ("Missing requirements:\n" + "\n".join(f"  - {m}" for m in missing)
                                    if missing else "Missing requirements")
@@ -4938,6 +4999,12 @@ class ModListPanel(ctk.CTkFrame):
                 and _ctx_meta is not None and _ctx_meta.mod_id > 0 and _ctx_meta.endorsed):
             menu.add_command("Abstain from Endorsement",
                 lambda: self._abstain_nexus_mod(_mod_name, _domain, _ctx_meta))
+
+        # Add note / Edit note  (single-select real mods only)
+        if _is_real_mod and not _is_multi:
+            _note_label = "Edit note" if _mod_name in self._mod_notes_map else "Add note"
+            menu.add_command(_note_label,
+                lambda mn=_mod_name: self._open_note_editor_by_name(mn))
 
         # Add separator above / Add separator below
         if not _is_multi:
@@ -5740,6 +5807,14 @@ class ModListPanel(ctk.CTkFrame):
                 except Exception as e:
                     self._log(f"Rename: failed to persist excluded mod files: {e}")
 
+        if old_name in self._mod_notes_map:
+            self._mod_notes_map[new_name] = self._mod_notes_map.pop(old_name)
+            if profile_dir is not None:
+                try:
+                    write_mod_notes(profile_dir, self._mod_notes_map)
+                except Exception as e:
+                    self._log(f"Rename: failed to persist mod notes: {e}")
+
     def rename_mod_by_name(self, old_name: str, new_name: str) -> bool:
         """Rename a mod by name (on disk + in-memory entry + persisted modlist).
         Returns True on success. Used by the post-install rename prompt so it
@@ -6532,6 +6607,40 @@ class ModListPanel(ctk.CTkFrame):
         if url:
             open_url(url)
             self._log(f"Nexus: Opened {url}")
+
+    def _open_note_editor_by_name(self, mod_name: str) -> None:
+        """Open the mod-note editor (overlay over the plugin panel) for a given mod."""
+        if self._modlist_path is None:
+            return
+        profile_dir = self._modlist_path.parent
+        initial = self._mod_notes_map.get(mod_name, "")
+
+        def _save(text: str):
+            text = text.strip()
+            if text:
+                self._mod_notes_map[mod_name] = text
+            else:
+                self._mod_notes_map.pop(mod_name, None)
+            try:
+                write_mod_notes(profile_dir, self._mod_notes_map)
+            except Exception as e:
+                self._log(f"Failed to save note for {mod_name}: {e}")
+            self._redraw()
+
+        def _remove():
+            self._mod_notes_map.pop(mod_name, None)
+            try:
+                write_mod_notes(profile_dir, self._mod_notes_map)
+            except Exception as e:
+                self._log(f"Failed to remove note for {mod_name}: {e}")
+            self._redraw()
+
+        app = self.winfo_toplevel()
+        pp = getattr(app, "_plugin_panel", None)
+        if pp is None or not hasattr(pp, "show_notes_editor"):
+            self._log("Cannot open note editor: plugin panel unavailable.")
+            return
+        pp.show_notes_editor(mod_name, initial, _save, _remove)
 
     def _show_missing_reqs(self, mod_name: str, dep_names: list[str]) -> None:
         """Show missing requirements as an inline overlay over the plugin panel."""
@@ -7743,6 +7852,7 @@ class ModListPanel(ctk.CTkFrame):
         self._fsp_vars["filter_has_plugins"].set(self._filter_has_plugins)
         self._fsp_vars["filter_has_disabled_files"].set(self._filter_has_disabled_files)
         self._fsp_vars["filter_has_updates"].set(self._filter_has_updates)
+        self._fsp_vars["filter_has_notes"].set(self._filter_has_notes)
         self._fsp_vars["filter_fomod_only"].set(self._filter_fomod_only)
         self._fsp_vars["filter_has_bsa"].set(self._filter_has_bsa)
         self._refresh_filter_category_list()
@@ -7797,6 +7907,7 @@ class ModListPanel(ctk.CTkFrame):
         self._filter_has_plugins = state.get("filter_has_plugins", False)
         self._filter_has_disabled_files = state.get("filter_has_disabled_files", False)
         self._filter_has_updates = state.get("filter_has_updates", False)
+        self._filter_has_notes = state.get("filter_has_notes", False)
         self._filter_fomod_only = state.get("filter_fomod_only", False)
         self._filter_has_bsa = state.get("filter_has_bsa", False)
         self._filter_categories = state.get("filter_categories") or frozenset()
@@ -7818,6 +7929,7 @@ class ModListPanel(ctk.CTkFrame):
             or self._filter_has_plugins
             or self._filter_has_disabled_files
             or self._filter_has_updates
+            or self._filter_has_notes
             or self._filter_fomod_only
             or self._filter_has_bsa
             or bool(self._filter_categories)

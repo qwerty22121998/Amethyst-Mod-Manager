@@ -45,6 +45,7 @@ def _default_state():
         "filter_has_disabled_plugins": False,
         "filter_has_plugins": False,
         "filter_has_updates": False,
+        "filter_has_notes": False,
     }
 
 
@@ -109,6 +110,7 @@ class ModlistFiltersDialog(ctk.CTkToplevel):
             ("filter_has_disabled_plugins", "Show only mods with disabled plugins"),
             ("filter_has_plugins", "Show only mods with plugins"),
             ("filter_has_updates", "Show only mods with updates available"),
+            ("filter_has_notes", "Show only mods with notes"),
         ]
 
         self._vars = {}
