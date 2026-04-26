@@ -848,14 +848,14 @@ class Ue5CustomGame(UE5Game):
             UE5Rule(dest="", folder="binaries"),
             UE5Rule(dest="", folder="content"),
             # Lua UE4SS scripts and companion files (config.ini, data .json)
-            # → Binaries/Win64/Mods/
+            # → Binaries/Win64/ue4ss/Mods/
             UE5Rule(
-                dest="Binaries/Win64/Mods",
+                dest="Binaries/Win64/ue4ss/Mods",
                 extensions=[".lua", ".ini", ".json"],
                 filenames=["enabled.txt"],
                 strip=[
-                    "Binaries/Win64/Mods",
                     "Binaries/Win64/ue4ss/Mods",
+                    "Binaries/Win64/Mods",
                     "Binaries/Win64/ue4ss",
                     "ue4ss/Mods",
                     "UE4SS/Mods",
