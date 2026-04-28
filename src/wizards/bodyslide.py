@@ -17,6 +17,7 @@ Workflow
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -63,8 +64,9 @@ def find_deployed_exe(game: "BaseGame", exe_name: str) -> Path | None:
 
 class _BodySlideBaseWizard(ctk.CTkFrame):
 
-    _wizard_title = ""   # overridden by subclasses
-    _exe_name     = ""   # overridden by subclasses
+    _wizard_title    = ""   # overridden by subclasses
+    _exe_name        = ""   # overridden by subclasses
+    _output_mod_name = ""   # overridden by subclasses — empty mod created to capture output
 
     def __init__(
         self,
@@ -154,6 +156,100 @@ class _BodySlideBaseWizard(ctk.CTkFrame):
             env.setdefault("SteamGameId", steam_id)
 
         return proton_script, env, prefix_path
+
+    @staticmethod
+    def _to_wine_path(p: Path) -> str:
+        s = str(p).replace("/", "\\")
+        if not s.startswith("\\"):
+            s = "\\" + s
+        return "Z:" + s + "\\"
+
+    def _ensure_output_mod(self) -> Path:
+        staging = self._game.get_effective_mod_staging_path()
+        mod_dir = staging / self._output_mod_name
+        mod_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            root_win = self.winfo_toplevel()
+            profile  = root_win._topbar._profile_var.get()
+        except Exception:
+            profile = "default"
+
+        modlist_path = self._game.get_profile_root() / "profiles" / profile / "modlist.txt"
+        if modlist_path.is_file():
+            from Utils.modlist import read_modlist, prepend_mod
+            entries = read_modlist(modlist_path)
+            if not any(e.name == self._output_mod_name for e in entries):
+                prepend_mod(modlist_path, self._output_mod_name, enabled=True)
+
+        return mod_dir
+
+    def _config_xml_path(self, base: Path) -> Path | None:
+        direct = base / "CalienteTools" / "BodySlide" / "Config.xml"
+        if direct.is_file():
+            return direct
+        for cand in base.rglob("Config.xml"):
+            if cand.is_file() and cand.parent.name.lower() == "bodyslide":
+                return cand
+        return None
+
+    def _update_output_path_in_config(self, config_path: Path, output_dir: Path) -> bool:
+        try:
+            text = config_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        wine = self._to_wine_path(output_dir)
+        new_tag = f"<OutputDataPath>{wine}</OutputDataPath>"
+        if re.search(r"<OutputDataPath>.*?</OutputDataPath>", text, flags=re.DOTALL):
+            updated = re.sub(
+                r"<OutputDataPath>.*?</OutputDataPath>",
+                lambda _m: new_tag,
+                text,
+                count=1,
+                flags=re.DOTALL,
+            )
+        else:
+            updated = text.replace("</Config>", f"    {new_tag}\n</Config>", 1)
+        if updated == text:
+            return True
+        try:
+            config_path.write_text(updated, encoding="utf-8")
+        except OSError:
+            return False
+        return True
+
+    def _apply_output_redirect(self, *, post_deploy: bool) -> None:
+        try:
+            output_mod = self._ensure_output_mod()
+        except OSError as exc:
+            self._log(f"{self._wizard_title} Wizard: could not create '{self._output_mod_name}': {exc}")
+            return
+
+        staging = self._game.get_effective_mod_staging_path()
+        source_cfg = None
+        for sub in staging.iterdir() if staging.is_dir() else []:
+            if not sub.is_dir():
+                continue
+            cand = self._config_xml_path(sub)
+            if cand is not None:
+                source_cfg = cand
+                break
+
+        if source_cfg is not None:
+            if self._update_output_path_in_config(source_cfg, output_mod):
+                self._log(
+                    f"{self._wizard_title} Wizard: set OutputDataPath → "
+                    f"{self._to_wine_path(output_mod)} (source)"
+                )
+
+        if post_deploy:
+            data_path = self._game.get_mod_data_path()
+            if data_path is not None and data_path.is_dir():
+                deployed_cfg = self._config_xml_path(data_path)
+                if deployed_cfg is not None and (
+                    source_cfg is None or deployed_cfg.resolve() != source_cfg.resolve()
+                ):
+                    self._update_output_path_in_config(deployed_cfg, output_mod)
 
     def _on_done(self):
         try:
@@ -267,6 +363,11 @@ class _BodySlideBaseWizard(ctk.CTkFrame):
                 game.get_profile_root() / "profiles" / profile
             )
 
+            # Make sure the output-capture mod exists, is enabled in the
+            # modlist, and the staging Config.xml points OutputDataPath at it.
+            # Done before build_filemap so the empty mod is included in deploy.
+            self._apply_output_redirect(post_deploy=False)
+
             profile_root = game.get_profile_root()
             staging      = game.get_effective_mod_staging_path()
             modlist_path = profile_root / "profiles" / profile / "modlist.txt"
@@ -354,6 +455,13 @@ class _BodySlideBaseWizard(ctk.CTkFrame):
         threading.Thread(target=lambda: self._do_run(exe), daemon=True).start()
 
     def _do_run(self, exe: Path):
+        # Re-apply in case the user skipped deploy, and patch the deployed
+        # copy directly when deploy mode produced an independent file.
+        try:
+            self._apply_output_redirect(post_deploy=True)
+        except Exception as exc:
+            self._log(f"{self._wizard_title} Wizard: output redirect failed: {exc}")
+
         proton_script, env, _prefix = self._get_proton_env()
         if proton_script is None:
             self._set_label(
@@ -392,10 +500,12 @@ class _BodySlideBaseWizard(ctk.CTkFrame):
 # ---------------------------------------------------------------------------
 
 class BodySlideWizard(_BodySlideBaseWizard):
-    _wizard_title = "BodySlide"
-    _exe_name     = "BodySlide x64.exe"
+    _wizard_title    = "BodySlide"
+    _exe_name        = "BodySlide x64.exe"
+    _output_mod_name = "BodySlide_files"
 
 
 class OutfitStudioWizard(_BodySlideBaseWizard):
-    _wizard_title = "Outfit Studio"
-    _exe_name     = "OutfitStudio x64.exe"
+    _wizard_title    = "Outfit Studio"
+    _exe_name        = "OutfitStudio x64.exe"
+    _output_mod_name = "OutfitStudio_files"
