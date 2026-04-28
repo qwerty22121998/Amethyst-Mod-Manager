@@ -94,8 +94,8 @@ class SkyrimSE(Fallout_3):
         return "SkyrimSE"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/skyrimse/v0.21/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "skyrimse"
 
     @property
     def frameworks(self) -> dict[str, str]:

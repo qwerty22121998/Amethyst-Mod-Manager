@@ -112,8 +112,8 @@ class OblivionRemastered(UE5Game):
         return "Binaries/Win64/obse64_loader.exe"
     
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/oblivion-remastered/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "oblivion-remastered"
 
     # -----------------------------------------------------------------------
     # UE5 routing rules

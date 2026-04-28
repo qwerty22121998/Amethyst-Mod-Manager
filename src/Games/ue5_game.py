@@ -398,6 +398,308 @@ class UE5Game(BaseGame):
         return dest, final_rel
 
     # -----------------------------------------------------------------------
+    # UE4SS mods.txt management
+    # -----------------------------------------------------------------------
+
+    def _resolve_ue4ss_mods_dest(self) -> str | None:
+        """Return the game-root-relative dir where UE4SS lua mods land.
+
+        Detected by walking ``ue5_routing_rules`` for a rule whose ``dest``
+        ends in ``Mods`` (case-insensitive) and whose ``extensions`` include
+        ``.lua``.  Returns the dest string (e.g. ``"Binaries/Win64/Mods"``
+        or ``"Binaries/Win64/ue4ss/Mods"``) or ``None`` if no UE4SS lua
+        rule is configured.
+        """
+        for rule in self.ue5_routing_rules:
+            if not rule.dest:
+                continue
+            dest_norm = rule.dest.replace("\\", "/").rstrip("/")
+            if not dest_norm.lower().endswith("/mods") and dest_norm.lower() != "mods":
+                continue
+            exts_lower = {e.lower() for e in rule.extensions}
+            if ".lua" in exts_lower:
+                return dest_norm
+        return None
+
+    @staticmethod
+    def _parse_mods_txt_line(line: str) -> tuple[str | None, bool | None]:
+        """Parse a ``<folder> : <0|1>`` line.  Returns (folder, enabled) or
+        (None, None) for blank/comment/unrecognised lines."""
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";") or stripped.startswith("#"):
+            return None, None
+        if ":" not in stripped:
+            return None, None
+        name_part, _, val_part = stripped.partition(":")
+        name = name_part.strip()
+        val = val_part.strip()
+        if not name or val not in ("0", "1"):
+            return None, None
+        return name, val == "1"
+
+    def _collect_ue4ss_disabled_consensus(
+        self, staging: Path, mod_names: list[str],
+        index: dict[str, tuple[dict[str, str], dict[str, str]]] | None = None,
+    ) -> set[str]:
+        """Scan staged mod folders for ``mods.txt`` files and return the set
+        of folder names that should default to ``: 0``.
+
+        A folder defaults to disabled iff it appears in at least one source
+        ``mods.txt`` AND every source that mentions it sets it to ``0``.
+        Any ``: 1`` mention flips it to enabled. Folders not mentioned in
+        any source default to enabled.
+
+        ``index`` is the modindex.bin contents (mod_name → (normal_files,
+        root_files), each a {rel_key: rel_str} dict). When provided, we use
+        it to locate ``Mods/mods.txt`` files without walking disk; only the
+        handful of matching files are actually opened. Falls back to
+        ``rglob`` if the index isn't available.
+
+        Returns a set of lowercased folder names.
+        """
+        # Per-folder counts: lowered_folder_name -> [mentions, zero_mentions]
+        counts: dict[str, list[int]] = {}
+
+        def _ingest(text: str) -> None:
+            for line in text.splitlines():
+                folder, enabled = self._parse_mods_txt_line(line)
+                if folder is None:
+                    continue
+                slot = counts.setdefault(folder.lower(), [0, 0])
+                slot[0] += 1
+                if not enabled:
+                    slot[1] += 1
+
+        mod_set = set(mod_names)
+        used_index = False
+        if index is not None:
+            used_index = True
+            for mod_name in mod_names:
+                entry = index.get(mod_name)
+                if entry is None:
+                    continue
+                normal_files, root_files = entry
+                # rel_key is lowercased — match endings like "/mods/mods.txt"
+                # or exactly "mods/mods.txt" (no leading slash).
+                for rel_key, rel_str in normal_files.items():
+                    if not (rel_key.endswith("/mods/mods.txt") or rel_key == "mods/mods.txt"):
+                        continue
+                    src = staging / mod_name / rel_str
+                    try:
+                        _ingest(src.read_text(encoding="utf-8", errors="replace"))
+                    except OSError:
+                        continue
+
+        if not used_index:
+            # Fallback: rglob each mod root. Slower; only used when the
+            # modindex.bin isn't available.
+            for mod_name in mod_names:
+                mod_root = staging / mod_name
+                if not mod_root.is_dir():
+                    continue
+                try:
+                    for p in mod_root.rglob("mods.txt"):
+                        if not p.is_file():
+                            continue
+                        if p.parent.name.lower() != "mods":
+                            continue
+                        try:
+                            _ingest(p.read_text(encoding="utf-8", errors="replace"))
+                        except OSError:
+                            continue
+                except OSError:
+                    continue
+
+        return {k for k, (mentions, zeros) in counts.items()
+                if mentions > 0 and mentions == zeros}
+
+    def _update_ue4ss_mods_txt(
+        self,
+        deployed_folder_names: set[str],
+        disabled_folders: set[str] | None = None,
+        log_fn=None,
+    ) -> None:
+        """Sync ``mods.txt`` to reflect the currently deployed UE4SS lua mods.
+
+        ``disabled_folders`` (case-insensitive lowercased names) — fresh
+        entries written for folders in this set get ``: 0`` instead of
+        ``: 1``. Existing lines in the file are preserved as-is, so the
+        user's manual edits survive.
+        """
+        _log = log_fn or (lambda _: None)
+
+        dest_rel = self._resolve_ue4ss_mods_dest()
+        if dest_rel is None:
+            return
+        if self._game_path is None:
+            return
+        game_path = self.get_game_path()
+        if game_path is None:
+            return
+
+        mods_file = game_path / dest_rel / "mods.txt"
+
+        existing_lines: list[str] = []
+        if mods_file.is_file():
+            try:
+                raw = mods_file.read_text(encoding="utf-8", errors="replace")
+                existing_lines = raw.splitlines()
+            except OSError as exc:
+                _log(f"  WARN: could not read {mods_file}: {exc}")
+                return
+
+        deployed_lower = {n.lower() for n in deployed_folder_names}
+        disabled_lower = {n.lower() for n in (disabled_folders or set())}
+
+        def _entry_for(name: str) -> str:
+            return f"{name} : {'0' if name.lower() in disabled_lower else '1'}"
+
+        out_lines: list[str] = []
+        seen_lower: set[str] = set()
+
+        # Track Keybinds separately — UE4SS requires it loaded last (the
+        # shipped file has a "; Built-in keybinds, do not move up!" comment
+        # above it). We always force it to the bottom regardless of where
+        # it appeared in the source file.
+        keybinds_line: str | None = None
+        keybinds_deployed = "keybinds" in deployed_lower
+
+        for line in existing_lines:
+            folder, _enabled = self._parse_mods_txt_line(line)
+            if folder is None:
+                # Comment / blank / unrecognised — keep as-is
+                out_lines.append(line)
+                continue
+            f_lower = folder.lower()
+            if f_lower in seen_lower:
+                # Duplicate of an entry we've already emitted — drop
+                continue
+            if f_lower == "keybinds":
+                # Defer Keybinds to end-of-file
+                if keybinds_deployed and keybinds_line is None:
+                    keybinds_line = line
+                seen_lower.add(f_lower)
+                continue
+            if f_lower in deployed_lower:
+                # Managed entry, still deployed — keep, mark as seen
+                out_lines.append(line)
+                seen_lower.add(f_lower)
+            # Else: managed entry whose mod is no longer deployed — drop
+
+        # Strip any trailing blank lines / comments left after Keybinds was
+        # pulled out (so we don't double the trailing blank when re-appending).
+        while out_lines and (
+            not out_lines[-1].strip()
+            or out_lines[-1].lstrip().startswith(";")
+            or out_lines[-1].lstrip().startswith("#")
+        ):
+            # Only strip trailing blanks/comments if Keybinds is going to be
+            # appended; otherwise leave them alone.
+            if not keybinds_deployed:
+                break
+            out_lines.pop()
+
+        # Append regular new entries (everything except Keybinds). Default
+        # state honours disabled_folders (consensus from source mods.txt).
+        new_names = sorted(
+            n for n in deployed_folder_names
+            if n.lower() not in seen_lower and n.lower() != "keybinds"
+        )
+        out_lines.extend(_entry_for(n) for n in new_names)
+
+        # Append Keybinds last with the standard header comment.
+        if keybinds_deployed:
+            out_lines.append("")
+            out_lines.append("; Built-in keybinds, do not move up!")
+            # Preserve the original Keybinds line if it had a custom state
+            # (e.g. user disabled it), else use the consensus default.
+            keybinds_name = next(
+                (n for n in deployed_folder_names if n.lower() == "keybinds"),
+                "Keybinds",
+            )
+            out_lines.append(keybinds_line if keybinds_line else _entry_for(keybinds_name))
+
+        # If nothing remains (no deployed mods, no preserved user content),
+        # delete the file so the empty-dir sweep can clean up the parent.
+        if not out_lines:
+            if mods_file.is_file():
+                try:
+                    mods_file.unlink()
+                    _log("  Removed empty UE4SS mods.txt")
+                except OSError as exc:
+                    _log(f"  WARN: could not remove {mods_file}: {exc}")
+            return
+
+        new_content = "\r\n".join(out_lines) + "\r\n"
+
+        # Skip the write if nothing changed (avoids touching mtime needlessly).
+        if mods_file.is_file():
+            try:
+                if mods_file.read_bytes() == new_content.encode("utf-8"):
+                    return
+            except OSError:
+                pass
+
+        try:
+            mods_file.parent.mkdir(parents=True, exist_ok=True)
+            mods_file.write_text(new_content, encoding="utf-8", newline="")
+            _log(f"  Updated UE4SS mods.txt ({len(deployed_folder_names)} entries)")
+        except OSError as exc:
+            _log(f"  WARN: could not write {mods_file}: {exc}")
+
+    def _collect_deployed_ue4ss_folders(
+        self, manifest: list[str], dest_rel: str,
+    ) -> set[str]:
+        """From a deploy manifest, find folder names directly under ``dest_rel``
+        that should get a ``mods.txt`` entry.
+
+        Filters applied (post-deploy, against the live game tree):
+          - Skip if the folder contains ``enabled.txt`` (UE4SS auto-loads via
+            the per-folder marker — duplicate entry is unnecessary).
+          - Skip if the folder doesn't contain ``Scripts/main.lua`` (UE4SS
+            only treats folders with a main.lua as actual mods; everything
+            else is library/shared code).
+
+        Manifest entries are game-root-relative (custom-dir absolute entries
+        are skipped — UE4SS lua mods always land in the game tree).
+        """
+        prefix = dest_rel.replace("\\", "/").strip("/").lower() + "/"
+        candidate_folders: set[str] = set()
+        for entry in manifest:
+            if not entry:
+                continue
+            if Path(entry).is_absolute():
+                continue
+            norm = entry.replace("\\", "/").lstrip("/")
+            if not norm.lower().startswith(prefix):
+                continue
+            tail = norm[len(prefix):]
+            first_seg, _, rest = tail.partition("/")
+            if not first_seg or not rest:
+                # Loose file directly in the Mods dir (not a mod folder) — skip
+                continue
+            candidate_folders.add(first_seg)
+
+        # Filter against the live game tree: folder must have Scripts/main.lua
+        # and must NOT have enabled.txt.
+        if self._game_path is None:
+            return candidate_folders
+        game_path = self.get_game_path()
+        if game_path is None:
+            return candidate_folders
+        mods_root = game_path / dest_rel
+
+        kept: set[str] = set()
+        for folder in candidate_folders:
+            folder_dir = mods_root / folder
+            if (folder_dir / "enabled.txt").is_file():
+                continue
+            if not (folder_dir / "Scripts" / "main.lua").is_file():
+                continue
+            kept.add(folder)
+        return kept
+
+    # -----------------------------------------------------------------------
     # Deploy
     # -----------------------------------------------------------------------
 
@@ -489,8 +791,26 @@ class UE5Game(BaseGame):
         deploy_order = list(resolved_by_dest.values())
         total = len(deploy_order)
 
+        # The managed UE4SS mods.txt path — we own this file entirely; skip
+        # any mod-shipped copy from being placed at this exact location.
+        ue4ss_dest_rel = self._resolve_ue4ss_mods_dest()
+        managed_mods_txt: Path | None = (
+            game_path / ue4ss_dest_rel / "mods.txt"
+            if ue4ss_dest_rel is not None else None
+        )
+
         for i, (_rank, staged_rel, mod_name, final_rel,
                 dest_dir, dest_file, in_custom_dir, dest_rel) in enumerate(deploy_order):
+
+            # Skip mod-shipped mods.txt at the managed location — we generate
+            # the canonical file ourselves after the deploy loop, so placing
+            # a mod's copy here would just be overwritten and creates churn
+            # in the vanilla-backup logic.
+            if (managed_mods_txt is not None and not in_custom_dir
+                    and dest_file == managed_mods_txt):
+                if progress_fn:
+                    progress_fn(i + 1, total)
+                continue
 
             src = self._find_staged_file(
                 staging, mod_name, staged_rel,
@@ -551,6 +871,29 @@ class UE5Game(BaseGame):
         # Write manifest so restore() knows exactly what to remove
         manifest_path = self.get_profile_root() / _DEPLOYED_MANIFEST
         manifest_path.write_text("\n".join(manifest), encoding="utf-8")
+
+        # Sync UE4SS mods.txt for games that need it (Palworld-style loaders
+        # which require an explicit enable list rather than per-folder enabled.txt).
+        ue4ss_dest = self._resolve_ue4ss_mods_dest()
+        if ue4ss_dest is not None:
+            try:
+                folders = self._collect_deployed_ue4ss_folders(manifest, ue4ss_dest)
+                # Build the disabled-by-consensus set from every source
+                # mods.txt across staging — a folder defaults to ``: 0`` only
+                # if every mod that mentions it sets it to 0. Reuses the
+                # cached modindex.bin to avoid walking disk per mod.
+                from Utils.filemap import read_mod_index as _read_mod_index
+                _index = _read_mod_index(filemap.parent / "modindex.bin")
+                enabled_mods = [
+                    e.name for e in read_modlist(modlist_path)
+                    if e.enabled and not e.is_separator
+                ]
+                disabled = self._collect_ue4ss_disabled_consensus(
+                    staging, enabled_mods, index=_index,
+                )
+                self._update_ue4ss_mods_txt(folders, disabled_folders=disabled, log_fn=_log)
+            except Exception as exc:
+                _log(f"  WARN: could not update UE4SS mods.txt: {exc}")
 
         # Snapshot the game root so restore() can identify runtime-generated files
         # (saves, shader cache, config files written by the game after launch).
@@ -666,6 +1009,18 @@ class UE5Game(BaseGame):
                             p = p.parent
                 except OSError as exc:
                     _log(f"  WARN: could not remove {rel}: {exc}")
+
+        # Strip our managed UE4SS mods.txt entries — leaves user sentinels intact,
+        # or removes the file entirely if nothing else is left.
+        ue4ss_dest = self._resolve_ue4ss_mods_dest()
+        if ue4ss_dest is not None:
+            try:
+                self._update_ue4ss_mods_txt(set(), log_fn=_log)
+                # Add the mods dir to the empty-dir sweep set so it can be
+                # cleaned up if mods.txt was removed and nothing else remains.
+                dirs_to_check.add(game_path / ue4ss_dest)
+            except Exception as exc:
+                _log(f"  WARN: could not clean UE4SS mods.txt: {exc}")
 
         # Restore any vanilla files that were displaced during deploy
         vanilla_backup_dir = (self._game_path or game_path) / _VANILLA_BACKUP_DIR

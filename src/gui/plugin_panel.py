@@ -1425,6 +1425,7 @@ class PluginPanel(ctk.CTkFrame):
                             excluded_mod_files=_exc,
                             conflict_ignore_filenames=getattr(game, "conflict_ignore_filenames", None) or None,
                             exclude_dirs=getattr(game, "filemap_exclude_dirs", None) or None,
+                            filemap_casing=getattr(game, "filemap_casing", "upper"),
                         )
                     except Exception as fm_err:
                         _tlog(f"Run EXE: filemap rebuild warning: {fm_err}")
@@ -5671,6 +5672,7 @@ class PluginPanel(ctk.CTkFrame):
         _game_id = game.game_id
         _game_type_attr = game.loot_game_type
         _masterlist_url = game.loot_masterlist_url
+        _masterlist_repo = getattr(game, "loot_masterlist_repo", "")
         _game_data_dir = (game.get_vanilla_plugins_path()
                           if hasattr(game, "get_vanilla_plugins_path") else None)
 
@@ -5700,6 +5702,7 @@ class PluginPanel(ctk.CTkFrame):
                     game_type_attr=_game_type_attr,
                     game_id=_game_id,
                     masterlist_url=_masterlist_url,
+                    masterlist_repo=_masterlist_repo,
                     game_data_dir=_game_data_dir,
                     userlist_path=userlist_path,
                 )

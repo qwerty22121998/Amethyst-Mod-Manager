@@ -437,6 +437,28 @@ class BaseGame(ABC):
         return True
 
     @property
+    def filemap_casing(self) -> str:
+        """
+        How to pick the canonical casing for folders/filenames in the filemap
+        when ``normalize_folder_case`` is True. Ignored when normalization is
+        off. One of:
+
+          "upper"        — prefer the variant with more uppercase letters
+                           (default; correct for most Windows-shipped mods).
+          "lower"        — prefer the variant with more lowercase letters
+                           (Cyberpunk 2077: REDengine reads ``archive/pc/mod``
+                           lowercase — using ``Mod`` for one mod and ``mod``
+                           for another would split into two real dirs on
+                           case-sensitive Linux filesystems).
+          "force_lower"  — every folder segment is lowercased regardless of
+                           how mod authors shipped it. Filenames untouched.
+          "force_upper"  — every folder segment is uppercased. Filenames
+                           untouched. Mostly here for symmetry — rarely
+                           useful in practice.
+        """
+        return "upper"
+
+    @property
     def mod_staging_requires_subdir(self) -> bool:
         """
         When True, each mod's staging folder must contain a named subdirectory
@@ -617,10 +639,27 @@ class BaseGame(ABC):
         return ""
 
     @property
+    def loot_masterlist_repo(self) -> str:
+        """
+        Repo slug under github.com/loot/ that hosts this game's masterlist
+        (e.g. 'skyrimse', 'fallout4', 'fallout4vr').
+
+        When set, the masterlist URL is built dynamically to match the bundled
+        libloot version (loot_sorter.masterlist_url_for_repo), with a
+        walk-down fallback to the most recent available branch. This is the
+        preferred way to declare masterlist hosting — `loot_masterlist_url`
+        is kept as a legacy fallback for repos that don't follow the
+        standard branch-per-libloot-version convention.
+
+        Return an empty string to use `loot_masterlist_url` instead.
+        """
+        return ""
+
+    @property
     def loot_masterlist_url(self) -> str:
         """
-        URL to download the LOOT masterlist YAML for this game.
-        Only used when loot_sort_enabled is True.
+        Legacy: full URL to download the LOOT masterlist YAML for this game.
+        Only used as a fallback when `loot_masterlist_repo` is not set.
         e.g. 'https://raw.githubusercontent.com/loot/skyrimse/v0.21/masterlist.yaml'
         The masterlist is stored as ~/.config/AmethystModManager/LOOT/data/masterlist_<game_id>.yaml.
         Return an empty string if no masterlist URL is known.
