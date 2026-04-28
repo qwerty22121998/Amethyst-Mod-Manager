@@ -1,3 +1,10 @@
+- v1.2.14
+- Fixed staged folders not being found when deploying with cyberpunk
+- Fixed web/file browsers not opening in the flatpak build
+- added mods.txt handling for ue5 games
+- Collections now use download/open from the specified domain name in the manifest. Fixes Enderal mods downloading from the wrong domain.
+- Updated loot masterlist downloads to always download from the latest branch
+
 - v1.2.13
 - Fixed instances of collections installing the wrong mod if a cached mod happened to have the same fileid caused in the last update
 - Fixed some inconsistency between deploy types related to routing rules caused in the previous update
