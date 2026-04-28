@@ -861,27 +861,29 @@ class CustomGamePanel(ctk.CTkFrame):
             # Column headers
             hdr = ctk.CTkFrame(container, fg_color="transparent", height=20)
             hdr.grid(row=0, column=0, sticky="ew")
-            hdr.grid_columnconfigure(0, weight=1)
-            hdr.grid_columnconfigure(1, weight=0, minsize=108)
-            hdr.grid_columnconfigure(2, weight=1)
-            hdr.grid_columnconfigure(3, weight=0)
+            hdr.grid_columnconfigure(0, weight=0, minsize=24)
+            hdr.grid_columnconfigure(1, weight=1)
+            hdr.grid_columnconfigure(2, weight=0, minsize=108)
+            hdr.grid_columnconfigure(3, weight=1)
             hdr.grid_columnconfigure(4, weight=0)
             hdr.grid_columnconfigure(5, weight=0)
+            hdr.grid_columnconfigure(6, weight=0)
             ctk.CTkLabel(hdr, text="Path", font=FONT_SMALL, text_color=TEXT_DIM,
-                         anchor="w").grid(row=0, column=0, sticky="w", padx=(6, 0))
+                         anchor="w").grid(row=0, column=1, sticky="w", padx=(6, 0))
             ctk.CTkLabel(hdr, text="Match Value", font=FONT_SMALL, text_color=TEXT_DIM,
-                         anchor="w").grid(row=0, column=2, sticky="w", padx=(4, 0))
+                         anchor="w").grid(row=0, column=3, sticky="w", padx=(4, 0))
             self._routing_rules_header = hdr
         row_idx = len(self._routing_rules_rows) + 1  # +1 for header row
 
         row_frame = ctk.CTkFrame(container, fg_color=BG_ROW, corner_radius=4, height=36)
         row_frame.grid(row=row_idx, column=0, sticky="ew", pady=2)
-        row_frame.grid_columnconfigure(0, weight=1)
-        row_frame.grid_columnconfigure(1, weight=0)
-        row_frame.grid_columnconfigure(2, weight=1)
-        row_frame.grid_columnconfigure(3, weight=0)
+        row_frame.grid_columnconfigure(0, weight=0)
+        row_frame.grid_columnconfigure(1, weight=1)
+        row_frame.grid_columnconfigure(2, weight=0)
+        row_frame.grid_columnconfigure(3, weight=1)
         row_frame.grid_columnconfigure(4, weight=0)
         row_frame.grid_columnconfigure(5, weight=0)
+        row_frame.grid_columnconfigure(6, weight=0)
 
         dest_var    = tk.StringVar(value=dest)
         type_var    = tk.StringVar(value=match_type)
@@ -889,47 +891,67 @@ class CustomGamePanel(ctk.CTkFrame):
         loose_var   = tk.BooleanVar(value=loose_only)
         flatten_var = tk.BooleanVar(value=flatten)
 
+        # Up/Down reorder buttons (stacked)
+        reorder = ctk.CTkFrame(row_frame, fg_color="transparent", width=22, height=30)
+        reorder.grid(row=0, column=0, padx=(4, 2), pady=2)
+        reorder.grid_propagate(False)
+        up_btn = ctk.CTkButton(
+            reorder, text="▲", width=22, height=14, font=FONT_SMALL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            corner_radius=3,
+        )
+        up_btn.place(x=0, y=0)
+        down_btn = ctk.CTkButton(
+            reorder, text="▼", width=22, height=14, font=FONT_SMALL,
+            fg_color=BG_HEADER, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            corner_radius=3,
+        )
+        down_btn.place(x=0, y=16)
+
         ctk.CTkEntry(
             row_frame, textvariable=dest_var, font=FONT_MONO,
             fg_color=BG_DEEP, text_color=TEXT_MAIN, border_color=BORDER,
             placeholder_text="dest (e.g. pak_mods)", width=140,
-        ).grid(row=0, column=0, sticky="ew", padx=(6, 4), pady=4)
+        ).grid(row=0, column=1, sticky="ew", padx=(2, 4), pady=4)
 
         ctk.CTkOptionMenu(
             row_frame, variable=type_var, values=["extensions", "folders", "filenames"],
             font=FONT_SMALL, fg_color=BG_DEEP, text_color=TEXT_MAIN,
             button_color=BG_HEADER, button_hover_color=BG_HOVER, width=100,
-        ).grid(row=0, column=1, padx=2, pady=4)
+        ).grid(row=0, column=2, padx=2, pady=4)
 
         ctk.CTkEntry(
             row_frame, textvariable=value_var, font=FONT_MONO,
             fg_color=BG_DEEP, text_color=TEXT_MAIN, border_color=BORDER,
             placeholder_text="e.g. .pak, .utoc   ·   .asi (.ini) routes same-stem .ini alongside each .asi",
             width=140,
-        ).grid(row=0, column=2, sticky="ew", padx=(4, 4), pady=4)
+        ).grid(row=0, column=3, sticky="ew", padx=(4, 4), pady=4)
 
         ctk.CTkSwitch(
             row_frame, text="Loose only", variable=loose_var,
             font=FONT_SMALL, text_color=TEXT_MAIN,
             fg_color=BG_DEEP, progress_color=ACCENT, width=40,
-        ).grid(row=0, column=3, padx=(4, 2), pady=4)
+        ).grid(row=0, column=4, padx=(4, 2), pady=4)
 
         ctk.CTkSwitch(
             row_frame, text="Flatten", variable=flatten_var,
             font=FONT_SMALL, text_color=TEXT_MAIN,
             fg_color=BG_DEEP, progress_color=ACCENT, width=40,
-        ).grid(row=0, column=4, padx=(4, 2), pady=4)
+        ).grid(row=0, column=5, padx=(4, 2), pady=4)
 
         row_data = {"frame": row_frame, "dest": dest_var, "type": type_var,
                     "value": value_var, "loose_only": loose_var,
                     "flatten": flatten_var}
         self._routing_rules_rows.append(row_data)
 
+        up_btn.configure(command=lambda rd=row_data: self._move_routing_rule_row(rd, -1))
+        down_btn.configure(command=lambda rd=row_data: self._move_routing_rule_row(rd, 1))
+
         ctk.CTkButton(
             row_frame, text="X", width=28, height=28, font=FONT_SMALL,
             fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
             command=lambda rd=row_data: self._remove_routing_rule_row(rd),
-        ).grid(row=0, column=5, padx=(2, 6), pady=4)
+        ).grid(row=0, column=6, padx=(2, 6), pady=4)
 
     def _remove_routing_rule_row(self, row_data: dict) -> None:
         """Remove a routing rule row."""
@@ -942,6 +964,19 @@ class CustomGamePanel(ctk.CTkFrame):
             else:
                 for i, rd in enumerate(self._routing_rules_rows):
                     rd["frame"].grid(row=i + 1, column=0, sticky="ew", pady=2)
+
+    def _move_routing_rule_row(self, row_data: dict, delta: int) -> None:
+        """Move a routing rule row up (-1) or down (+1) in evaluation order."""
+        rows = self._routing_rules_rows
+        if row_data not in rows:
+            return
+        i = rows.index(row_data)
+        j = i + delta
+        if j < 0 or j >= len(rows):
+            return
+        rows[i], rows[j] = rows[j], rows[i]
+        for k, rd in enumerate(rows):
+            rd["frame"].grid(row=k + 1, column=0, sticky="ew", pady=2)
 
     def _collect_routing_rules(self) -> list[dict]:
         """Collect routing rules from the UI rows into JSON-serializable dicts.
