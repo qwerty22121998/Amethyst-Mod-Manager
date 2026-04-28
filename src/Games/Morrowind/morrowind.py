@@ -116,8 +116,8 @@ class Morrowind(BaseGame):
         return "Morrowind"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/morrowind/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "morrowind"
 
     @property
     def wine_dll_overrides(self) -> dict[str, str]:

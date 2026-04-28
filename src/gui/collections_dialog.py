@@ -3428,6 +3428,7 @@ class CollectionDetailDialog(tk.Frame):
                             game_type_attr=getattr(self._game, "loot_game_type", ""),
                             game_id=getattr(self._game, "game_id", ""),
                             masterlist_url=getattr(self._game, "loot_masterlist_url", ""),
+                            masterlist_repo=getattr(self._game, "loot_masterlist_repo", ""),
                             game_data_dir=(
                                 self._game.get_vanilla_plugins_path()
                                 if hasattr(self._game, "get_vanilla_plugins_path") else None
@@ -4799,6 +4800,7 @@ class CollectionDetailDialog(tk.Frame):
                             game_type_attr=getattr(self._game, "loot_game_type", ""),
                             game_id=getattr(self._game, "game_id", ""),
                             masterlist_url=getattr(self._game, "loot_masterlist_url", ""),
+                            masterlist_repo=getattr(self._game, "loot_masterlist_repo", ""),
                             game_data_dir=(
                                 self._game.get_vanilla_plugins_path()
                                 if hasattr(self._game, "get_vanilla_plugins_path") else None

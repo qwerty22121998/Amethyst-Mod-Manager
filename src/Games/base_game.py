@@ -639,10 +639,27 @@ class BaseGame(ABC):
         return ""
 
     @property
+    def loot_masterlist_repo(self) -> str:
+        """
+        Repo slug under github.com/loot/ that hosts this game's masterlist
+        (e.g. 'skyrimse', 'fallout4', 'fallout4vr').
+
+        When set, the masterlist URL is built dynamically to match the bundled
+        libloot version (loot_sorter.masterlist_url_for_repo), with a
+        walk-down fallback to the most recent available branch. This is the
+        preferred way to declare masterlist hosting — `loot_masterlist_url`
+        is kept as a legacy fallback for repos that don't follow the
+        standard branch-per-libloot-version convention.
+
+        Return an empty string to use `loot_masterlist_url` instead.
+        """
+        return ""
+
+    @property
     def loot_masterlist_url(self) -> str:
         """
-        URL to download the LOOT masterlist YAML for this game.
-        Only used when loot_sort_enabled is True.
+        Legacy: full URL to download the LOOT masterlist YAML for this game.
+        Only used as a fallback when `loot_masterlist_repo` is not set.
         e.g. 'https://raw.githubusercontent.com/loot/skyrimse/v0.21/masterlist.yaml'
         The masterlist is stored as ~/.config/AmethystModManager/LOOT/data/masterlist_<game_id>.yaml.
         Return an empty string if no masterlist URL is known.

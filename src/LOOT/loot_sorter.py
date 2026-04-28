@@ -10,11 +10,17 @@ feeds them through libloot's sorting algorithm, and returns the reordered
 list with enabled/disabled state preserved.
 
 Game support is driven by the game handler's properties:
-  - loot_sort_enabled: bool — whether LOOT sorting applies to this game
-  - loot_game_type: str     — libloot GameType attribute name (e.g. 'SkyrimSE')
-  - loot_masterlist_url: str — URL to download the masterlist YAML
-  - game_id: str            — used to derive the masterlist filename
-                              (masterlist_<game_id>.yaml in ~/.config/AmethystModManager/LOOT/data/)
+  - loot_sort_enabled: bool       — whether LOOT sorting applies to this game
+  - loot_game_type: str           — libloot GameType attribute name (e.g. 'SkyrimSE')
+  - loot_masterlist_repo: str     — GitHub repo slug under github.com/loot/
+                                    (e.g. 'skyrimse', 'fallout4'); used to build
+                                    the masterlist URL keyed to the bundled
+                                    libloot version.
+  - loot_masterlist_url: str      — (legacy) full URL; used as a fallback if
+                                    loot_masterlist_repo is not set.
+  - game_id: str                  — used to derive the masterlist filename
+                                    (masterlist_<game_id>.yaml in
+                                    ~/.config/AmethystModManager/LOOT/data/)
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ import json
 import shutil
 import time
 import urllib.request
+import urllib.error
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -39,8 +46,19 @@ _BUNDLED_DATA_DIR = Path(__file__).parent / "data"
 # User-writable masterlist directory — resolved lazily to avoid import-time side effects
 _DATA_DIR: Path | None = None
 
-# Re-download masterlists at most once per 24 hours
+# Re-download masterlists at most once per 24 hours (when libloot version
+# is unchanged — a libloot version bump always forces a re-fetch).
 _MASTERLIST_TTL_SECS = 86400
+
+# Walk-down floor: don't probe branches older than this. v0.21 is the oldest
+# masterlist branch any of our games currently use.
+_BRANCH_FLOOR = (0, 21)
+
+# Per-minor cap when walking back through a previous major (defensive only —
+# real masterlist repos haven't crossed a 1.0 boundary).
+_PREV_MAJOR_MINOR_CAP = 50
+
+_BRANCH_CACHE_FILE = "masterlist_branches.json"
 
 
 def _get_data_dir() -> Path:
@@ -50,8 +68,181 @@ def _get_data_dir() -> Path:
         _DATA_DIR = get_loot_data_dir()
     return _DATA_DIR
 
+
 PRELUDE_FILE = "masterlist_prelude.yaml"
-PRELUDE_URL = "https://raw.githubusercontent.com/loot/prelude/v0.21/prelude.yaml"
+# Prelude lives in github.com/loot/prelude — same per-libloot-version branch scheme.
+_PRELUDE_REPO = "prelude"
+_PRELUDE_FILENAME_IN_REPO = "prelude.yaml"
+
+
+def _libloot_version_str() -> str:
+    """e.g. '0.29.4'. Used as a cache invalidation key."""
+    if not _AVAILABLE:
+        return "unknown"
+    try:
+        return str(loot.libloot_version())
+    except Exception:
+        return f"{loot.LIBLOOT_VERSION_MAJOR}.{loot.LIBLOOT_VERSION_MINOR}.{loot.LIBLOOT_VERSION_PATCH}"
+
+
+def _libloot_branch_target() -> tuple[int, int]:
+    """Major/minor pair we'd like the masterlist branch to match.
+    e.g. libloot 0.29.4 -> (0, 29) -> we look for branch 'v0.29'.
+    """
+    if not _AVAILABLE:
+        return _BRANCH_FLOOR
+    return (loot.LIBLOOT_VERSION_MAJOR, loot.LIBLOOT_VERSION_MINOR)
+
+
+def _branch_label(major: int, minor: int) -> str:
+    return f"v{major}.{minor}"
+
+
+def _build_masterlist_url(repo: str, branch: str, filename: str = "masterlist.yaml") -> str:
+    return f"https://raw.githubusercontent.com/loot/{repo}/{branch}/{filename}"
+
+
+def _read_branch_cache() -> dict:
+    path = _get_data_dir() / _BRANCH_CACHE_FILE
+    if not path.is_file():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    # Invalidate cache if libloot version differs.
+    if data.get("libloot_version") != _libloot_version_str():
+        return {}
+    return data
+
+
+def _write_branch_cache(cache: dict) -> None:
+    path = _get_data_dir() / _BRANCH_CACHE_FILE
+    cache["libloot_version"] = _libloot_version_str()
+    tmp = path.with_suffix(".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(cache, f, indent=2)
+        tmp.replace(path)
+    except Exception:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _head_ok(url: str, timeout: float = 5.0) -> bool:
+    """True if a HEAD request to url returns 2xx."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except urllib.error.HTTPError as e:
+        return 200 <= e.code < 300
+    except Exception:
+        return False
+
+
+def _walk_down_branches(start: tuple[int, int]) -> list[tuple[int, int]]:
+    """Yield (major, minor) pairs from start down to _BRANCH_FLOOR (inclusive)."""
+    out: list[tuple[int, int]] = []
+    major, minor = start
+    floor_major, floor_minor = _BRANCH_FLOOR
+    while True:
+        if (major, minor) < (floor_major, floor_minor):
+            break
+        out.append((major, minor))
+        if minor > 0:
+            minor -= 1
+        else:
+            if major <= 0:
+                break
+            major -= 1
+            minor = _PREV_MAJOR_MINOR_CAP
+    return out
+
+
+def _resolve_branch(
+    repo: str,
+    filename: str = "masterlist.yaml",
+    log_fn=None,
+) -> str | None:
+    """Find the highest 'vMAJOR.MINOR' branch <= bundled libloot that contains
+    the given file in `repo`. Cached per (libloot_version, repo, filename).
+    Returns the branch label (e.g. 'v0.29') or None if nothing matched.
+    """
+    _log = log_fn or (lambda _: None)
+    cache_key = f"{repo}::{filename}"
+    cache = _read_branch_cache()
+    branches = cache.get("branches") or {}
+    if cache_key in branches:
+        return branches[cache_key]
+
+    target = _libloot_branch_target()
+    for major, minor in _walk_down_branches(target):
+        branch = _branch_label(major, minor)
+        url = _build_masterlist_url(repo, branch, filename)
+        if _head_ok(url):
+            branches[cache_key] = branch
+            cache["branches"] = branches
+            _write_branch_cache(cache)
+            if (major, minor) != target:
+                _log(
+                    f"loot/{repo}: no {_branch_label(*target)} branch — "
+                    f"falling back to {branch}."
+                )
+            return branch
+
+    # Nothing found. Cache the negative result so we don't probe every launch.
+    branches[cache_key] = None
+    cache["branches"] = branches
+    _write_branch_cache(cache)
+    _log(f"loot/{repo}: no compatible masterlist branch found.")
+    return None
+
+
+def masterlist_url_for_repo(repo: str, log_fn=None) -> str:
+    """Build the masterlist URL for `loot/<repo>` matching the bundled libloot
+    version, walking down to the most recent available branch if the exact
+    version branch doesn't exist. Returns an empty string if none found.
+    """
+    if not repo:
+        return ""
+    branch = _resolve_branch(repo, "masterlist.yaml", log_fn=log_fn)
+    if not branch:
+        return ""
+    return _build_masterlist_url(repo, branch, "masterlist.yaml")
+
+
+def prelude_url(log_fn=None) -> str:
+    """URL for the LOOT prelude.yaml matching the bundled libloot."""
+    branch = _resolve_branch(_PRELUDE_REPO, _PRELUDE_FILENAME_IN_REPO, log_fn=log_fn)
+    if not branch:
+        return ""
+    return _build_masterlist_url(_PRELUDE_REPO, branch, _PRELUDE_FILENAME_IN_REPO)
+
+
+def _version_sidecar(dest: Path) -> Path:
+    return dest.with_suffix(dest.suffix + ".libloot_version")
+
+
+def _read_sidecar_version(dest: Path) -> str:
+    sidecar = _version_sidecar(dest)
+    if not sidecar.is_file():
+        return ""
+    try:
+        return sidecar.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+
+
+def _write_sidecar_version(dest: Path) -> None:
+    sidecar = _version_sidecar(dest)
+    try:
+        sidecar.write_text(_libloot_version_str(), encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _ensure_masterlist(
@@ -62,17 +253,26 @@ def _ensure_masterlist(
     """Ensure a masterlist exists in the config dir, fetching if stale.
 
     Resolution order:
-      1. If a cached file exists and is younger than _MASTERLIST_TTL_SECS, use it.
-      2. Download from the provided URL.
+      1. If libloot version changed since the cached file was written,
+         force a re-download (the branch likely moved).
+      2. If a cached file exists and is younger than _MASTERLIST_TTL_SECS, use it.
+      3. Download from the provided URL.
          Falls back to the existing cached file if the download fails.
-      3. If no URL or download fails and no cached file: copy from bundled data dir.
+      4. If no URL or download fails and no cached file: copy from bundled data dir.
     """
     _log = log_fn or (lambda _: None)
     data_dir = _get_data_dir()
     dest = data_dir / filename
 
-    # Skip download if the cached file is fresh enough
-    if dest.is_file() and download_url:
+    current_version = _libloot_version_str()
+    version_changed = (
+        dest.is_file()
+        and _read_sidecar_version(dest) != current_version
+    )
+
+    # Skip download if the cached file is fresh enough AND libloot version
+    # hasn't changed since we last fetched it.
+    if dest.is_file() and download_url and not version_changed:
         age = time.time() - dest.stat().st_mtime
         if age < _MASTERLIST_TTL_SECS:
             return
@@ -80,10 +280,14 @@ def _ensure_masterlist(
     # Try to download if a URL is provided
     if download_url:
         tmp = dest.with_suffix(".tmp")
-        _log(f"Fetching latest {filename}...")
+        if version_changed:
+            _log(f"libloot version changed — refreshing {filename}...")
+        else:
+            _log(f"Fetching latest {filename}...")
         try:
             urllib.request.urlretrieve(download_url, tmp)
             tmp.replace(dest)
+            _write_sidecar_version(dest)
             _log(f"Updated {filename}.")
             return
         except Exception as exc:
@@ -99,6 +303,7 @@ def _ensure_masterlist(
     src = _BUNDLED_DATA_DIR / filename
     if src.is_file():
         shutil.copy2(src, dest)
+        _write_sidecar_version(dest)
         _log(f"Copied bundled {filename} to config dir.")
 
 
@@ -383,6 +588,7 @@ def sort_plugins(
     game_type_attr: str = "",
     game_id: str = "",
     masterlist_url: str = "",
+    masterlist_repo: str = "",
     game_data_dir: Path | None = None,
     userlist_path: Path | None = None,
 ) -> SortResult:
@@ -441,15 +647,25 @@ def sort_plugins(
         )
 
     ml_filename = _masterlist_filename(game_type_attr)
-    _ensure_masterlist(ml_filename, download_url=masterlist_url, log_fn=_log)
-    _ensure_masterlist(PRELUDE_FILE, download_url=PRELUDE_URL, log_fn=_log)
+
+    # Prefer the per-libloot-version branch resolver when a repo slug is set;
+    # fall back to a legacy hardcoded URL if the game handler still passes one.
+    effective_masterlist_url = (
+        masterlist_url_for_repo(masterlist_repo, log_fn=_log)
+        if masterlist_repo
+        else masterlist_url
+    )
+
+    _ensure_masterlist(ml_filename, download_url=effective_masterlist_url, log_fn=_log)
+    _ensure_masterlist(PRELUDE_FILE, download_url=prelude_url(log_fn=_log), log_fn=_log)
 
     loot_data_dir = _get_data_dir()
     masterlist_path = loot_data_dir / ml_filename
     prelude_path = loot_data_dir / PRELUDE_FILE
 
     if not masterlist_path.is_file():
-        url_hint = (f"\nDownload from: {masterlist_url}" if masterlist_url
+        url_hint = (f"\nDownload from: {effective_masterlist_url}"
+                    if effective_masterlist_url
                     else "\nDownload it from the LOOT GitHub repository.")
         raise RuntimeError(
             f"Masterlist not found: {masterlist_path}{url_hint}"

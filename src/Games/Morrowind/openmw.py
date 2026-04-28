@@ -141,8 +141,8 @@ class OpenMW(BaseGame):
         return "OpenMW"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/morrowind/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "morrowind"
 
     @property
     def wizard_tools(self) -> list[WizardTool]:

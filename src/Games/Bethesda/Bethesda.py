@@ -233,8 +233,8 @@ class Fallout_3(BaseGame):
         return "Fallout3"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/fallout3/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "fallout3"
 
     @property
     def reshade_dll(self) -> str:
@@ -857,8 +857,8 @@ class Fallout_NV(Fallout_3):
                 ]
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/falloutnv/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "falloutnv"
 
     _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/FalloutNV")
     _APPDATA_SUBPATH_GOG = Path("drive_c/users/steamuser/AppData/Local/FalloutNV GOG")
@@ -947,8 +947,8 @@ class Fallout_4(Fallout_3):
                 ]
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/fallout4/v0.21/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "fallout4"
 
     _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/Fallout4")
     _APPDATA_SUBPATH_GOG = Path("drive_c/users/steamuser/AppData/Local/Fallout4 GOG")
@@ -1015,7 +1015,7 @@ class Fallout_4VR(Fallout_3):
 
     @property
     def nexus_game_domain(self) -> str:
-        return "fallout4vr"
+        return "fallout4"
     
     @property
     def custom_routing_rules(self) -> list:
@@ -1031,8 +1031,8 @@ class Fallout_4VR(Fallout_3):
         return "Fallout4VR"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/fallout4vr/v0.21/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "fallout4vr"
 
     _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/Fallout4VR")
     _MYGAMES_SUBPATH = Path("Fallout4VR")
@@ -1097,8 +1097,8 @@ class Oblivion(Fallout_3):
         return "Oblivion"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/oblivion/refs/heads/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "oblivion"
 
     @property
     def custom_routing_rules(self) -> list:
@@ -1216,8 +1216,8 @@ class Skyrim(Fallout_3):
         return "Skyrim"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/skyrim/master/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "skyrim"
 
     @property
     def custom_routing_rules(self) -> list:
@@ -1293,15 +1293,15 @@ class SkyrimVR(Fallout_3):
 
     @property
     def nexus_game_domain(self) -> str:
-        return "skyrimvr"
+        return "skyrimspecialedition"
 
     @property
     def loot_game_type(self) -> str:
         return "SkyrimVR"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/skyrimvr/v0.21/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "skyrimvr"
 
     @property
     def custom_routing_rules(self) -> list:
@@ -1389,8 +1389,8 @@ class Starfield(Fallout_3):
         return "Starfield"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/starfield/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "starfield"
 
     @property
     def custom_routing_rules(self) -> list:
@@ -1474,8 +1474,8 @@ class Enderal(Fallout_3):
         return "enderal"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/enderal/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "enderal"
 
     _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/enderal")
     _APPDATA_SUBPATH_GOG = Path("drive_c/users/steamuser/AppData/Local/enderal GOG")
@@ -1530,8 +1530,8 @@ class EnderalSE(Fallout_3):
         return "enderal"
 
     @property
-    def loot_masterlist_url(self) -> str:
-        return "https://raw.githubusercontent.com/loot/enderal/v0.26/masterlist.yaml"
+    def loot_masterlist_repo(self) -> str:
+        return "enderal"
 
     _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/Enderal Special Edition")
     _APPDATA_SUBPATH_GOG = Path("drive_c/users/steamuser/AppData/Local/Enderal Special Edition GOG")
