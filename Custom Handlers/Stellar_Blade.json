@@ -1,0 +1,131 @@
+{
+  "name": "Stellar Blade",
+  "game_id": "Stellar_Blade",
+  "exe_name": "SB/Binaries/Win64/SB-Win64-Shipping.exe",
+  "deploy_type": "ue5",
+  "mod_data_path": "SB",
+  "steam_id": "3489700",
+  "version": 1,
+  "editable": false
+  "nexus_game_domain": "stellarblade",
+  "image_url": "https://cdn2.steamgriddb.com/icon_thumb/99dcd74be0b9763c45900e812fc37e6f.png",
+  "mod_folder_strip_prefixes": [
+    "~mods",
+    "LuaMod",
+    "PakMod"
+  ],
+  "conflict_ignore_filenames": [
+    "*.jpg",
+    "*read*.txt",
+    "*.exe",
+    "*.png",
+    "*.gif",
+    "*tion*.txt",
+    "*.md",
+    "*.webp",
+    "*changelog*.txt"
+  ],
+  "mod_folder_strip_prefixes_post": [
+    "~mods"
+  ],
+  "mod_install_prefix": "",
+  "mod_required_top_level_folders": [
+    "~mods"
+  ],
+  "mod_auto_strip_until_required": true,
+  "mod_required_file_types": [],
+  "mod_install_as_is_if_no_match": true,
+  "restore_before_deploy": true,
+  "normalize_folder_case": true,
+  "filemap_casing": "upper",
+  "wine_dll_overrides": {
+    "dwmapi": "native,builtin"
+  },
+  "custom_routing_rules": [
+    {
+      "dest": "Content/Paks/~mods",
+      "extensions": [
+        ".dekcns.json"
+      ]
+    },
+    {
+      "dest": "Binaries/Win64",
+      "folders": [
+        "ue4ss"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "Binaries/Win64/ue4ss",
+      "filenames": [
+        "dwmapi.dll"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "Binaries/Win64/ue4ss/Mods",
+      "filenames": [
+        "mods.txt"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "Content/Paks/~mods",
+      "extensions": [
+        ".pak"
+      ]
+    },
+    {
+      "dest": "Content/Paks/~mods",
+      "extensions": [
+        ".ucas"
+      ]
+    },
+    {
+      "dest": "Content/Paks/~mods",
+      "extensions": [
+        ".utoc"
+      ]
+    },
+    {
+      "dest": "Content/Paks/~mods",
+      "extensions": [
+        ".dekani.json"
+      ]
+    },
+    {
+      "dest": "Content/Splash",
+      "extensions": [
+        ".bmp"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "Content/Movies/Menu",
+      "extensions": [
+        ".bk2"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "Content/Paks/LogicMods/HD-ATOOL_P/audio",
+      "extensions": [
+        ".wav"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "Content/Paks/~mods",
+      "filenames": [
+        "*dekcns.json"
+      ]
+    },
+    {
+      "dest": "Binaries/Win64/ue4ss/Mods",
+      "filenames": [
+        "main.lua"
+      ]
+    }
+  ],
+  "custom_frameworks": {}
+}
