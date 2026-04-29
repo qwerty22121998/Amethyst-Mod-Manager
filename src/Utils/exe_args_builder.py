@@ -388,7 +388,7 @@ def _bootstrap_pandora_settings(
 ) -> None:
     """
     Update Pandora Behaviour Engine's Settings.json inside the Wine prefix so
-    its outputPath points at <staging>/Pandora.
+    its outputPath points at <staging>/Pandora_output.
 
     Pandora's newer builds read the output folder from Settings.json rather
     than the ``--output:`` CLI flag, so we have to rewrite it at launch time
@@ -408,7 +408,7 @@ def _bootstrap_pandora_settings(
         / "Pandora Behaviour Engine" / "Settings.json"
     )
 
-    output_mod_dir = staging_path / "Pandora"
+    output_mod_dir = staging_path / "Pandora_output"
     output_mod_dir.mkdir(parents=True, exist_ok=True)
 
     try:

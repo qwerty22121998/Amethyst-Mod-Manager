@@ -14,7 +14,7 @@ Workflow
 3. Run Pandora Behaviour Engine+.exe via Proton with:
      --tesv:<game_path>
 
-   The output folder (<staging>/Pandora) is configured by rewriting
+   The output folder (<staging>/Pandora_output) is configured by rewriting
    Pandora's Settings.json inside the Wine prefix, because newer
    Pandora builds ignore the ``--output:`` CLI flag.
 """
@@ -188,7 +188,7 @@ class PandoraWizard(ctk.CTkFrame):
             self._body,
             text=(
                 "Before deploying, please delete any output from a previous\n"
-                "Pandora run (the 'Pandora' output mod in your mod list).\n\n"
+                "Pandora run (the 'Pandora_output' mod in your mod list).\n\n"
                 "Once you have done this, click Deploy."
             ),
             font=FONT_NORMAL, text_color=TEXT_DIM, justify="center", wraplength=460,
