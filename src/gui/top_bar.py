@@ -611,9 +611,15 @@ class TopBar(ctk.CTkFrame):
             profile_dir = get_profiles_dir() / game_name / "profiles" / profile
 
         # Restore deployed mod files before deleting the profile so we don't
-        # leave orphaned mod files in the game folder.  Point the game at this
-        # profile so get_effective_filemap_path() resolves correctly.
-        if game is not None and game.is_configured():
+        # leave orphaned mod files in the game folder.  Only run restore when
+        # this profile is the one currently deployed.
+        is_deployed = (
+            game is not None
+            and game.is_configured()
+            and game.get_deploy_active()
+            and game.get_last_deployed_profile() == profile
+        )
+        if is_deployed:
             game.set_active_profile_dir(profile_dir)
             try:
                 if hasattr(game, "restore"):

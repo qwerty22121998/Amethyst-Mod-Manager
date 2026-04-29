@@ -398,8 +398,15 @@ class ProfileSettingsOverlay(tk.Frame):
         game = _gh._GAMES.get(self._game_name)
         profile_dir = self._get_profile_dir(profile)
 
-        # Restore deployed mod files before deleting
-        if game is not None and game.is_configured():
+        # Restore deployed mod files before deleting — only if this profile
+        # is the one that's currently deployed.
+        is_deployed = (
+            game is not None
+            and game.is_configured()
+            and game.get_deploy_active()
+            and game.get_last_deployed_profile() == profile
+        )
+        if is_deployed:
             game.set_active_profile_dir(profile_dir)
             try:
                 if hasattr(game, "restore"):
