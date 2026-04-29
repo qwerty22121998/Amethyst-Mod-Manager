@@ -148,12 +148,9 @@ from gui.collections_dialog import CollectionsDialog
 from gui.workshop_dialog import WorkshopDialog
 from gui.nexus_browser_overlay import NexusBrowserOverlay
 from gui.changelog_overlay import ChangelogOverlay
-from gui.mod_files_overlay import ModFilesOverlay
-from Nexus.nexus_meta import build_meta_from_download, ensure_installed_stamp, read_meta, write_meta
-from Nexus.nexus_download import delete_archive_and_sidecar
-from Utils.config_paths import get_download_cache_dir, get_download_cache_dir_for_game, list_all_cache_dirs
-from Utils.ui_config import load_column_widths, save_column_widths, load_column_order, save_column_order, load_normalize_folder_case, load_sort_state, save_sort_state, load_column_hidden, save_column_hidden
-from Nexus.nexus_update_checker import check_for_updates
+from Nexus.nexus_meta import ensure_installed_stamp, read_meta, write_meta
+from Utils.config_paths import get_download_cache_dir, list_all_cache_dirs
+from Utils.ui_config import load_column_widths, load_column_order, load_normalize_folder_case, load_sort_state, save_sort_state, load_column_hidden
 
 
 from gui.text_utils import truncate_text as _truncate_text_for_width, clear_truncate_cache as _clear_truncate_cache
@@ -241,7 +238,15 @@ def _scan_meta_flags_impl(entries: list, mods_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 # ModListPanel
 # ---------------------------------------------------------------------------
-class ModListPanel(ctk.CTkFrame):
+from gui.modlist_filter_panel import ModListFilterPanelMixin
+from gui.modlist_download_bar import ModListDownloadBarMixin
+from gui.modlist_header import ModListHeaderColumnsMixin
+from gui.modlist_nexus_actions import ModListNexusActionsMixin
+
+
+class ModListPanel(ModListFilterPanelMixin, ModListDownloadBarMixin,
+                   ModListHeaderColumnsMixin, ModListNexusActionsMixin,
+                   ctk.CTkFrame):
     """
     Left panel: column header, canvas-based mod list, toolbar.
 
@@ -879,330 +884,6 @@ class ModListPanel(ctk.CTkFrame):
         )[-1])
 
     # ------------------------------------------------------------------
-    # Download progress popups (one per concurrent download, stacked)
-    # ------------------------------------------------------------------
-    # Each active download is tracked as a _DlSlot: (popup, cancel_event, bind_id).
-    # Popups stack upward from the bottom-right corner.
-
-    class _DlSlot:
-        __slots__ = ("popup", "cancel", "bind_id")
-        def __init__(self, popup: "CTkProgressPopup", cancel: threading.Event, bind_id: str | None):
-            self.popup = popup
-            self.cancel = cancel
-            self.bind_id = bind_id
-
-    def _build_download_bar(self):
-        """Initialise the download-popup slot list."""
-        self._dl_slots: list["ModListPanel._DlSlot"] = []
-        self._dl_cancel_locked: bool = False
-
-    def _build_filter_side_panel(self):
-        """Build the inline filter side panel (column 0, initially hidden)."""
-        self._filter_panel_open = False
-
-        # 300 was too narrow at 1.25x–1.5x scale (labels got truncated)
-        # CTk scales frame width; use unscaled design value
-        panel = ctk.CTkFrame(self, fg_color=BG_PANEL, corner_radius=0,
-                             width=380)
-        panel.grid(row=0, column=0, rowspan=5, sticky="nsew")
-        panel.grid_propagate(False)
-        panel.grid_remove()  # hidden by default
-        self._filter_side_panel = panel
-
-        # ── Header row ──────────────────────────────────────────────
-        header = tk.Frame(panel, bg=BG_HEADER, height=scaled(36))
-        header.pack(fill="x", side="top")
-        header.pack_propagate(False)
-
-        tk.Label(
-            header, text="Filters", bg=BG_HEADER, fg=TEXT_MAIN,
-            font=_theme.FONT_BOLD, anchor="w",
-        ).pack(side="left", padx=10, pady=6)
-
-        # Close (×) button
-        close_btn = tk.Label(
-            header, text="×", bg=BG_HEADER, fg=TEXT_DIM,
-            font=(_theme.FONT_FAMILY, 16, "bold"), cursor="hand2",
-        )
-        close_btn.pack(side="right", padx=8)
-        close_btn.bind("<Button-1>", lambda _e: self._close_filter_side_panel())
-        close_btn.bind("<Enter>",    lambda _e: close_btn.configure(fg=TEXT_MAIN))
-        close_btn.bind("<Leave>",    lambda _e: close_btn.configure(fg=TEXT_DIM))
-
-        # Clear all button
-        clear_btn = tk.Label(
-            header, text="Clear all", bg=BG_HEADER, fg=TEXT_DIM,
-            font=_theme.FONT_SMALL, cursor="hand2",
-        )
-        clear_btn.pack(side="right", padx=(0, 4))
-        clear_btn.bind("<Button-1>", lambda _e: self._clear_all_filters())
-        clear_btn.bind("<Enter>",    lambda _e: clear_btn.configure(fg=TEXT_MAIN))
-        clear_btn.bind("<Leave>",    lambda _e: clear_btn.configure(fg=TEXT_DIM))
-
-        # Separator
-        tk.Frame(panel, bg=BORDER, height=1).pack(fill="x")
-
-        # ── Scrollable checkbox area ─────────────────────────────────
-        scroll_frame = ctk.CTkScrollableFrame(
-            panel, fg_color="transparent", corner_radius=0,
-        )
-        scroll_frame.pack(fill="both", expand=True, padx=8, pady=6)
-
-        opts = [
-            ("filter_show_disabled",       "Show only disabled mods"),
-            ("filter_show_enabled",        "Show only enabled mods"),
-            ("filter_hide_separators",     "Hide separators"),
-            ("filter_winning",             "Show only winning conflicts"),
-            ("filter_losing",              "Show only losing conflicts"),
-            ("filter_partial",             "Show only winning & losing conflicts"),
-            ("filter_full",                "Show only fully conflicted mods"),
-            ("filter_missing_reqs",        "Show only missing requirements"),
-            ("filter_has_disabled_plugins","Show only mods with disabled plugins"),
-            ("filter_has_plugins",         "Show only mods with plugins"),
-            ("filter_has_disabled_files",  "Show mods modified in Mod Files tab"),
-            ("filter_has_updates",         "Show only mods with updates"),
-            ("filter_has_notes",           "Show only mods with notes"),
-            ("filter_fomod_only",          "Show only FOMOD mods"),
-            ("filter_has_bsa",             "Show only mods with BSA archives"),
-        ]
-
-        self._fsp_vars: dict[str, tk.BooleanVar] = {}
-        for key, label in opts:
-            var = tk.BooleanVar(value=False)
-            self._fsp_vars[key] = var
-            ctk.CTkCheckBox(
-                scroll_frame,
-                text=label,
-                variable=var,
-                font=_theme.FONT_SMALL,
-                text_color=TEXT_MAIN,
-                fg_color=ACCENT,
-                hover_color=ACCENT_HOV,
-                border_color=BORDER,
-                checkmark_color="white",
-                command=self._on_filter_panel_change,
-            ).pack(anchor="w", fill="x", pady=3)
-
-        # Category filter section
-        ctk.CTkLabel(
-            scroll_frame, text="", height=8, fg_color="transparent",
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            scroll_frame, text="Show only categories:",
-            font=_theme.FONT_SMALL, text_color=TEXT_DIM, anchor="w",
-        ).pack(anchor="w")
-        self._fsp_category_frame = ctk.CTkFrame(scroll_frame, fg_color="transparent")
-        self._fsp_category_frame.pack(anchor="w", pady=(2, 0))
-        self._fsp_category_vars: dict[str, tk.BooleanVar] = {}
-
-        self._filter_scroll_frame = scroll_frame
-        self._bind_filter_panel_scroll()
-
-    def _bind_filter_panel_scroll(self) -> None:
-        """Bind mouse wheel to the filter panel's scroll frame (Linux Button-4/5, Windows MouseWheel)."""
-        scroll_frame = getattr(self, "_filter_scroll_frame", None)
-        if not scroll_frame or not hasattr(scroll_frame, "_parent_canvas"):
-            return
-
-        def _on_wheel(evt):
-            num = getattr(evt, "num", None)
-            delta = getattr(evt, "delta", 0) or 0
-            if num == 4 or delta > 0:
-                scroll_frame._parent_canvas.yview_scroll(-3, "units")
-            elif num == 5 or delta < 0:
-                scroll_frame._parent_canvas.yview_scroll(3, "units")
-
-        # On Tk >= 8.7 CTkScrollableFrame handles <MouseWheel> via its own bind_all;
-        # we only need to supplement Button-4/5 for Tk 8.6.
-        _legacy = None if LEGACY_WHEEL_REDUNDANT else _on_wheel
-
-        def _bind_recursive(w):
-            if _legacy is not None:
-                w.bind("<Button-4>", _legacy)
-                w.bind("<Button-5>", _legacy)
-            for child in w.winfo_children():
-                _bind_recursive(child)
-
-        _bind_recursive(scroll_frame)
-
-    def _refresh_filter_category_list(self) -> None:
-        """Populate category checkboxes from current _category_names. Call when opening filter panel."""
-        for w in self._fsp_category_frame.winfo_children():
-            w.destroy()
-        self._fsp_category_vars.clear()
-        categories = sorted(
-            set(self._category_names.values()) | {""},
-            key=lambda c: ("(Uncategorized)" if c == "" else c).lower(),
-        )
-        for cat in categories:
-            label = "(Uncategorized)" if cat == "" else cat
-            var = tk.BooleanVar(value=cat in self._filter_categories)
-            self._fsp_category_vars[cat] = var
-            ctk.CTkCheckBox(
-                self._fsp_category_frame,
-                text=label,
-                variable=var,
-                font=_theme.FONT_SMALL,
-                text_color=TEXT_MAIN,
-                fg_color=ACCENT,
-                hover_color=ACCENT_HOV,
-                border_color=BORDER,
-                checkmark_color="white",
-                command=self._on_filter_panel_change,
-            ).pack(anchor="w", pady=2)
-
-        self._bind_filter_panel_scroll()
-
-    def _clear_all_filters(self):
-        """Reset all filter checkboxes to unchecked."""
-        for v in self._fsp_vars.values():
-            v.set(False)
-        for v in self._fsp_category_vars.values():
-            v.set(False)
-        self._apply_modlist_filters({"filter_categories": frozenset()})
-
-    def _on_filter_panel_change(self):
-        """Called when any checkbox in the inline filter panel changes."""
-        state = {k: v.get() for k, v in self._fsp_vars.items()}
-        state["filter_categories"] = frozenset(
-            c for c, v in self._fsp_category_vars.items() if v.get()
-        )
-        self._apply_modlist_filters(state)
-
-    def _reposition_all_dl_popups(self, *_) -> None:
-        """Stack all live download popups (CTkToplevel) upward from the bottom-right."""
-        root = self.winfo_toplevel()
-        try:
-            if root.state() != "normal":
-                return
-        except Exception:
-            pass
-        rx, ry = root.winfo_rootx(), root.winfo_rooty()
-        rw, rh = root.winfo_width(), root.winfo_height()
-        gap = scaled(8)
-        margin = scaled(20)
-        y = ry + rh - margin
-        for slot in self._dl_slots:
-            p = slot.popup
-            if not p.winfo_exists():
-                continue
-            pw, ph = p.winfo_width(), p.winfo_height()
-            y -= ph
-            x = rx + rw - pw - margin
-            p.geometry(f"+{x}+{y}")
-            y -= gap
-
-    def get_download_cancel_event(self) -> threading.Event:
-        """Create a new download slot with a popup and cancel event.
-        Returns the cancel event; pass it to the downloader."""
-        root = self.winfo_toplevel()
-        cancel = threading.Event()
-        popup = CTkProgressPopup(root, title="Downloading", label="Starting...", message="0%",
-                                 on_show=self._reposition_all_dl_popups)
-        # CTkProgressPopup binds its own update_position to <Configure>, which calls
-        # update_idletasks() twice on every event — expensive during scroll. Silence it.
-        popup.update_position = lambda *_: None
-        popup._configure_bid = root.bind("<Configure>", self._reposition_all_dl_popups, add="+")
-        slot = self._DlSlot(popup, cancel, None)
-        self._dl_slots.append(slot)
-        # Wire this popup's X button to cancel just this slot
-        popup.cancel_btn.configure(command=lambda s=slot: self._cancel_dl_slot(s))
-        self._reposition_all_dl_popups()
-        self.after(100, self._reposition_all_dl_popups)
-        return cancel
-
-    def _cancel_dl_slot(self, slot: "_DlSlot") -> None:
-        if self._dl_cancel_locked:
-            return
-        slot.cancel.set()
-        self._close_dl_slot(slot, user_cancel=True)
-
-    def _close_dl_slot(self, slot: "_DlSlot", user_cancel: bool = False) -> None:
-        bid = getattr(slot.popup, "_configure_bid", None)
-        if bid is not None:
-            try:
-                self.winfo_toplevel().unbind("<Configure>", bid)
-            except Exception:
-                pass
-        if slot.popup.winfo_exists():
-            slot.popup.destroy()
-        try:
-            self._dl_slots.remove(slot)
-        except ValueError:
-            pass
-
-        if user_cancel and self._dl_slots:
-            # Hide surviving popups and defer reposition so that the mouse
-            # button is released before any popup appears under the cursor.
-            for s in self._dl_slots:
-                if s.popup.winfo_exists():
-                    s.popup.withdraw()
-            self._dl_cancel_locked = True
-            self.after(300, self._deferred_reshow)
-        else:
-            self._reposition_all_dl_popups()
-
-    def _deferred_reshow(self) -> None:
-        self._dl_cancel_locked = False
-        for s in self._dl_slots:
-            if s.popup.winfo_exists():
-                s.popup.deiconify()
-        self._reposition_all_dl_popups()
-
-    def _slot_for_cancel(self, cancel: threading.Event) -> "_DlSlot | None":
-        for slot in self._dl_slots:
-            if slot.cancel is cancel:
-                return slot
-        return None
-
-    def show_download_progress(self, label: str = "Downloading...", cancel: threading.Event | None = None):
-        """Update the label on the popup for the given cancel event (or the most recent one)."""
-        if cancel is not None:
-            slot = self._slot_for_cancel(cancel)
-        else:
-            slot = self._dl_slots[-1] if self._dl_slots else None
-        if slot and slot.popup.winfo_exists():
-            slot.popup.update_label(label)
-            slot.popup.update_progress(0)
-            slot.popup.update_message("0%")
-
-    def update_download_progress(self, current: int, total: int, label: str = "",
-                                  cancel: threading.Event | None = None):
-        """Update progress on the popup for the given cancel event (or most recent)."""
-        if cancel is not None:
-            slot = self._slot_for_cancel(cancel)
-        else:
-            slot = self._dl_slots[-1] if self._dl_slots else None
-        if slot is None or not slot.popup.winfo_exists():
-            return
-        if total > 0:
-            frac = min(current / total, 1.0)
-            pct = int(frac * 100)
-            _GB = 1024 * 1024 * 1024
-            if total >= _GB:
-                cur_u = current / _GB
-                tot_u = total / _GB
-                unit = "GB"
-            else:
-                cur_u = current / (1024 * 1024)
-                tot_u = total / (1024 * 1024)
-                unit = "MB"
-            slot.popup.update_progress(frac)
-            slot.popup.update_message(
-                label if label else f"{cur_u:.2f} / {tot_u:.2f} {unit}  ({pct}%)"
-            )
-
-    def hide_download_progress(self, cancel: threading.Event | None = None):
-        """Close the popup for the given cancel event (or most recent).
-        If a cancel event is given but its slot is already gone, do nothing."""
-        if cancel is not None:
-            slot = self._slot_for_cancel(cancel)
-        else:
-            slot = self._dl_slots[-1] if self._dl_slots else None
-        if slot:
-            self._close_dl_slot(slot)
-
-    # ------------------------------------------------------------------
     # Layout helpers
     # ------------------------------------------------------------------
 
@@ -1418,336 +1099,50 @@ class ModListPanel(ctk.CTkFrame):
         self._col_menu_btn.lift()
 
     # ------------------------------------------------------------------
-    # Column resize drag (bound directly to divider widgets)
-    # ------------------------------------------------------------------
-
-    # Minimum widths per _COL_W index: 0=checkbox, 1=name, 2=cat, 3=flags, 4=conflicts, 5=installed, 6=priority
-    _COL_MIN_W = {1: 120, 2: 95, 3: 70, 4: 95, 5: 95, 6: 80, 7: 80}
-
-    def _slot_to_data_col(self, slot: int) -> int:
-        """Convert a _COL_W/X slot index to the data-col index it currently holds."""
-        if slot == 1:
-            return 1
-        visible = [dc for dc in self._col_order if dc not in self._col_hidden]
-        idx = slot - 2
-        if 0 <= idx < len(visible):
-            return visible[idx]
-        return slot
-
-    def _on_divider_drag_start(self, event: tk.Event, col: int) -> None:
-        """Start a column resize drag. col = _COL_W slot index of the left column."""
-        self._col_drag_col = col
-        self._col_drag_start_x = event.x_root
-        # Snapshot widths and data-col keys for all resizable slots (1..6)
-        n_visible = len([dc for dc in self._col_order if dc not in self._col_hidden])
-        self._col_drag_max_slot = n_visible + 1  # last live slot (slot 1=name, 2..n_visible+1)
-        self._col_drag_snap = {
-            slot: (self._slot_to_data_col(slot), self._COL_W[slot])
-            for slot in range(1, self._col_drag_max_slot + 1)
-        }
-
-    def _on_header_col_drag_motion(self, event: tk.Event) -> None:
-        if self._col_drag_col is None:
-            return
-        col = self._col_drag_col          # divider between slot col and col+1
-        delta = event.x_root - self._col_drag_start_x
-        snap = self._col_drag_snap
-
-        # Slots to the left of divider and to the right
-        max_slot = getattr(self, "_col_drag_max_slot", 7)
-        left_slots  = list(range(col, 0, -1))              # [col, col-1, ..., 1]
-        right_slots = list(range(col + 1, max_slot + 1))   # only live slots
-        def distribute(slots: list[int], budget: int) -> dict[int, int]:
-            """Shrink/grow slots greedily. budget>0 grows first slot; budget<0 shrinks in order."""
-            new_w: dict[int, int] = {}
-            remaining = budget
-            for s in slots:
-                dc, orig = snap[s]
-                mn = scaled(self._COL_MIN_W.get(dc, 30))
-                if remaining >= 0:
-                    new_w[s] = orig + remaining  # first slot absorbs all growth
-                    remaining = 0
-                else:
-                    can_shrink = orig - mn
-                    take = max(remaining, -can_shrink)  # take is <= 0
-                    new_w[s] = orig + take
-                    remaining -= take
-                    if remaining == 0:
-                        break
-            # slots not touched keep their original width
-            for s in slots:
-                if s not in new_w:
-                    new_w[s] = snap[s][1]
-            return new_w
-
-        if delta < 0:
-            # Moving left: shrink left cols immediate-left first, grow right col
-            left_new  = distribute(left_slots, delta)           # delta < 0 → shrink from immediate-left
-            actual    = sum(left_new[s] - snap[s][1] for s in left_slots)
-            right_new = distribute(right_slots, -actual)        # grow by what was freed
-        else:
-            # Moving right: shrink right cols, grow immediate-left col
-            right_new = distribute(right_slots, -delta)         # negative → shrink
-            actual    = sum(snap[s][1] - right_new[s] for s in right_slots)
-            left_new  = distribute(left_slots,  actual)         # grow immediate-left first
-
-        for s, (dc, _) in snap.items():
-            w = left_new.get(s, right_new.get(s, snap[s][1]))
-            self._col_w_override[dc] = w
-
-        self._layout_columns(self._canvas_w)
-        self._update_header(self._canvas_w)
-        self._redraw()
-
-    def _on_header_col_drag_end(self, event: tk.Event) -> None:
-        self._col_drag_col = None
-        save_column_widths(self._col_w_override)
-
-    def _on_divider_drag_reset(self, event: tk.Event, col: int) -> None:
-        """Double-click a divider to reset both adjacent columns to auto width."""
-        left_dc = self._slot_to_data_col(col)
-        right_dc = self._slot_to_data_col(col + 1)
-        self._col_w_override.pop(left_dc, None)
-        self._col_w_override.pop(right_dc, None)
-        save_column_widths(self._col_w_override)
-        self._layout_columns(self._canvas_w)
-        self._update_header(self._canvas_w)
-        self._redraw()
-
-    # ------------------------------------------------------------------
-    # Column visibility menu
-    # ------------------------------------------------------------------
-    def _show_column_menu(self) -> None:
-        """Popup menu to toggle column visibility. Persists to amethyst.ini."""
-        # Reuse a single popup instance — recreating it leaks <FocusOut>/click
-        # bindings on the app toplevel (added with add="+") which then cause
-        # the menu to instantly dismiss on subsequent opens.
-        menu = self._col_menu_popup
-        if menu is None or not menu.winfo_exists():
-            menu = CTkPopupMenu(self.winfo_toplevel(), width=200, title="")
-            self._col_menu_popup = menu
-        else:
-            menu.clear()
-        # Columns in current display order (2..7), name col (1) is never hideable.
-        for dc in self._col_order:
-            title = self._DATA_COL_TITLES.get(dc, f"Col {dc}")
-            visible = dc not in self._col_hidden
-            prefix = "☑  " if visible else "☐  "
-            menu.add_command(prefix + title, lambda d=dc: self._toggle_column_hidden(d),
-                             font=("Cantarell", _theme.FONT_NORMAL[1]))
-        try:
-            btn = self._col_menu_btn
-            x = btn.winfo_rootx()
-            y = btn.winfo_rooty() + btn.winfo_height()
-            menu.popup(x - 170, y)
-        except Exception:
-            menu.popup()
-
-    def _toggle_column_hidden(self, dc: int) -> None:
-        """Toggle a column's visibility and persist."""
-        if dc in self._col_hidden:
-            self._col_hidden.discard(dc)
-        else:
-            # Don't allow hiding every non-name column; keep at least one visible.
-            if len(self._col_hidden) + 1 >= len(self._col_order):
-                return
-            self._col_hidden.add(dc)
-        save_column_hidden(self._col_hidden)
-        self._layout_columns(self._canvas_w)
-        self._update_header(self._canvas_w)
-        self._redraw()
-
-    # ------------------------------------------------------------------
-    # Column reorder drag (header label drag-to-move)
-    # ------------------------------------------------------------------
-
-    def _on_hdr_drag_start(self, event: tk.Event, data_col: int, sort_key: str | None) -> None:
-        self._hdr_drag_col = data_col
-        self._hdr_drag_sort_key = sort_key
-        self._hdr_drag_start_x = event.x_root
-        self._hdr_drag_moved = False
-
-    def _on_hdr_drag_motion(self, event: tk.Event) -> None:
-        if self._hdr_drag_col is None:
-            return
-        dx = abs(event.x_root - self._hdr_drag_start_x)
-        if dx > 5:
-            self._hdr_drag_moved = True
-        if not self._hdr_drag_moved:
-            return
-        # Show a ghost label following the cursor
-        x_root, y_root = event.x_root, event.y_root
-        if self._hdr_drag_ghost is None:
-            dc = self._hdr_drag_col
-            title = self._DATA_COL_TITLES.get(dc, "")
-            self._hdr_drag_ghost = tk.Label(
-                self._header, text=title,
-                font=(_theme.FONT_FAMILY, _theme.FS11, "bold"),
-                fg=ACCENT, bg=BG_SELECT_BAR, relief="solid", bd=1,
-                padx=4,
-            )
-        # Position relative to header widget
-        hdr_x = self._header.winfo_rootx()
-        hdr_y = self._header.winfo_rooty()
-        ghost_x = x_root - hdr_x - 20
-        self._hdr_drag_ghost.place(x=ghost_x, y=2, height=scaled(24))
-        self._hdr_drag_ghost.lift()
-        # Highlight the drop target column
-        self._hdr_drag_highlight(event.x_root)
-
-    def _hdr_drag_highlight(self, x_root: int) -> None:
-        """Update header label backgrounds to show drop target."""
-        hdr_x = self._header.winfo_rootx()
-        local_x = x_root - hdr_x
-        target_slot = self._hdr_slot_at(local_x)
-        visible = [dc for dc in self._col_order if dc not in self._col_hidden]
-        slot_data_cols = [0, 1] + visible
-        for k, lbl in enumerate(self._header_labels):
-            slot = k  # label index = slot
-            dc = slot_data_cols[slot] if slot < len(slot_data_cols) else 0
-            is_movable = dc in (2, 3, 4, 5, 6, 7)
-            if is_movable and slot == target_slot:
-                lbl.configure(bg=BG_SELECT_BAR)
-            else:
-                lbl.configure(bg=BG_HEADER)
-
-    def _hdr_slot_at(self, local_x: int) -> int:
-        """Return the slot index at header local x, clamped to visible movable range."""
-        visible = [dc for dc in self._col_order if dc not in self._col_hidden]
-        n_visible = len(visible)
-        if n_visible == 0:
-            return 2
-        max_slot = n_visible + 1  # slots 2..n_visible+1
-        for slot in range(max_slot, 1, -1):
-            if local_x >= self._COL_X[slot]:
-                return slot
-        return 2
-
-    def _on_hdr_drag_end(self, event: tk.Event) -> None:
-        if self._hdr_drag_col is None:
-            return
-        dc = self._hdr_drag_col
-        moved = self._hdr_drag_moved
-        sort_key = getattr(self, "_hdr_drag_sort_key", None)
-        # Clean up ghost
-        if self._hdr_drag_ghost is not None:
-            self._hdr_drag_ghost.destroy()
-            self._hdr_drag_ghost = None
-        # Reset label backgrounds
-        for lbl in self._header_labels:
-            lbl.configure(bg=BG_HEADER)
-        self._hdr_drag_col = None
-        self._hdr_drag_moved = False
-        if not moved:
-            # Treat as a click — sort if sortable
-            if sort_key:
-                self._on_header_click(sort_key)
-            return
-        # Determine drop target slot
-        hdr_x = self._header.winfo_rootx()
-        local_x = event.x_root - hdr_x
-        target_slot = self._hdr_slot_at(local_x)
-        # Find source slot
-        src_slot = self._col_pos.get(dc, -1)
-        visible = [c for c in self._col_order if c not in self._col_hidden]
-        n_visible = len(visible)
-        if src_slot == target_slot or target_slot < 2 or target_slot > (n_visible + 1):
-            return
-        # Swap within the visible list, then splice back into _col_order preserving hidden positions
-        src_k = src_slot - 2
-        tgt_k = target_slot - 2
-        if src_k < 0 or src_k >= n_visible or tgt_k < 0 or tgt_k >= n_visible:
-            return
-        visible[src_k], visible[tgt_k] = visible[tgt_k], visible[src_k]
-        new_order: list[int] = []
-        vi = 0
-        for c in self._col_order:
-            if c in self._col_hidden:
-                new_order.append(c)
-            else:
-                new_order.append(visible[vi])
-                vi += 1
-        order = new_order
-        self._col_order = order
-        save_column_order(order)
-        # Rebuild header labels so bindings use the new order
-        for lbl in self._header_labels:
-            lbl.destroy()
-        self._header_labels.clear()
-        self._layout_columns(self._canvas_w)
-        self._update_header(self._canvas_w)
-        self._redraw()
-
-    # ------------------------------------------------------------------
     # Load / reload
     # ------------------------------------------------------------------
 
-    def _load_sep_locks(self) -> None:
-        if self._modlist_path is None:
-            self._sep_locks = {}
-            return
-        self._sep_locks = read_separator_locks(self._modlist_path.parent, self.__profile_state)
+    # (attr, read_fn, write_fn, default_factory)
+    _STATE_IO_SPECS = (
+        ("_sep_locks",          read_separator_locks,         write_separator_locks,         dict),
+        ("_sep_colors",         read_separator_colors,        write_separator_colors,        dict),
+        ("_sep_deploy_paths",   read_separator_deploy_paths,  write_separator_deploy_paths,  dict),
+        ("_mod_strip_prefixes", read_mod_strip_prefixes,      write_mod_strip_prefixes,      dict),
+        ("_root_folder_enabled", read_root_folder_state,      write_root_folder_state,       lambda: True),
+        ("_collapsed_seps",     read_collapsed_seps,          write_collapsed_seps,          set),
+    )
 
-    def _save_sep_locks(self) -> None:
+    def _load_state(self, attr: str) -> None:
+        spec = next(s for s in self._STATE_IO_SPECS if s[0] == attr)
+        _, read_fn, _, default_factory = spec
         if self._modlist_path is None:
+            setattr(self, attr, default_factory())
             return
-        write_separator_locks(self._modlist_path.parent, self._sep_locks)
+        setattr(self, attr, read_fn(self._modlist_path.parent, self.__profile_state))
 
-    def _load_sep_colors(self) -> None:
+    def _save_state(self, attr: str) -> None:
         if self._modlist_path is None:
-            self._sep_colors = {}
             return
-        self._sep_colors = read_separator_colors(self._modlist_path.parent, self.__profile_state)
+        spec = next(s for s in self._STATE_IO_SPECS if s[0] == attr)
+        _, _, write_fn, _ = spec
+        write_fn(self._modlist_path.parent, getattr(self, attr))
 
-    def _save_sep_colors(self) -> None:
-        if self._modlist_path is None:
-            return
-        write_separator_colors(self._modlist_path.parent, self._sep_colors)
-
-    def _load_sep_deploy_paths(self) -> None:
-        if self._modlist_path is None:
-            self._sep_deploy_paths = {}
-            return
-        self._sep_deploy_paths = read_separator_deploy_paths(self._modlist_path.parent, self.__profile_state)
-
-    def _save_sep_deploy_paths(self) -> None:
-        if self._modlist_path is None:
-            return
-        write_separator_deploy_paths(self._modlist_path.parent, self._sep_deploy_paths)
-
-    def _load_mod_strip_prefixes(self) -> None:
-        if self._modlist_path is None:
-            self._mod_strip_prefixes = {}
-            return
-        self._mod_strip_prefixes = read_mod_strip_prefixes(self._modlist_path.parent, self.__profile_state)
+    def _load_sep_locks(self) -> None:          self._load_state("_sep_locks")
+    def _save_sep_locks(self) -> None:          self._save_state("_sep_locks")
+    def _load_sep_colors(self) -> None:         self._load_state("_sep_colors")
+    def _save_sep_colors(self) -> None:         self._save_state("_sep_colors")
+    def _load_sep_deploy_paths(self) -> None:   self._load_state("_sep_deploy_paths")
+    def _save_sep_deploy_paths(self) -> None:   self._save_state("_sep_deploy_paths")
+    def _load_mod_strip_prefixes(self) -> None: self._load_state("_mod_strip_prefixes")
+    def _load_root_folder_state(self) -> None:  self._load_state("_root_folder_enabled")
+    def _save_root_folder_state(self) -> None:  self._save_state("_root_folder_enabled")
+    def _load_collapsed(self) -> None:          self._load_state("_collapsed_seps")
+    def _save_collapsed(self) -> None:          self._save_state("_collapsed_seps")
 
     def _save_mod_strip_prefixes(self) -> None:
-        if self._modlist_path is None:
-            return
-        write_mod_strip_prefixes(self._modlist_path.parent, self._mod_strip_prefixes)
-        self.__profile_state.pop("mod_strip_prefixes", None)
-
-    def _load_root_folder_state(self) -> None:
-        if self._modlist_path is None:
-            self._root_folder_enabled = True
-            return
-        self._root_folder_enabled = read_root_folder_state(self._modlist_path.parent, self.__profile_state)
-
-    def _save_root_folder_state(self) -> None:
-        if self._modlist_path is None:
-            return
-        write_root_folder_state(self._modlist_path.parent, self._root_folder_enabled)
-
-    def _load_collapsed(self) -> None:
-        if self._modlist_path is None:
-            self._collapsed_seps = set()
-            return
-        self._collapsed_seps = read_collapsed_seps(self._modlist_path.parent, self.__profile_state)
-
-    def _save_collapsed(self) -> None:
-        if self._modlist_path is None:
-            return
-        write_collapsed_seps(self._modlist_path.parent, self._collapsed_seps)
+        self._save_state("_mod_strip_prefixes")
+        if self._modlist_path is not None:
+            self.__profile_state.pop("mod_strip_prefixes", None)
 
     def _compute_bundle_groups(self) -> None:
         """Rebuild _bundle_groups from current _entries.
@@ -2174,6 +1569,279 @@ class ModListPanel(ctk.CTkFrame):
     # Drawing
     # ------------------------------------------------------------------
 
+    def _compute_conflict_highlights(
+        self, sel_entry,
+    ) -> tuple[set[int], set[int], set[str], set[str], set[str], set[str]]:
+        """Build the six highlight sets _redraw needs from current selection.
+
+        Returns (sep_higher, sep_lower, mod_higher, mod_lower, sel_higher, sel_lower):
+        - sep_higher / sep_lower: separator row indices to tint green / red
+          because a collapsed separator's block conflicts with the selection.
+        - mod_higher / mod_lower: mod names to tint when a *separator* is selected
+          and the conflicting mod sits in an expanded block.
+        - sel_higher / sel_lower: mod names to tint when one or more *mods* are
+          selected and the conflicting mod sits in an expanded block.
+        """
+        sep_higher: set[int] = set()
+        sep_lower: set[int] = set()
+        mod_higher: set[str] = set()
+        mod_lower: set[str] = set()
+        sel_higher: set[str] = set()
+        sel_lower: set[str] = set()
+
+        entries = self._entries
+        n = len(entries)
+        collapsed = self._collapsed_seps
+        overrides = self._overrides
+        overridden_by = self._overridden_by
+        bsa_overrides = self._bsa_overrides
+        bsa_overridden_by = self._bsa_overridden_by
+
+        def _ow_idx() -> int:
+            return next((j for j, e in enumerate(entries) if e.name == OVERWRITE_NAME), -1)
+
+        if sel_entry and not sel_entry.is_separator:
+            # Mods are selected — partition each conflict mod into "collapsed
+            # separator → tint the separator" vs "expanded → tint the mod".
+            for sel_i in self._sel_set:
+                if sel_i < 0 or sel_i >= n:
+                    continue
+                e = entries[sel_i]
+                if e.is_separator:
+                    continue
+                sel_name = e.name
+                higher_set = overrides.get(sel_name, set()) | bsa_overrides.get(sel_name, set())
+                lower_set = overridden_by.get(sel_name, set()) | bsa_overridden_by.get(sel_name, set())
+                for cm in higher_set:
+                    si = self._sep_idx_for_mod(cm)
+                    if si >= 0 and entries[si].name in collapsed:
+                        sep_higher.add(si)
+                    else:
+                        sel_higher.add(cm)
+                for cm in lower_set:
+                    si = self._sep_idx_for_mod(cm)
+                    if si >= 0 and entries[si].name in collapsed:
+                        sep_lower.add(si)
+                    else:
+                        sel_lower.add(cm)
+        elif (sel_entry and sel_entry.is_separator
+              and sel_entry.name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)):
+            # A normal separator is selected — highlight everything its block conflicts with.
+            i = self._sel_idx + 1
+            while i < n and not entries[i].is_separator:
+                mod_name = entries[i].name
+                higher_set = overrides.get(mod_name, set()) | bsa_overrides.get(mod_name, set())
+                lower_set = overridden_by.get(mod_name, set()) | bsa_overridden_by.get(mod_name, set())
+                for cm in higher_set:
+                    si = self._sep_idx_for_mod(cm)
+                    if si >= 0:
+                        if entries[si].name in collapsed:
+                            sep_higher.add(si)
+                        else:
+                            mod_higher.add(cm)
+                    elif cm == OVERWRITE_NAME:
+                        ow_idx = _ow_idx()
+                        if ow_idx >= 0:
+                            sep_higher.add(ow_idx)
+                for cm in lower_set:
+                    si = self._sep_idx_for_mod(cm)
+                    if si >= 0:
+                        if entries[si].name in collapsed:
+                            sep_lower.add(si)
+                        else:
+                            mod_lower.add(cm)
+                    elif cm == OVERWRITE_NAME:
+                        ow_idx = _ow_idx()
+                        if ow_idx >= 0:
+                            sep_lower.add(ow_idx)
+                i += 1
+        elif sel_entry and sel_entry.name == OVERWRITE_NAME:
+            ow_higher = (overrides.get(OVERWRITE_NAME, set())
+                         | bsa_overrides.get(OVERWRITE_NAME, set()))
+            for cm in ow_higher:
+                si = self._sep_idx_for_mod(cm)
+                if si >= 0 and entries[si].name in collapsed:
+                    sep_higher.add(si)
+
+        # Special case: when Overwrite overrides any selected mod, light up the
+        # Overwrite row green so the user can see Overwrite is winning over them.
+        if sel_entry and not sel_entry.is_separator:
+            for sel_i in self._sel_set:
+                if sel_i < 0 or sel_i >= n:
+                    continue
+                e = entries[sel_i]
+                if e.is_separator:
+                    continue
+                ow_losers = (overridden_by.get(e.name, set())
+                             | bsa_overridden_by.get(e.name, set()))
+                if OVERWRITE_NAME in ow_losers:
+                    ow_idx = _ow_idx()
+                    if ow_idx >= 0:
+                        sep_higher.add(ow_idx)
+                    break
+
+        return sep_higher, sep_lower, mod_higher, mod_lower, sel_higher, sel_lower
+
+    # Pool item attribute names that get hidden together when a slot leaves
+    # the viewport. Listed once so _hide_pool_slot stays a one-line loop.
+    _POOL_HIDE_ITEMS = (
+        "_pool_bg", "_pool_name",
+        "_pool_flag_icon", "_pool_flag_icon2", "_pool_flag_icon3",
+        "_pool_flag_icon4", "_pool_flag_icon5", "_pool_flag_star",
+        "_pool_conflict_icon1", "_pool_conflict_icon2",
+        "_pool_bsa_dot1", "_pool_bsa_dot2", "_pool_bsa_sep",
+        "_pool_category_text", "_pool_install_text",
+        "_pool_priority_text", "_pool_version_text",
+        "_pool_sep_icon", "_pool_sep_line_l", "_pool_sep_line_r",
+        "_pool_sep_badge",
+        "_pool_cb_rect", "_pool_cb_mark",
+    )
+
+    def _aggregate_block_conflicts(self, sep_idx: int) -> tuple[int, int]:
+        """Return (loose_aggregate, bsa_aggregate) CONFLICT_* constants for the
+        block under separator `sep_idx`. Aggregate goes WINS / LOSES /
+        PARTIAL / NONE — never FULL, since FULL describes a single mod's
+        per-file resolution and doesn't compose across mods."""
+        wins = loses = bsa_wins = bsa_loses = False
+        for bi in self._sep_block_range(sep_idx):
+            be = self._entries[bi]
+            if be.is_separator:
+                continue
+            bc = self._conflict_map.get(be.name, CONFLICT_NONE)
+            if bc in (CONFLICT_WINS, CONFLICT_PARTIAL, CONFLICT_FULL):
+                wins = True
+            if bc in (CONFLICT_LOSES, CONFLICT_PARTIAL, CONFLICT_FULL):
+                loses = True
+            bbc = self._bsa_conflict_map.get(be.name, CONFLICT_NONE)
+            if bbc in (CONFLICT_WINS, CONFLICT_PARTIAL, CONFLICT_FULL):
+                bsa_wins = True
+            if bbc in (CONFLICT_LOSES, CONFLICT_PARTIAL, CONFLICT_FULL):
+                bsa_loses = True
+
+        def _reduce(w: bool, l: bool) -> int:
+            if w and l: return CONFLICT_PARTIAL
+            if w:       return CONFLICT_WINS
+            if l:       return CONFLICT_LOSES
+            return CONFLICT_NONE
+
+        return _reduce(wins, loses), _reduce(bsa_wins, bsa_loses)
+
+    def _render_conflict_cell(self, s: int, conflict: int, bsa_conflict: int,
+                              conf_x: int, conf_w: int, y_mid: int) -> None:
+        """Render the loose / BSA conflict icons for pool slot `s`.
+
+        When both groups are present they're split around the column centre
+        with a thin vertical separator line drawn between them.
+        """
+        c = self._canvas
+        cx_center = conf_x + conf_w // 2
+        has_loose = conflict != CONFLICT_NONE
+        has_bsa = bsa_conflict != CONFLICT_NONE
+
+        if has_loose and has_bsa:
+            sep_x = cx_center
+            gap = scaled(6)         # visible gap between icon edge and separator
+            icon_half = scaled(12)  # half-width of a conflict icon
+            loose_cx = sep_x - gap - icon_half
+            bsa_cx = sep_x + gap + icon_half
+        else:
+            loose_cx = cx_center
+            bsa_cx = cx_center
+
+        loose_icon = None
+        if conflict == CONFLICT_WINS:
+            loose_icon = self._icon_plus
+        elif conflict == CONFLICT_LOSES:
+            loose_icon = self._icon_minus
+        elif conflict == CONFLICT_PARTIAL:
+            loose_icon = self._icon_conflict_mixed
+        elif conflict == CONFLICT_FULL:
+            loose_icon = self._icon_cross
+        if loose_icon is not None:
+            c.coords(self._pool_conflict_icon1[s], loose_cx, y_mid)
+            c.itemconfigure(self._pool_conflict_icon1[s],
+                            image=loose_icon, state="normal")
+        else:
+            c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
+        c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
+
+        bsa_icon = None
+        if has_bsa:
+            if bsa_conflict == CONFLICT_WINS:
+                bsa_icon = self._icon_bsa_winner
+            elif bsa_conflict == CONFLICT_LOSES:
+                bsa_icon = self._icon_bsa_loser
+            elif bsa_conflict == CONFLICT_PARTIAL:
+                bsa_icon = self._icon_bsa_mixed
+            elif bsa_conflict == CONFLICT_FULL:
+                bsa_icon = self._icon_bsa_redundant
+        if bsa_icon is not None:
+            c.coords(self._pool_bsa_dot1[s], bsa_cx, y_mid)
+            c.itemconfigure(self._pool_bsa_dot1[s],
+                            image=bsa_icon, state="normal")
+        else:
+            c.itemconfigure(self._pool_bsa_dot1[s], state="hidden")
+        c.itemconfigure(self._pool_bsa_dot2[s], state="hidden")
+
+        if has_loose and has_bsa:
+            sh = scaled(7)
+            c.coords(self._pool_bsa_sep[s],
+                     sep_x, y_mid - sh, sep_x, y_mid + sh)
+            c.itemconfigure(self._pool_bsa_sep[s], fill=BORDER, state="normal")
+            c.tag_raise(self._pool_bsa_sep[s])
+        else:
+            c.itemconfigure(self._pool_bsa_sep[s], state="hidden")
+
+    def _hide_pool_slot(self, s: int) -> None:
+        """Hide every canvas item belonging to pool slot `s` and mark it free."""
+        c = self._canvas
+        for attr in self._POOL_HIDE_ITEMS:
+            c.itemconfigure(getattr(self, attr)[s], state="hidden")
+        self._pool_data_idx[s] = -1
+
+    def _render_flag_strip(self, s: int, flags: list,
+                           flag_x: int, flag_w: int, y_mid: int) -> None:
+        """Render a centred row of flag icons into pool slot `s`.
+
+        `flags` is an ordered list of either ("img", image) or ("star",) tuples.
+        The pool exposes 5 image slots + 1 star slot; image flags past slot 5
+        are silently dropped (callers are expected to cap before calling). Used
+        by both regular mod rows and collapsed-separator aggregate rows.
+        """
+        c = self._canvas
+        SPACING = scaled(22)
+        img_slots = (
+            self._pool_flag_icon[s],
+            self._pool_flag_icon2[s],
+            self._pool_flag_icon3[s],
+            self._pool_flag_icon4[s],
+            self._pool_flag_icon5[s],
+        )
+        star_slot = self._pool_flag_star[s]
+        n = len(flags)
+        if n > 0:
+            group_w = (n - 1) * SPACING
+            fx_start = flag_x + flag_w // 2 - group_w // 2
+        else:
+            fx_start = flag_x + flag_w // 2
+        img_idx = 0
+        star_placed = False
+        for fi, flag in enumerate(flags):
+            fx = fx_start + fi * SPACING
+            if flag[0] == "star":
+                c.coords(star_slot, fx, y_mid)
+                c.itemconfigure(star_slot, state="normal")
+                star_placed = True
+            elif img_idx < len(img_slots):
+                slot_id = img_slots[img_idx]
+                c.coords(slot_id, fx, y_mid)
+                c.itemconfigure(slot_id, image=flag[1], state="normal")
+                img_idx += 1
+        for si in range(img_idx, len(img_slots)):
+            c.itemconfigure(img_slots[si], state="hidden")
+        if not star_placed:
+            c.itemconfigure(star_slot, state="hidden")
+
     def _redraw(self):
         """Pool-based redraw: reconfigure pre-allocated canvas items for the visible viewport.
 
@@ -2250,96 +1918,9 @@ class ModListPanel(ctk.CTkFrame):
         sel_entry = (self._entries[self._sel_idx]
                      if 0 <= self._sel_idx < len(self._entries) else None)
 
-        # Pre-compute separator highlight sets
-        conflict_sep_higher: set[int] = set()  # green — wins over selected
-        conflict_sep_lower:  set[int] = set()  # red   — loses to selected
-        # Mod-level highlight sets (used when a separator is selected and some mods are expanded)
-        conflict_mod_higher: set[str] = set()  # mod names that selected-separator mods override
-        conflict_mod_lower:  set[str] = set()  # mod names that override selected-separator mods
-        # Mod-level conflict sets for all selected non-separator mods (multi-selection support)
-        conflict_sel_higher: set[str] = set()  # mod names that any selected mod overrides
-        conflict_sel_lower:  set[str] = set()  # mod names that override any selected mod
-        if sel_entry and not sel_entry.is_separator:
-            # Collect conflicts for every selected non-separator mod
-            for sel_i in self._sel_set:
-                if sel_i < 0 or sel_i >= len(self._entries):
-                    continue
-                e = self._entries[sel_i]
-                if e.is_separator:
-                    continue
-                sel_name = e.name
-                _higher_set = (self._overrides.get(sel_name, set())
-                               | self._bsa_overrides.get(sel_name, set()))
-                _lower_set  = (self._overridden_by.get(sel_name, set())
-                               | self._bsa_overridden_by.get(sel_name, set()))
-                for cm in _higher_set:
-                    si = self._sep_idx_for_mod(cm)
-                    if si >= 0 and self._entries[si].name in self._collapsed_seps:
-                        conflict_sep_higher.add(si)
-                    else:
-                        conflict_sel_higher.add(cm)
-                for cm in _lower_set:
-                    si = self._sep_idx_for_mod(cm)
-                    if si >= 0 and self._entries[si].name in self._collapsed_seps:
-                        conflict_sep_lower.add(si)
-                    else:
-                        conflict_sel_lower.add(cm)
-        elif sel_entry and sel_entry.is_separator and sel_entry.name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME):
-            # Selected entry is a normal separator — highlight all separators/mods
-            # that conflict with any mod inside this separator.
-            sel_sep_idx = self._sel_idx
-            # Collect mods under this separator
-            i = sel_sep_idx + 1
-            while i < len(self._entries) and not self._entries[i].is_separator:
-                mod_name = self._entries[i].name
-                _higher_set = (self._overrides.get(mod_name, set())
-                               | self._bsa_overrides.get(mod_name, set()))
-                _lower_set  = (self._overridden_by.get(mod_name, set())
-                               | self._bsa_overridden_by.get(mod_name, set()))
-                for cm in _higher_set:
-                    si = self._sep_idx_for_mod(cm)
-                    if si >= 0:
-                        if self._entries[si].name in self._collapsed_seps:
-                            conflict_sep_higher.add(si)
-                        else:
-                            conflict_mod_higher.add(cm)
-                    elif cm == OVERWRITE_NAME:
-                        ow_idx = next((j for j, e in enumerate(self._entries) if e.name == OVERWRITE_NAME), -1)
-                        if ow_idx >= 0:
-                            conflict_sep_higher.add(ow_idx)
-                for cm in _lower_set:
-                    si = self._sep_idx_for_mod(cm)
-                    if si >= 0:
-                        if self._entries[si].name in self._collapsed_seps:
-                            conflict_sep_lower.add(si)
-                        else:
-                            conflict_mod_lower.add(cm)
-                    elif cm == OVERWRITE_NAME:
-                        ow_idx = next((j for j, e in enumerate(self._entries) if e.name == OVERWRITE_NAME), -1)
-                        if ow_idx >= 0:
-                            conflict_sep_lower.add(ow_idx)
-                i += 1
-        elif sel_entry and sel_entry.name == OVERWRITE_NAME:
-            _ow_higher = (self._overrides.get(OVERWRITE_NAME, set())
-                          | self._bsa_overrides.get(OVERWRITE_NAME, set()))
-            for cm in _ow_higher:
-                si = self._sep_idx_for_mod(cm)
-                if si >= 0 and self._entries[si].name in self._collapsed_seps:
-                    conflict_sep_higher.add(si)
-
-        # Special case: if Overwrite overrides any selected mod, highlight the Overwrite row green.
-        if sel_entry and not sel_entry.is_separator:
-            for sel_i in self._sel_set:
-                if sel_i < 0 or sel_i >= len(self._entries):
-                    continue
-                e = self._entries[sel_i]
-                _ow_losers = (self._overridden_by.get(e.name, set())
-                              | self._bsa_overridden_by.get(e.name, set()))
-                if not e.is_separator and OVERWRITE_NAME in _ow_losers:
-                    ow_idx = next((j for j, oe in enumerate(self._entries) if oe.name == OVERWRITE_NAME), -1)
-                    if ow_idx >= 0:
-                        conflict_sep_higher.add(ow_idx)
-                    break
+        (conflict_sep_higher, conflict_sep_lower,
+         conflict_mod_higher, conflict_mod_lower,
+         conflict_sel_higher, conflict_sel_lower) = self._compute_conflict_highlights(sel_entry)
 
         highlighted_sep_idx: int = -1
         if self._highlighted_mod:
@@ -2531,103 +2112,12 @@ class ModListPanel(ctk.CTkFrame):
                         c.itemconfigure(self._pool_flag_icon5[s], state="hidden")
                         c.itemconfigure(self._pool_flag_star[s], state="hidden")
                     elif _sep_is_collapsed:
-                        # Aggregate conflict/flag state from all mods in this block
+                        # Aggregate the block's per-mod conflict state and render it.
                         _blk = self._sep_block_range(i)
-                        _agg_wins = False
-                        _agg_loses = False
-                        _agg_bsa_wins = False
-                        _agg_bsa_loses = False
-                        for _bi in _blk:
-                            _be = self._entries[_bi]
-                            if _be.is_separator:
-                                continue
-                            _bc = self._conflict_map.get(_be.name, CONFLICT_NONE)
-                            if _bc in (CONFLICT_WINS, CONFLICT_PARTIAL, CONFLICT_FULL):
-                                _agg_wins = True
-                            if _bc in (CONFLICT_LOSES, CONFLICT_PARTIAL, CONFLICT_FULL):
-                                _agg_loses = True
-                            _bbc = self._bsa_conflict_map.get(_be.name, CONFLICT_NONE)
-                            if _bbc in (CONFLICT_WINS, CONFLICT_PARTIAL, CONFLICT_FULL):
-                                _agg_bsa_wins = True
-                            if _bbc in (CONFLICT_LOSES, CONFLICT_PARTIAL, CONFLICT_FULL):
-                                _agg_bsa_loses = True
-
-                        # Derive aggregate conflict constants
-                        if _agg_wins and _agg_loses:
-                            _agg_conflict = CONFLICT_PARTIAL
-                        elif _agg_wins:
-                            _agg_conflict = CONFLICT_WINS
-                        elif _agg_loses:
-                            _agg_conflict = CONFLICT_LOSES
-                        else:
-                            _agg_conflict = CONFLICT_NONE
-                        if _agg_bsa_wins and _agg_bsa_loses:
-                            _agg_bsa = CONFLICT_PARTIAL
-                        elif _agg_bsa_wins:
-                            _agg_bsa = CONFLICT_WINS
-                        elif _agg_bsa_loses:
-                            _agg_bsa = CONFLICT_LOSES
-                        else:
-                            _agg_bsa = CONFLICT_NONE
-
-                        # Render aggregated conflict icons (same logic as mod rows)
-                        cx_center = _CONF_X + _CONF_W // 2
-                        _has_loose = _agg_conflict != CONFLICT_NONE
-                        _has_bsa = _agg_bsa != CONFLICT_NONE
-                        if _has_loose and _has_bsa:
-                            _sep_x = cx_center
-                            _GAP = scaled(6)
-                            _ICON_HALF = scaled(12)
-                            _loose_cx = _sep_x - _GAP - _ICON_HALF
-                            _bsa_cx = _sep_x + _GAP + _ICON_HALF
-                        else:
-                            _loose_cx = cx_center
-                            _bsa_cx = cx_center
-
-                        if _agg_conflict == CONFLICT_WINS and self._icon_plus:
-                            c.coords(self._pool_conflict_icon1[s], _loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_plus, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        elif _agg_conflict == CONFLICT_LOSES and self._icon_minus:
-                            c.coords(self._pool_conflict_icon1[s], _loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_minus, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        elif _agg_conflict == CONFLICT_PARTIAL and self._icon_conflict_mixed:
-                            c.coords(self._pool_conflict_icon1[s], _loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_conflict_mixed, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        else:
-                            c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-
-                        _agg_bsa_icon = None
-                        if _has_bsa:
-                            if _agg_bsa == CONFLICT_WINS:
-                                _agg_bsa_icon = self._icon_bsa_winner
-                            elif _agg_bsa == CONFLICT_LOSES:
-                                _agg_bsa_icon = self._icon_bsa_loser
-                            elif _agg_bsa == CONFLICT_PARTIAL:
-                                _agg_bsa_icon = self._icon_bsa_mixed
-                        if _agg_bsa_icon is not None:
-                            c.coords(self._pool_bsa_dot1[s], _bsa_cx, y_mid)
-                            c.itemconfigure(self._pool_bsa_dot1[s],
-                                            image=_agg_bsa_icon, state="normal")
-                        else:
-                            c.itemconfigure(self._pool_bsa_dot1[s], state="hidden")
-                        c.itemconfigure(self._pool_bsa_dot2[s], state="hidden")
-
-                        if _has_loose and _has_bsa:
-                            _sh = scaled(7)
-                            c.coords(self._pool_bsa_sep[s],
-                                     _sep_x, y_mid - _sh, _sep_x, y_mid + _sh)
-                            c.itemconfigure(self._pool_bsa_sep[s],
-                                            fill=BORDER, state="normal")
-                            c.tag_raise(self._pool_bsa_sep[s])
-                        else:
-                            c.itemconfigure(self._pool_bsa_sep[s], state="hidden")
+                        _agg_conflict, _agg_bsa = self._aggregate_block_conflicts(i)
+                        self._render_conflict_cell(
+                            s, _agg_conflict, _agg_bsa, _CONF_X, _CONF_W, y_mid,
+                        )
 
                         # Aggregate flags from mods in the block (deduplicated by type)
                         _agg_flags: list = []
@@ -2676,39 +2166,7 @@ class ModListPanel(ctk.CTkFrame):
                             _seen_flag.add("star")
 
                         # Render aggregated flags (same layout as mod rows)
-                        _FLAG_ICON_SPACING = scaled(22)
-                        _flag_slots = [
-                            (self._pool_flag_icon[s], "img"),
-                            (self._pool_flag_icon2[s], "img"),
-                            (self._pool_flag_icon3[s], "img"),
-                            (self._pool_flag_icon4[s], "img"),
-                            (self._pool_flag_icon5[s], "img"),
-                        ]
-                        _flag_star_slot = self._pool_flag_star[s]
-                        _n_flags = len(_agg_flags)
-                        if _n_flags > 0:
-                            _group_w = (_n_flags - 1) * _FLAG_ICON_SPACING
-                            _fx_start = _FLAG_X + _FLAG_W // 2 - _group_w // 2
-                        else:
-                            _fx_start = _FLAG_X + _FLAG_W // 2
-                        _img_slot_idx = 0
-                        _star_placed = False
-                        for _fi, _flag in enumerate(_agg_flags):
-                            _fx = _fx_start + _fi * _FLAG_ICON_SPACING
-                            if _flag[0] == "star":
-                                c.coords(_flag_star_slot, _fx, y_mid)
-                                c.itemconfigure(_flag_star_slot, state="normal")
-                                _star_placed = True
-                            else:
-                                if _img_slot_idx < len(_flag_slots):
-                                    _slot_id = _flag_slots[_img_slot_idx][0]
-                                    c.coords(_slot_id, _fx, y_mid)
-                                    c.itemconfigure(_slot_id, image=_flag[1], state="normal")
-                                    _img_slot_idx += 1
-                        for _si in range(_img_slot_idx, len(_flag_slots)):
-                            c.itemconfigure(_flag_slots[_si][0], state="hidden")
-                        if not _star_placed:
-                            c.itemconfigure(_flag_star_slot, state="hidden")
+                        self._render_flag_strip(s, _agg_flags, _FLAG_X, _FLAG_W, y_mid)
                     else:
                         c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
                         c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
@@ -2921,42 +2379,7 @@ class ModListPanel(ctk.CTkFrame):
                     if entry.name in self._root_folder_mods and self._icon_root_folder:
                         _flags.append(("img", self._icon_root_folder))
 
-                    # Lay out flags left-aligned inside the flags column (icon spacing = 18px)
-                    _FLAG_ICON_SPACING = scaled(22)
-                    _flag_slots = [
-                        (self._pool_flag_icon[s], "img"),
-                        (self._pool_flag_icon2[s], "img"),
-                        (self._pool_flag_icon3[s], "img"),
-                        (self._pool_flag_icon4[s], "img"),
-                        (self._pool_flag_icon5[s], "img"),
-                    ]
-                    _flag_star_slot = self._pool_flag_star[s]
-                    # Centre the group within the column
-                    _n_flags = len(_flags)
-                    if _n_flags > 0:
-                        _group_w = (_n_flags - 1) * _FLAG_ICON_SPACING
-                        _fx_start = _FLAG_X + _FLAG_W // 2 - _group_w // 2
-                    else:
-                        _fx_start = _FLAG_X + _FLAG_W // 2
-                    _img_slot_idx = 0
-                    _star_placed = False
-                    for _fi, _flag in enumerate(_flags):
-                        _fx = _fx_start + _fi * _FLAG_ICON_SPACING
-                        if _flag[0] == "star":
-                            c.coords(_flag_star_slot, _fx, y_mid)
-                            c.itemconfigure(_flag_star_slot, state="normal")
-                            _star_placed = True
-                        else:
-                            if _img_slot_idx < len(_flag_slots):
-                                _slot_id = _flag_slots[_img_slot_idx][0]
-                                c.coords(_slot_id, _fx, y_mid)
-                                c.itemconfigure(_slot_id, image=_flag[1], state="normal")
-                                _img_slot_idx += 1
-                    # Hide unused image slots
-                    for _si in range(_img_slot_idx, len(_flag_slots)):
-                        c.itemconfigure(_flag_slots[_si][0], state="hidden")
-                    if not _star_placed:
-                        c.itemconfigure(_flag_star_slot, state="hidden")
+                    self._render_flag_strip(s, _flags, _FLAG_X, _FLAG_W, y_mid)
 
                     # Conflict indicators: loose-file icons (left) + BSA dots (right of loose,
                     # separated by a thin vertical line when both are present).
@@ -2967,81 +2390,12 @@ class ModListPanel(ctk.CTkFrame):
                         c.itemconfigure(self._pool_bsa_dot2[s], state="hidden")
                         c.itemconfigure(self._pool_bsa_sep[s], state="hidden")
                     else:
-                        conflict = self._conflict_map.get(entry.name, CONFLICT_NONE)
-                        bsa_conflict = self._bsa_conflict_map.get(entry.name, CONFLICT_NONE)
-                        cx_center = _CONF_X + _CONF_W // 2
-                        has_loose = conflict != CONFLICT_NONE
-                        has_bsa   = bsa_conflict != CONFLICT_NONE
-
-                        # Sub-column anchors: when both groups are present, split around sep_x.
-                        # The inner edge of each group must sit the same distance from sep_x
-                        # (GAP), regardless of which status variant is being drawn — so we
-                        # pick loose_cx/bsa_cx per-variant based on the group's half-width.
-                        if has_loose and has_bsa:
-                            sep_x = cx_center
-                            GAP = scaled(6)         # visible gap between icon edge and separator
-                            _ICON_HALF = scaled(12)  # half-width of a conflict icon
-                            loose_cx = sep_x - GAP - _ICON_HALF
-                            bsa_cx   = sep_x + GAP + _ICON_HALF
-                        else:
-                            loose_cx = cx_center
-                            bsa_cx   = cx_center
-
-                        # --- Loose-file icon(s) ---
-                        if conflict == CONFLICT_WINS and self._icon_plus:
-                            c.coords(self._pool_conflict_icon1[s], loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_plus, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        elif conflict == CONFLICT_LOSES and self._icon_minus:
-                            c.coords(self._pool_conflict_icon1[s], loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_minus, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        elif conflict == CONFLICT_PARTIAL and self._icon_conflict_mixed:
-                            c.coords(self._pool_conflict_icon1[s], loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_conflict_mixed, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        elif conflict == CONFLICT_FULL and self._icon_cross:
-                            c.coords(self._pool_conflict_icon1[s], loose_cx, y_mid)
-                            c.itemconfigure(self._pool_conflict_icon1[s],
-                                            image=self._icon_cross, state="normal")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                        else:
-                            c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
-                            c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-
-                        # --- BSA icons ---
-                        _bsa_icon = None
-                        if has_bsa:
-                            if bsa_conflict == CONFLICT_WINS:
-                                _bsa_icon = self._icon_bsa_winner
-                            elif bsa_conflict == CONFLICT_LOSES:
-                                _bsa_icon = self._icon_bsa_loser
-                            elif bsa_conflict == CONFLICT_PARTIAL:
-                                _bsa_icon = self._icon_bsa_mixed
-                            elif bsa_conflict == CONFLICT_FULL:
-                                _bsa_icon = self._icon_bsa_redundant
-                        if _bsa_icon is not None:
-                            c.coords(self._pool_bsa_dot1[s], bsa_cx, y_mid)
-                            c.itemconfigure(self._pool_bsa_dot1[s],
-                                            image=_bsa_icon, state="normal")
-                        else:
-                            c.itemconfigure(self._pool_bsa_dot1[s], state="hidden")
-                        c.itemconfigure(self._pool_bsa_dot2[s], state="hidden")
-
-                        # --- Separator between loose icons and BSA dots ---
-                        if has_loose and has_bsa:
-                            _sh = scaled(7)  # half-height of the separator line
-                            c.coords(self._pool_bsa_sep[s],
-                                     sep_x, y_mid - _sh, sep_x, y_mid + _sh)
-                            c.itemconfigure(self._pool_bsa_sep[s],
-                                            fill=BORDER, state="normal")
-                            # Force separator above any icons that might overlap
-                            c.tag_raise(self._pool_bsa_sep[s])
-                        else:
-                            c.itemconfigure(self._pool_bsa_sep[s], state="hidden")
+                        self._render_conflict_cell(
+                            s,
+                            self._conflict_map.get(entry.name, CONFLICT_NONE),
+                            self._bsa_conflict_map.get(entry.name, CONFLICT_NONE),
+                            _CONF_X, _CONF_W, y_mid,
+                        )
 
                     # Install date text
                     install_text = self._install_dates.get(entry.name, "")
@@ -3115,31 +2469,7 @@ class ModListPanel(ctk.CTkFrame):
                         c.itemconfigure(self._pool_cb_mark[s], state="hidden")
 
             else:
-                # Slot outside the visible range — hide all items
-                c.itemconfigure(self._pool_bg[s], state="hidden")
-                c.itemconfigure(self._pool_name[s], state="hidden")
-                c.itemconfigure(self._pool_flag_icon[s], state="hidden")
-                c.itemconfigure(self._pool_flag_icon2[s], state="hidden")
-                c.itemconfigure(self._pool_flag_icon3[s], state="hidden")
-                c.itemconfigure(self._pool_flag_icon4[s], state="hidden")
-                c.itemconfigure(self._pool_flag_icon5[s], state="hidden")
-                c.itemconfigure(self._pool_flag_star[s], state="hidden")
-                c.itemconfigure(self._pool_conflict_icon1[s], state="hidden")
-                c.itemconfigure(self._pool_conflict_icon2[s], state="hidden")
-                c.itemconfigure(self._pool_bsa_dot1[s], state="hidden")
-                c.itemconfigure(self._pool_bsa_dot2[s], state="hidden")
-                c.itemconfigure(self._pool_bsa_sep[s], state="hidden")
-                c.itemconfigure(self._pool_category_text[s], state="hidden")
-                c.itemconfigure(self._pool_install_text[s], state="hidden")
-                c.itemconfigure(self._pool_priority_text[s], state="hidden")
-                c.itemconfigure(self._pool_version_text[s], state="hidden")
-                c.itemconfigure(self._pool_sep_icon[s], state="hidden")
-                c.itemconfigure(self._pool_sep_line_l[s], state="hidden")
-                c.itemconfigure(self._pool_sep_line_r[s], state="hidden")
-                c.itemconfigure(self._pool_sep_badge[s], state="hidden")
-                c.itemconfigure(self._pool_cb_rect[s], state="hidden")
-                c.itemconfigure(self._pool_cb_mark[s], state="hidden")
-                self._pool_data_idx[s] = -1
+                self._hide_pool_slot(s)
 
         # Park lock canvas items for separators not in the current viewport.
         for key, rect_id in self._lock_cb_rects.items():
@@ -3303,179 +2633,107 @@ class ModListPanel(ctk.CTkFrame):
                     if not self._entries[i].is_separator
                     or self._entries[i].name in (OVERWRITE_NAME, ROOT_FOLDER_NAME)]
 
-        # Step 3: enabled/disabled filter
-        # When showing only disabled (or only enabled), keep separators only if their
-        # block has at least one matching mod; otherwise the separator is hidden.
+        # Step 3: enabled/disabled filter (mutually exclusive — both/neither = off)
         if self._filter_show_disabled and not self._filter_show_enabled:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_disabled(i):
-                        result.append(i)
-                elif not entry.enabled:
-                    result.append(i)
-            base = result
+            base = self._apply_filter(
+                base, lambda e: not e.enabled, self._sep_block_has_disabled,
+            )
         elif self._filter_show_enabled and not self._filter_show_disabled:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_enabled(i):
-                        result.append(i)
-                elif entry.enabled:
-                    result.append(i)
-            base = result
-        # if both or neither: no enabled-state filter
+            base = self._apply_filter(
+                base, lambda e: e.enabled, self._sep_block_has_enabled,
+            )
 
-        # Step 4: conflict type filter
-        # When filtering by conflict type, keep separators only if their block has at least one matching mod.
+        # Step 4: conflict-type filter — combines four sub-flags into one allowed set.
         if (self._filter_conflict_winning or self._filter_conflict_losing
                 or self._filter_conflict_partial or self._filter_conflict_full):
-            allowed = set()
-            if self._filter_conflict_winning:
-                allowed.add(CONFLICT_WINS)
-            if self._filter_conflict_losing:
-                allowed.add(CONFLICT_LOSES)
-            if self._filter_conflict_partial:
-                allowed.add(CONFLICT_PARTIAL)
-            if self._filter_conflict_full:
-                allowed.add(CONFLICT_FULL)
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_conflict_in(i, allowed):
-                        result.append(i)
-                elif (self._conflict_map.get(entry.name, CONFLICT_NONE) in allowed
-                      or self._bsa_conflict_map.get(entry.name, CONFLICT_NONE) in allowed):
-                    result.append(i)
-            base = result
+            allowed: set = set()
+            if self._filter_conflict_winning: allowed.add(CONFLICT_WINS)
+            if self._filter_conflict_losing:  allowed.add(CONFLICT_LOSES)
+            if self._filter_conflict_partial: allowed.add(CONFLICT_PARTIAL)
+            if self._filter_conflict_full:    allowed.add(CONFLICT_FULL)
+            cmap, bmap = self._conflict_map, self._bsa_conflict_map
+            base = self._apply_filter(
+                base,
+                lambda e: (cmap.get(e.name, CONFLICT_NONE) in allowed
+                           or bmap.get(e.name, CONFLICT_NONE) in allowed),
+                lambda i: self._sep_block_has_conflict_in(i, allowed),
+            )
 
-        # Step 4b: missing requirements filter (show only mods with missing reqs, not ignored)
-        if self._filter_missing_reqs:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_missing_reqs(i):
-                        result.append(i)
-                elif (entry.name in self._missing_reqs
-                      and entry.name not in self._ignored_missing_reqs):
-                    result.append(i)
-            base = result
-
-        # Step 4c: disabled plugins filter (show only mods with at least one plugin disabled)
-        if self._filter_has_disabled_plugins:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_disabled_plugins(i):
-                        result.append(i)
-                elif entry.name in self._disabled_plugins_map:
-                    result.append(i)
-            base = result
-
-        # Step 4c1: notes filter (show only mods with a saved note)
-        if self._filter_has_notes:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_notes(i):
-                        result.append(i)
-                elif entry.name in self._mod_notes_map:
-                    result.append(i)
-            base = result
-
-        # Step 4c2: mods with plugins filter (show only mods that have at least one plugin)
-        if self._filter_has_plugins:
-            mods_with_plugins = self._get_mods_with_plugins()
-            if mods_with_plugins:
-                result = []
-                for i in base:
-                    entry = self._entries[i]
-                    if entry.is_separator:
-                        if self._sep_block_has_plugins(i, mods_with_plugins):
-                            result.append(i)
-                    elif entry.name in mods_with_plugins:
-                        result.append(i)
-                base = result
-            else:
-                base = []  # no plugin data yet, show nothing
-
-        # Step 4d: disabled mod files filter (show only mods with at least one file disabled)
-        if self._filter_has_disabled_files:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_disabled_files(i):
-                        result.append(i)
-                elif self._mod_is_modified_in_mf(entry.name):
-                    result.append(i)
-            base = result
-
-        # Step 4e: updates filter (show only mods with an update available)
-        if self._filter_has_updates:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_updates(i):
-                        result.append(i)
-                elif entry.name in self._update_mods:
-                    result.append(i)
-            base = result
-
-        # Step 4e2: FOMOD-only filter (show only mods installed via FOMOD)
-        if self._filter_fomod_only:
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_fomod(i):
-                        result.append(i)
-                elif entry.name in self._fomod_mods:
-                    result.append(i)
-            base = result
-
-        # Step 4e3: BSA archive filter (show only mods that contain BSA/BA2 archives)
-        if self._filter_has_bsa:
-            mods_with_bsa = self._get_mods_with_bsa()
-            if mods_with_bsa:
-                result = []
-                for i in base:
-                    entry = self._entries[i]
-                    if entry.is_separator:
-                        if self._sep_block_has_bsa(i, mods_with_bsa):
-                            result.append(i)
-                    elif entry.name in mods_with_bsa:
-                        result.append(i)
-                base = result
-            else:
+        # Steps 4b–4e3: simple flag-driven filters with optional precomputed mods set.
+        # Spec: (flag attr, mod predicate factory, sep predicate factory, mods_set source)
+        # mods_set source returns None when no precompute is needed; an empty set means
+        # "filter is active but data isn't ready, so show nothing" (clears base entirely).
+        for attr, mods_factory, mod_pred_fn, sep_pred_fn in self._SIMPLE_FILTER_SPECS:
+            if not getattr(self, attr):
+                continue
+            mods_set = mods_factory(self) if mods_factory else None
+            if mods_set is not None and not mods_set:
                 base = []
+                continue
+            base = self._apply_filter(
+                base, mod_pred_fn(self, mods_set), sep_pred_fn(self, mods_set),
+            )
 
-        # Step 4f: category filter (show only mods in selected categories)
+        # Step 4f: category filter — driven by a non-empty frozenset, not a bool.
         if self._filter_categories:
-            allowed = self._filter_categories
-            result = []
-            for i in base:
-                entry = self._entries[i]
-                if entry.is_separator:
-                    if self._sep_block_has_category(i, allowed):
-                        result.append(i)
-                else:
-                    cat = self._category_names.get(entry.name, "") or ""
-                    if cat in allowed:
-                        result.append(i)
-            base = result
+            allowed_cats = self._filter_categories
+            cats = self._category_names
+            base = self._apply_filter(
+                base,
+                lambda e: (cats.get(e.name, "") or "") in allowed_cats,
+                lambda i: self._sep_block_has_category(i, allowed_cats),
+            )
 
         # Step 5: apply column sort (visual only)
         if self._sort_column is not None:
             base = self._apply_column_sort(base)
         return base
+
+    def _apply_filter(self, base: list[int], mod_pred, sep_pred) -> list[int]:
+        """Canonical filter step: keep mods passing `mod_pred(entry)` and
+        separators whose block satisfies `sep_pred(idx)`."""
+        result = []
+        for i in base:
+            entry = self._entries[i]
+            if entry.is_separator:
+                if sep_pred(i):
+                    result.append(i)
+            elif mod_pred(entry):
+                result.append(i)
+        return result
+
+    # Specs for the eight simple flag-driven filters (steps 4b–4e3).
+    # Each tuple: (panel attr that holds the bool flag,
+    #              mods_set factory (or None if no precompute needed),
+    #              mod predicate builder — receives self and mods_set,
+    #              sep predicate builder — receives self and mods_set).
+    _SIMPLE_FILTER_SPECS = (
+        ("_filter_missing_reqs", None,
+         lambda s, _ms: (lambda e: (e.name in s._missing_reqs
+                                    and e.name not in s._ignored_missing_reqs)),
+         lambda s, _ms: s._sep_block_has_missing_reqs),
+        ("_filter_has_disabled_plugins", None,
+         lambda s, _ms: (lambda e: e.name in s._disabled_plugins_map),
+         lambda s, _ms: s._sep_block_has_disabled_plugins),
+        ("_filter_has_notes", None,
+         lambda s, _ms: (lambda e: e.name in s._mod_notes_map),
+         lambda s, _ms: s._sep_block_has_notes),
+        ("_filter_has_plugins", lambda s: s._get_mods_with_plugins(),
+         lambda s, ms: (lambda e: e.name in ms),
+         lambda s, ms: (lambda i: s._sep_block_has_plugins(i, ms))),
+        ("_filter_has_disabled_files", None,
+         lambda s, _ms: (lambda e: s._mod_is_modified_in_mf(e.name)),
+         lambda s, _ms: s._sep_block_has_disabled_files),
+        ("_filter_has_updates", None,
+         lambda s, _ms: (lambda e: e.name in s._update_mods),
+         lambda s, _ms: s._sep_block_has_updates),
+        ("_filter_fomod_only", None,
+         lambda s, _ms: (lambda e: e.name in s._fomod_mods),
+         lambda s, _ms: s._sep_block_has_fomod),
+        ("_filter_has_bsa", lambda s: s._get_mods_with_bsa(),
+         lambda s, ms: (lambda e: e.name in ms),
+         lambda s, ms: (lambda i: s._sep_block_has_bsa(i, ms))),
+    )
 
     # ------------------------------------------------------------------
     # Column sorting helpers (visual only — never touches modlist.txt)
@@ -4274,105 +3532,85 @@ class ModListPanel(ctk.CTkFrame):
             cache[sep_idx] = result
         return result
 
-    def _sep_block_has_disabled(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one disabled mod."""
+    def _sep_block_has_any(self, sep_idx: int, mod_predicate) -> bool:
+        """True iff any non-separator entry in this block satisfies mod_predicate.
+
+        mod_predicate receives the ModEntry and returns bool. Used to back the
+        twelve _sep_block_has_* shorthands plus any ad-hoc filtering check.
+        """
         for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator and not self._entries[i].enabled:
+            entry = self._entries[i]
+            if not entry.is_separator and mod_predicate(entry):
                 return True
         return False
+
+    def _sep_block_has_disabled(self, sep_idx: int) -> bool:
+        return self._sep_block_has_any(sep_idx, lambda e: not e.enabled)
 
     def _sep_block_has_enabled(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one enabled mod."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator and self._entries[i].enabled:
-                return True
-        return False
+        return self._sep_block_has_any(sep_idx, lambda e: e.enabled)
 
     def _sep_block_has_conflict_in(self, sep_idx: int, allowed: set) -> bool:
-        """True if this separator's block contains at least one mod whose conflict status is in allowed."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                name = self._entries[i].name
-                if (self._conflict_map.get(name, CONFLICT_NONE) in allowed
-                        or self._bsa_conflict_map.get(name, CONFLICT_NONE) in allowed):
-                    return True
-        return False
+        cmap, bmap = self._conflict_map, self._bsa_conflict_map
+        return self._sep_block_has_any(
+            sep_idx,
+            lambda e: (cmap.get(e.name, CONFLICT_NONE) in allowed
+                       or bmap.get(e.name, CONFLICT_NONE) in allowed),
+        )
 
     def _sep_block_has_missing_reqs(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one mod with missing requirements (not ignored)."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                name = self._entries[i].name
-                if name in self._missing_reqs and name not in self._ignored_missing_reqs:
-                    return True
-        return False
+        missing, ignored = self._missing_reqs, self._ignored_missing_reqs
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in missing and e.name not in ignored,
+        )
 
     def _sep_block_has_disabled_plugins(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one mod with disabled plugins."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._entries[i].name in self._disabled_plugins_map:
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in self._disabled_plugins_map,
+        )
 
     def _sep_block_has_notes(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one mod with a note."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._entries[i].name in self._mod_notes_map:
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in self._mod_notes_map,
+        )
 
     def _get_mods_with_plugins(self) -> set[str]:
-        """Return the set of mod names that have at least one plugin (from plugin panel's filemap)."""
+        """Set of mod names that own at least one plugin (per plugin panel's filemap)."""
         app = self.winfo_toplevel()
         if hasattr(app, "_plugin_panel"):
             return set(app._plugin_panel._plugin_mod_map.values())
         return set()
 
     def _sep_block_has_plugins(self, sep_idx: int, mods_with_plugins: set[str]) -> bool:
-        """True if this separator's block contains at least one mod with plugins."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._entries[i].name in mods_with_plugins:
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in mods_with_plugins,
+        )
 
     def _mod_is_modified_in_mf(self, mod_name: str) -> bool:
-        """True if this mod has any Mod Files tab modifications — either
-        excluded files or custom Top Level (strip prefix) entries."""
-        ex = self._excluded_mod_files_map.get(mod_name)
-        if ex:
+        """True if this mod has any Mod Files tab modifications — excluded
+        files or a custom Top Level (strip prefix) entry."""
+        if self._excluded_mod_files_map.get(mod_name):
             return True
         sp = self._mod_strip_prefixes.get(mod_name) if self._mod_strip_prefixes else None
         return bool(sp)
 
     def _sep_block_has_disabled_files(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one mod with Mod Files tab modifications."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._mod_is_modified_in_mf(self._entries[i].name):
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: self._mod_is_modified_in_mf(e.name),
+        )
 
     def _sep_block_has_updates(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one mod with an update available."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._entries[i].name in self._update_mods:
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in self._update_mods,
+        )
 
     def _sep_block_has_fomod(self, sep_idx: int) -> bool:
-        """True if this separator's block contains at least one FOMOD mod."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._entries[i].name in self._fomod_mods:
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in self._fomod_mods,
+        )
 
     def _get_mods_with_bsa(self) -> set[str]:
-        """Return the set of mod names that contain at least one BSA/BA2 archive with files."""
+        """Set of mod names that contain at least one BSA/BA2 archive with files."""
         if self._filemap_path is None:
             return set()
         index_path = self._filemap_path.parent / "bsa_index.bin"
@@ -4389,21 +3627,16 @@ class ModListPanel(ctk.CTkFrame):
         }
 
     def _sep_block_has_bsa(self, sep_idx: int, mods_with_bsa: set[str]) -> bool:
-        """True if this separator's block contains at least one mod with a BSA archive."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                if self._entries[i].name in mods_with_bsa:
-                    return True
-        return False
+        return self._sep_block_has_any(
+            sep_idx, lambda e: e.name in mods_with_bsa,
+        )
 
     def _sep_block_has_category(self, sep_idx: int, allowed_categories: frozenset[str]) -> bool:
-        """True if this separator's block contains at least one mod in the allowed categories."""
-        for i in self._sep_block_range(sep_idx):
-            if not self._entries[i].is_separator:
-                cat = self._category_names.get(self._entries[i].name, "") or ""
-                if cat in allowed_categories:
-                    return True
-        return False
+        cats = self._category_names
+        return self._sep_block_has_any(
+            sep_idx,
+            lambda e: (cats.get(e.name, "") or "") in allowed_categories,
+        )
 
     def _on_mouse_drag(self, event):
         if self._drag_idx < 0 or not self._entries:
@@ -4824,366 +4057,395 @@ class ModListPanel(ctk.CTkFrame):
                            ini_files: list[Path] | None = None,
                            mod_folder: Path | None = None,
                            plugin_files: list[str] | None = None):
-        """CTkPopupMenu for mod list context menu. Supports submenus."""
+        """CTkPopupMenu for the mod-list context menu.
+
+        The bulk of selection/meta/profile/Nexus precompute lives in
+        _build_context_menu_ctx(); this method orchestrates the precompute,
+        builds the alphabetically-ordered item list via _populate_context_menu,
+        and pops the menu.
+        """
         if self._context_menu is None:
             self._context_menu = CTkPopupMenu(
-                self.winfo_toplevel(), width=220, title=""
+                self.winfo_toplevel(), width=220, title="",
             )
         menu = self._context_menu
         menu.clear()
 
-        is_overwrite = self._entries[idx].name == OVERWRITE_NAME
-        is_root_folder = self._entries[idx].name == ROOT_FOLDER_NAME
+        ctx = self._build_context_menu_ctx(
+            idx, is_separator,
+            ini_files=ini_files, mod_folder=mod_folder, plugin_files=plugin_files,
+        )
+        self._populate_context_menu(menu, ctx)
+        menu.popup(x, y)
+
+    def _build_context_menu_ctx(self, idx: int, is_separator: bool,
+                                *, ini_files: list[Path] | None,
+                                mod_folder: Path | None,
+                                plugin_files: list[str] | None) -> SimpleNamespace:
+        """Compute every flag, list and lookup the context menu needs.
+
+        Returns a SimpleNamespace; the populator reads from it and never goes
+        back to self for selection or meta state."""
+        entries = self._entries
+        entry = entries[idx]
+        is_overwrite = entry.name == OVERWRITE_NAME
+        is_root_folder = entry.name == ROOT_FOLDER_NAME
         is_synthetic = is_overwrite or is_root_folder
-        _is_real_mod = not is_separator and not is_synthetic
-        _is_multi = len(self._sel_set) > 1 and idx in self._sel_set
-        _is_bundle_sep = is_separator and self._is_bundle_separator(idx)
-        _is_bundle_var = (not is_separator) and (self._bundle_name_of(idx) is not None)
-        _is_locked = (not is_separator) and self._entries[idx].locked
-        _mod_name = self._entries[idx].name
+        is_real_mod = not is_separator and not is_synthetic
+        is_multi = len(self._sel_set) > 1 and idx in self._sel_set
+        is_bundle_sep = is_separator and self._is_bundle_separator(idx)
+        is_bundle_var = (not is_separator) and (self._bundle_name_of(idx) is not None)
+        is_locked = (not is_separator) and entry.locked
+        mod_name = entry.name
 
-        # Pre-compute multi-selection subsets
-        _remove_multi = [
-            i for i in sorted(self._sel_set)
-            if 0 <= i < len(self._entries)
-            and not self._entries[i].is_separator
-            and not self._entries[i].locked
-            and self._entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
-        ] if _is_multi else []
+        # Selection subsets — all "sorted indices into self._entries".
+        sel_sorted = sorted(self._sel_set) if is_multi else []
+        in_range = [i for i in sel_sorted if 0 <= i < len(entries)]
+        non_synthetic_real = [
+            i for i in in_range
+            if not entries[i].is_separator
+            and not entries[i].locked
+            and entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
+        ]
+        remove_multi = list(non_synthetic_real)
+        multi_sel = [i for i in non_synthetic_real if self._bundle_name_of(i) is None]
+        remove_multi_sep = [
+            i for i in in_range
+            if entries[i].is_separator
+            and entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
+        ]
+        # Toggleable also exists on >1-row selection where idx itself isn't in the set.
+        toggleable = (
+            non_synthetic_real if is_multi else
+            [i for i in (sorted(self._sel_set) if len(self._sel_set) > 1 else [])
+             if 0 <= i < len(entries)
+             and not entries[i].is_separator
+             and not entries[i].locked
+             and entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)]
+        )
 
-        _multi_sel = [
-            i for i in sorted(self._sel_set)
-            if 0 <= i < len(self._entries)
-            and not self._entries[i].is_separator
-            and not self._entries[i].locked
-            and self._entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
-            and self._bundle_name_of(i) is None
-        ] if _is_multi else []
+        sep_names = [
+            e.name for e in entries
+            if e.is_separator and e.name != OVERWRITE_NAME
+            and e.name != ROOT_FOLDER_NAME
+            and e.display_name not in self._bundle_groups
+        ]
 
-        sep_names = [e.name for e in self._entries
-                     if e.is_separator and e.name != OVERWRITE_NAME
-                     and e.name != ROOT_FOLDER_NAME
-                     and e.display_name not in self._bundle_groups]
-
-        toggleable = [
-            i for i in sorted(self._sel_set)
-            if 0 <= i < len(self._entries)
-            and not self._entries[i].is_separator
-            and not self._entries[i].locked
-            and self._entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
-        ] if len(self._sel_set) > 1 else []
-
-        _remove_multi_sep = [
-            i for i in sorted(self._sel_set)
-            if 0 <= i < len(self._entries)
-            and self._entries[i].is_separator
-            and self._entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
-        ] if _is_multi else []
-
-        # Pre-compute profile data
-        _other_profiles: list[str] = []
-        _copy_mod_name: str | None = None
-        _copy_mod_names: list[str] = []
-        if _is_real_mod and self._modlist_path is not None and self._game is not None:
-            _app = self.winfo_toplevel()
-            _topbar = getattr(_app, "_topbar", None)
-            _game_name = _topbar._game_var.get() if _topbar else ""
-            _cur_profile = self._modlist_path.parent.name
-            _all_profiles = _profiles_for_game(_game_name)
-            _other_profiles = [p for p in _all_profiles if p != _cur_profile]
-            if _other_profiles:
-                if _is_multi:
-                    _copy_mod_names = [
-                        self._entries[i].name
-                        for i in sorted(self._sel_set)
-                        if 0 <= i < len(self._entries)
-                        and not self._entries[i].is_separator
-                        and self._entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
+        # Profile copy targets.
+        other_profiles: list[str] = []
+        copy_mod_name: str | None = None
+        copy_mod_names: list[str] = []
+        if is_real_mod and self._modlist_path is not None and self._game is not None:
+            topbar = getattr(self.winfo_toplevel(), "_topbar", None)
+            game_name = topbar._game_var.get() if topbar else ""
+            cur_profile = self._modlist_path.parent.name
+            other_profiles = [p for p in _profiles_for_game(game_name) if p != cur_profile]
+            if other_profiles:
+                if is_multi:
+                    copy_mod_names = [
+                        entries[i].name for i in in_range
+                        if not entries[i].is_separator
+                        and entries[i].name not in (OVERWRITE_NAME, ROOT_FOLDER_NAME)
                     ]
                 else:
-                    _copy_mod_name = _mod_name
+                    copy_mod_name = mod_name
 
-        # Pre-compute conflict status
+        # Conflict status.
         conflict_status = CONFLICT_NONE
         bsa_conflict_status = CONFLICT_NONE
-        if not _is_multi and (not is_separator or is_overwrite):
+        if not is_multi and (not is_separator or is_overwrite):
             conflict_status = (
-                self._conflict_map.get(_mod_name, CONFLICT_NONE)
+                self._conflict_map.get(mod_name, CONFLICT_NONE)
                 if not is_overwrite
                 else (CONFLICT_WINS if self._overrides.get(OVERWRITE_NAME) else CONFLICT_NONE)
             )
             if not is_overwrite:
-                bsa_conflict_status = self._bsa_conflict_map.get(_mod_name, CONFLICT_NONE)
+                bsa_conflict_status = self._bsa_conflict_map.get(mod_name, CONFLICT_NONE)
 
-        # Pre-compute Nexus / meta info
-        _ctx_meta = None
+        # Nexus / meta info for the focused mod (single-select only fields).
+        ctx_meta = None
         nexus_url: str | None = None
-        _domain: str | None = None
-        _archive_path: Path | None = None
-        if _is_real_mod and self._modlist_path is not None:
-            _meta_path = self._staging_root / _mod_name / "meta.ini"
-            if _meta_path.is_file():
+        domain: str | None = None
+        archive_path: Path | None = None
+        if is_real_mod and self._modlist_path is not None:
+            meta_path = self._staging_root / mod_name / "meta.ini"
+            if meta_path.is_file():
                 try:
-                    _ctx_meta = read_meta(_meta_path)
-                    if _ctx_meta.mod_id > 0:
-                        app = self.winfo_toplevel()
-                        _cur_game = _GAMES.get(getattr(
-                            getattr(app, "_topbar", None), "_game_var", tk.StringVar()).get(), None)
-                        _domain = (
-                            _ctx_meta.game_domain
-                            or (_ctx_meta.nexus_page_url.split("/mods/")[0].rsplit("/", 1)[-1]
-                                if "/mods/" in _ctx_meta.nexus_page_url else "")
-                            or (_cur_game.nexus_game_domain if _cur_game else "")
-                        )
-                        nexus_url = f"https://www.nexusmods.com/{_domain}/mods/{_ctx_meta.mod_id}"
-                    # Reinstall Mod — visible when the source archive is still available
-                    if not _is_multi and _ctx_meta.installation_file:
-                        _xdg = os.environ.get("XDG_DOWNLOAD_DIR")
-                        _dl_dir = Path(_xdg) if _xdg else Path.home() / "Downloads"
-                        _active_game_name = getattr(self._game, "name", "") or ""
-                        _search_dirs: list[Path] = []
-                        try:
-                            from gui.download_locations_overlay import (
-                                is_default_downloads_disabled,
-                                load_extra_download_locations,
-                            )
-                            if not is_default_downloads_disabled():
-                                _search_dirs.append(_dl_dir)
-                            _search_dirs.extend(list_all_cache_dirs(_active_game_name))
-                            _search_dirs.extend(
-                                Path(_p) for _p in load_extra_download_locations()
-                            )
-                        except Exception:
-                            _search_dirs = [_dl_dir]
-                            _search_dirs.extend(list_all_cache_dirs(_active_game_name))
-                        _arc = None
-                        for _d in _search_dirs:
-                            _cand = Path(_d) / _ctx_meta.installation_file
-                            if _cand.is_file():
-                                _arc = _cand
-                                break
-                        if _arc is not None and _arc.is_file():
-                            _archive_path = _arc
+                    ctx_meta = read_meta(meta_path)
+                    if ctx_meta.mod_id > 0:
+                        domain = self._resolve_nexus_domain(ctx_meta)
+                        nexus_url = f"https://www.nexusmods.com/{domain}/mods/{ctx_meta.mod_id}"
+                    if not is_multi and ctx_meta.installation_file:
+                        archive_path = self._find_installation_archive(ctx_meta.installation_file)
                 except Exception:
-                    _ctx_meta = None
+                    ctx_meta = None
 
-        # Pre-compute multi-select Nexus URLs
-        _nexus_urls: list[str] = []
+        # Multi-select Nexus URLs.
+        nexus_urls: list[str] = []
         if toggleable and self._staging_root is not None:
-            app = self.winfo_toplevel()
-            _cur_game = _GAMES.get(getattr(
-                getattr(app, "_topbar", None), "_game_var", tk.StringVar()).get(), None)
-            for _ti in toggleable:
-                _tname = self._entries[_ti].name
-                _tmeta_path = self._staging_root / _tname / "meta.ini"
-                if _tmeta_path.is_file():
-                    try:
-                        _tmeta = read_meta(_tmeta_path)
-                        if _tmeta.mod_id > 0:
-                            _tdomain = (
-                                _tmeta.game_domain
-                                or (_tmeta.nexus_page_url.split("/mods/")[0].rsplit("/", 1)[-1]
-                                    if "/mods/" in _tmeta.nexus_page_url else "")
-                                or (_cur_game.nexus_game_domain if _cur_game else "")
-                            )
-                            _nexus_urls.append(
-                                f"https://www.nexusmods.com/{_tdomain}/mods/{_tmeta.mod_id}"
-                            )
-                    except Exception:
-                        pass
+            for ti in toggleable:
+                tname = entries[ti].name
+                tmeta_path = self._staging_root / tname / "meta.ini"
+                if not tmeta_path.is_file():
+                    continue
+                try:
+                    tmeta = read_meta(tmeta_path)
+                    if tmeta.mod_id > 0:
+                        tdomain = self._resolve_nexus_domain(tmeta)
+                        nexus_urls.append(
+                            f"https://www.nexusmods.com/{tdomain}/mods/{tmeta.mod_id}"
+                        )
+                except Exception:
+                    pass
 
-        # --- Menu items in alphabetical order ---
+        return SimpleNamespace(
+            idx=idx, mod_name=mod_name,
+            is_separator=is_separator, is_overwrite=is_overwrite,
+            is_synthetic=is_synthetic, is_real_mod=is_real_mod,
+            is_multi=is_multi, is_bundle_sep=is_bundle_sep,
+            is_bundle_var=is_bundle_var, is_locked=is_locked,
+            ini_files=ini_files, mod_folder=mod_folder, plugin_files=plugin_files,
+            remove_multi=remove_multi, multi_sel=multi_sel,
+            remove_multi_sep=remove_multi_sep, toggleable=toggleable,
+            sep_names=sep_names,
+            other_profiles=other_profiles,
+            copy_mod_name=copy_mod_name, copy_mod_names=copy_mod_names,
+            conflict_status=conflict_status, bsa_conflict_status=bsa_conflict_status,
+            ctx_meta=ctx_meta, nexus_url=nexus_url, domain=domain,
+            archive_path=archive_path, nexus_urls=nexus_urls,
+        )
+
+    def _resolve_nexus_domain(self, meta) -> str:
+        """Best-effort game-domain resolution: meta.game_domain, then the
+        domain segment of nexus_page_url, then the configured game default."""
+        if meta.game_domain:
+            return meta.game_domain
+        if "/mods/" in meta.nexus_page_url:
+            return meta.nexus_page_url.split("/mods/")[0].rsplit("/", 1)[-1]
+        topbar_var = getattr(getattr(self.winfo_toplevel(), "_topbar", None),
+                             "_game_var", tk.StringVar())
+        cur_game = _GAMES.get(topbar_var.get(), None)
+        return cur_game.nexus_game_domain if cur_game else ""
+
+    def _find_installation_archive(self, filename: str) -> Path | None:
+        """Locate `filename` across the user's Downloads dir and configured caches."""
+        xdg = os.environ.get("XDG_DOWNLOAD_DIR")
+        dl_dir = Path(xdg) if xdg else Path.home() / "Downloads"
+        active_game_name = getattr(self._game, "name", "") or ""
+        search_dirs: list[Path] = []
+        try:
+            from gui.download_locations_overlay import (
+                is_default_downloads_disabled,
+                load_extra_download_locations,
+            )
+            if not is_default_downloads_disabled():
+                search_dirs.append(dl_dir)
+            search_dirs.extend(list_all_cache_dirs(active_game_name))
+            search_dirs.extend(Path(p) for p in load_extra_download_locations())
+        except Exception:
+            search_dirs = [dl_dir]
+            search_dirs.extend(list_all_cache_dirs(active_game_name))
+        for d in search_dirs:
+            cand = Path(d) / filename
+            if cand.is_file():
+                return cand
+        return None
+
+    def _populate_context_menu(self, menu, c: SimpleNamespace) -> None:
+        """Add the alphabetically-ordered command/submenu entries."""
+        idx = c.idx
+        mod_name = c.mod_name
+        ctx_meta = c.ctx_meta
 
         # Abstain from Endorsement
-        if (_is_real_mod and not _is_multi
-                and _ctx_meta is not None and _ctx_meta.mod_id > 0 and _ctx_meta.endorsed):
+        if (c.is_real_mod and not c.is_multi
+                and ctx_meta is not None and ctx_meta.mod_id > 0 and ctx_meta.endorsed):
             menu.add_command("Abstain from Endorsement",
-                lambda: self._abstain_nexus_mod(_mod_name, _domain, _ctx_meta))
+                lambda: self._abstain_nexus_mod(mod_name, c.domain, ctx_meta))
 
         # Add note / Edit note  (single-select real mods only)
-        if _is_real_mod and not _is_multi:
-            _note_label = "Edit note" if _mod_name in self._mod_notes_map else "Add note"
-            menu.add_command(_note_label,
-                lambda mn=_mod_name: self._open_note_editor_by_name(mn))
+        if c.is_real_mod and not c.is_multi:
+            note_label = "Edit note" if mod_name in self._mod_notes_map else "Add note"
+            menu.add_command(note_label,
+                lambda mn=mod_name: self._open_note_editor_by_name(mn))
 
-        # Add separator above / Add separator below
-        if not _is_multi:
+        # Add separator above / below
+        if not c.is_multi:
             menu.add_command("Add separator above", lambda: self._add_separator(idx, above=True))
             menu.add_command("Add separator below", lambda: self._add_separator(idx, above=False))
 
         # Change separator color
-        if is_separator and not is_synthetic:
+        if c.is_separator and not c.is_synthetic:
             menu.add_command("Change separator color", lambda: self._change_separator_color(idx))
 
         # Change Version
-        if (_is_real_mod and not _is_multi
-                and _ctx_meta is not None and _ctx_meta.mod_id > 0):
+        if (c.is_real_mod and not c.is_multi
+                and ctx_meta is not None and ctx_meta.mod_id > 0):
             menu.add_command("Change Version",
-                lambda mn=_mod_name: self._update_nexus_mod(mn))
+                lambda mn=mod_name: self._update_nexus_mod(mn))
 
         # Check Updates (single)
-        if (_is_real_mod and not _is_multi
-                and _ctx_meta is not None and _ctx_meta.mod_id > 0):
+        if (c.is_real_mod and not c.is_multi
+                and ctx_meta is not None and ctx_meta.mod_id > 0):
             menu.add_command("Check Updates",
-                lambda mn=_mod_name: self._on_check_updates_for_mods([mn]))
+                lambda mn=mod_name: self._on_check_updates_for_mods([mn]))
 
         # Check Updates (multi)
-        if _is_multi and _nexus_urls:
-            _check_names = [self._entries[i].name for i in toggleable]
-            menu.add_command(f"Check Updates ({len(_check_names)})",
-                lambda mns=_check_names: self._on_check_updates_for_mods(mns))
+        if c.is_multi and c.nexus_urls:
+            check_names = [self._entries[i].name for i in c.toggleable]
+            menu.add_command(f"Check Updates ({len(check_names)})",
+                lambda mns=check_names: self._on_check_updates_for_mods(mns))
 
         # Copy to profile
-        if _other_profiles:
-            if _is_multi and _copy_mod_names:
+        if c.other_profiles:
+            if c.is_multi and c.copy_mod_names:
                 menu.add_submenu(
-                    f"Copy to profile ({len(_copy_mod_names)})",
-                    lambda profs=_other_profiles, mns=_copy_mod_names: self._show_copy_to_profile_picker_multi(
-                        mns, profs, parent_dismiss=menu._withdraw, parent_popup=menu,
-                    ),
+                    f"Copy to profile ({len(c.copy_mod_names)})",
+                    lambda profs=c.other_profiles, mns=c.copy_mod_names:
+                        self._show_copy_to_profile_picker_multi(
+                            mns, profs, parent_dismiss=menu._withdraw, parent_popup=menu),
                 )
-            elif not _is_multi and _copy_mod_name:
+            elif not c.is_multi and c.copy_mod_name:
                 menu.add_submenu(
                     "Copy to profile",
-                    lambda profs=_other_profiles, mn=_copy_mod_name: self._show_copy_to_profile_picker(
-                        mn, profs, parent_dismiss=menu._withdraw, parent_popup=menu,
-                    ),
+                    lambda profs=c.other_profiles, mn=c.copy_mod_name:
+                        self._show_copy_to_profile_picker(
+                            mn, profs, parent_dismiss=menu._withdraw, parent_popup=menu),
                 )
 
         # Create empty mod below
-        if self._modlist_path is not None and not is_synthetic and not _is_multi:
+        if self._modlist_path is not None and not c.is_synthetic and not c.is_multi:
             menu.add_command("Create empty mod below", lambda: self._create_empty_mod(idx))
 
         # Disable Plugins…
-        if not is_separator and not _is_locked and plugin_files and not _is_multi:
+        if not c.is_separator and not c.is_locked and c.plugin_files and not c.is_multi:
             menu.add_command("Disable Plugins…",
-                lambda n=_mod_name, pf=plugin_files: self._show_disable_plugins_dialog(n, pf))
+                lambda n=mod_name, pf=c.plugin_files: self._show_disable_plugins_dialog(n, pf))
 
-        # Disable selected (n) / Enable selected (n)
-        if toggleable:
-            _count = len(toggleable)
-            menu.add_command(f"Disable selected ({_count})",
-                lambda: self._disable_selected_mods(toggleable))
-            menu.add_command(f"Enable selected ({_count})",
-                lambda: self._enable_selected_mods(toggleable))
+        # Disable / Enable selected (n)
+        if c.toggleable:
+            count = len(c.toggleable)
+            menu.add_command(f"Disable selected ({count})",
+                lambda inds=list(c.toggleable): self._disable_selected_mods(inds))
+            menu.add_command(f"Enable selected ({count})",
+                lambda inds=list(c.toggleable): self._enable_selected_mods(inds))
 
         # Endorse Mod
-        if (_is_real_mod and not _is_multi
-                and _ctx_meta is not None and _ctx_meta.mod_id > 0 and not _ctx_meta.endorsed):
+        if (c.is_real_mod and not c.is_multi
+                and ctx_meta is not None and ctx_meta.mod_id > 0 and not ctx_meta.endorsed):
             menu.add_command("Endorse Mod",
-                lambda: self._endorse_nexus_mod(_mod_name, _domain, _ctx_meta))
+                lambda: self._endorse_nexus_mod(mod_name, c.domain, ctx_meta))
 
         # INI files
-        if not is_separator and not _is_locked and ini_files and not _is_multi:
+        if not c.is_separator and not c.is_locked and c.ini_files and not c.is_multi:
             menu.add_submenu("INI files",
-                lambda: self._show_ini_picker(ini_files,
-                    parent_dismiss=menu._withdraw, parent_popup=menu))
+                lambda inis=c.ini_files: self._show_ini_picker(
+                    inis, parent_dismiss=menu._withdraw, parent_popup=menu))
 
         # Lock / Unlock Separator(s)
-        if is_separator and not is_synthetic:
-            if len(_remove_multi_sep) >= 2:
-                _sel_sep_names = [self._entries[i].name for i in _remove_multi_sep]
-                _all_locked = all(self._sep_locks.get(n, False) for n in _sel_sep_names)
-                _label = (f"Unlock Separators ({len(_sel_sep_names)})" if _all_locked
-                          else f"Lock Separators ({len(_sel_sep_names)})")
-                menu.add_command(_label,
-                    lambda names=_sel_sep_names, lock=not _all_locked:
+        if c.is_separator and not c.is_synthetic:
+            if len(c.remove_multi_sep) >= 2:
+                sel_sep_names = [self._entries[i].name for i in c.remove_multi_sep]
+                all_locked = all(self._sep_locks.get(n, False) for n in sel_sep_names)
+                label = (f"Unlock Separators ({len(sel_sep_names)})" if all_locked
+                         else f"Lock Separators ({len(sel_sep_names)})")
+                menu.add_command(label,
+                    lambda names=sel_sep_names, lock=not all_locked:
                         self._set_sep_locks(names, lock))
             else:
-                _is_sep_locked = self._sep_locks.get(_mod_name, False)
-                _label = "Unlock Separator" if _is_sep_locked else "Lock Separator"
-                menu.add_command(_label,
-                    lambda n=_mod_name: self._on_sep_lock_toggle(n))
+                is_sep_locked = self._sep_locks.get(mod_name, False)
+                label = "Unlock Separator" if is_sep_locked else "Lock Separator"
+                menu.add_command(label,
+                    lambda n=mod_name: self._on_sep_lock_toggle(n))
 
         # Missing Requirements
-        if _is_real_mod and not _is_multi and _mod_name in self._missing_reqs:
-            dep_names = self._missing_reqs_detail.get(_mod_name, [])
+        if c.is_real_mod and not c.is_multi and mod_name in self._missing_reqs:
+            dep_names = self._missing_reqs_detail.get(mod_name, [])
             menu.add_command("Missing Requirements",
-                lambda: self._show_missing_reqs(_mod_name, dep_names))
+                lambda: self._show_missing_reqs(mod_name, dep_names))
 
         # Move to separator
-        if not is_separator and not _is_locked and not _is_bundle_var and sep_names:
-            if _multi_sel:
-                menu.add_submenu(f"Move to separator ({len(_multi_sel)})",
-                    lambda ms=_multi_sel: self._show_separator_picker_multi(ms, sep_names,
-                        parent_dismiss=menu._withdraw, parent_popup=menu))
+        if not c.is_separator and not c.is_locked and not c.is_bundle_var and c.sep_names:
+            if c.multi_sel:
+                menu.add_submenu(f"Move to separator ({len(c.multi_sel)})",
+                    lambda ms=c.multi_sel: self._show_separator_picker_multi(
+                        ms, c.sep_names, parent_dismiss=menu._withdraw, parent_popup=menu))
             else:
                 menu.add_submenu("Move to separator",
-                    lambda: self._show_separator_picker(idx, sep_names,
-                        parent_dismiss=menu._withdraw, parent_popup=menu))
+                    lambda: self._show_separator_picker(
+                        idx, c.sep_names, parent_dismiss=menu._withdraw, parent_popup=menu))
 
         # Open folder
-        if mod_folder is not None and not _is_multi:
-            menu.add_command("Open folder", lambda: self._open_folder(mod_folder))
+        if c.mod_folder is not None and not c.is_multi:
+            menu.add_command("Open folder", lambda f=c.mod_folder: self._open_folder(f))
 
         # Open on Nexus (single)
-        if (_is_real_mod and not _is_multi
-                and _ctx_meta is not None and nexus_url):
+        if (c.is_real_mod and not c.is_multi and ctx_meta is not None and c.nexus_url):
             menu.add_command("Open on Nexus",
-                lambda u=nexus_url: self._open_nexus_page(u))
+                lambda u=c.nexus_url: self._open_nexus_page(u))
 
         # Open on Nexus (multi)
-        if _nexus_urls:
-            _urls_cap = list(_nexus_urls)
-            menu.add_command(f"Open on Nexus ({len(_urls_cap)})",
-                lambda u=_urls_cap: self._open_nexus_pages(u))
+        if c.nexus_urls:
+            urls_cap = list(c.nexus_urls)
+            menu.add_command(f"Open on Nexus ({len(urls_cap)})",
+                lambda u=urls_cap: self._open_nexus_pages(u))
 
         # Reinstall Mod
-        if (_is_real_mod and not _is_multi
-                and _ctx_meta is not None and _archive_path is not None):
+        if (c.is_real_mod and not c.is_multi
+                and ctx_meta is not None and c.archive_path is not None):
             menu.add_command("Reinstall Mod",
-                lambda nc=_mod_name, ap=_archive_path: self._reinstall_mod(nc, ap))
+                lambda nc=mod_name, ap=c.archive_path: self._reinstall_mod(nc, ap))
 
         # Remove mod
-        if not is_separator and not _is_locked:
-            if _remove_multi and self._modlist_path is not None:
-                menu.add_command(f"Remove mod ({len(_remove_multi)})",
-                    lambda rm=_remove_multi: self._remove_selected_mods(rm))
+        if not c.is_separator and not c.is_locked:
+            if c.remove_multi and self._modlist_path is not None:
+                menu.add_command(f"Remove mod ({len(c.remove_multi)})",
+                    lambda rm=c.remove_multi: self._remove_selected_mods(rm))
             else:
                 menu.add_command("Remove mod", lambda: self._remove_mod(idx))
 
         # Remove separator(s)
-        if is_separator and not is_synthetic:
-            if len(_remove_multi_sep) >= 2:
-                menu.add_command(f"Remove separators ({len(_remove_multi_sep)})",
-                    lambda inds=list(_remove_multi_sep): self._remove_separators(inds))
+        if c.is_separator and not c.is_synthetic:
+            if len(c.remove_multi_sep) >= 2:
+                menu.add_command(f"Remove separators ({len(c.remove_multi_sep)})",
+                    lambda inds=list(c.remove_multi_sep): self._remove_separators(inds))
             else:
                 menu.add_command("Remove separator", lambda: self._remove_separator(idx))
 
         # Rename mod
-        if not is_separator and not _is_locked and not _is_bundle_var and not _is_multi:
+        if (not c.is_separator and not c.is_locked
+                and not c.is_bundle_var and not c.is_multi):
             menu.add_command("Rename mod", lambda: self._rename_mod(idx))
 
         # Rename separator
-        if is_separator and not is_synthetic and not _is_bundle_sep:
+        if c.is_separator and not c.is_synthetic and not c.is_bundle_sep:
             menu.add_command("Rename separator", lambda: self._rename_separator(idx))
 
-        # Root Folder install toggle (Disable/Enable)
-        if not is_separator and not _is_locked and not _is_multi:
-            _is_rf = _mod_name in self._root_folder_mods
-            _rf_label = "Disable Root Folder install" if _is_rf else "Enable Root Folder install"
-            menu.add_command(_rf_label,
-                lambda mn=_mod_name: self._toggle_root_folder_flag(mn))
+        # Root Folder install toggle
+        if not c.is_separator and not c.is_locked and not c.is_multi:
+            is_rf = mod_name in self._root_folder_mods
+            rf_label = "Disable Root Folder install" if is_rf else "Enable Root Folder install"
+            menu.add_command(rf_label,
+                lambda mn=mod_name: self._toggle_root_folder_flag(mn))
 
         # Separator settings…
-        if is_separator and not is_synthetic and not _is_bundle_sep:
+        if c.is_separator and not c.is_synthetic and not c.is_bundle_sep:
             menu.add_command("Separator settings…", lambda: self._show_sep_settings(idx))
 
         # Set priority…
-        if not is_separator and not _is_locked and not _is_bundle_var and not _is_multi:
+        if (not c.is_separator and not c.is_locked
+                and not c.is_bundle_var and not c.is_multi):
             menu.add_command("Set priority…", lambda: self._set_priority(idx))
 
         # Show Conflicts
-        if conflict_status != CONFLICT_NONE or bsa_conflict_status != CONFLICT_NONE:
+        if c.conflict_status != CONFLICT_NONE or c.bsa_conflict_status != CONFLICT_NONE:
             menu.add_command("Show Conflicts",
-                lambda: self._show_overwrites_dialog(_mod_name))
+                lambda: self._show_overwrites_dialog(mod_name))
 
         # Sort Alphabetically (multi-select only)
-        if _is_multi and len(toggleable) >= 2:
-            menu.add_command(f"Sort Alphabetically ({len(toggleable)})",
-                lambda inds=list(toggleable): self._sort_selected_alphabetically(inds))
-
-        menu.popup(x, y)
+        if c.is_multi and len(c.toggleable) >= 2:
+            menu.add_command(f"Sort Alphabetically ({len(c.toggleable)})",
+                lambda inds=list(c.toggleable): self._sort_selected_alphabetically(inds))
 
     def _on_root_folder_toggle(self) -> None:
         self._root_folder_enabled = not self._root_folder_enabled
@@ -6354,11 +5616,6 @@ class ModListPanel(ctk.CTkFrame):
             parent_dismiss=parent_dismiss, parent_popup=parent_popup,
         )
 
-    def _open_nexus_pages(self, urls: list[str]) -> None:
-        """Open multiple Nexus Mods pages, one tab per mod."""
-        for url in urls:
-            self._open_nexus_page(url)
-
     def _show_disable_plugins_dialog(self, mod_name: str, plugin_files: list[str]) -> None:
         """Open the Disable Plugins panel/dialog for a mod and save results."""
         if self._modlist_path is None:
@@ -6605,12 +5862,6 @@ class ModListPanel(ctk.CTkFrame):
         url = f"https://www.nexusmods.com/{domain}/mods/{meta.mod_id}"
         self._open_nexus_page(url)
 
-    def _open_nexus_page(self, url: str) -> None:
-        """Open a Nexus Mods page in the default browser."""
-        if url:
-            open_url(url)
-            self._log(f"Nexus: Opened {url}")
-
     def _open_note_editor_by_name(self, mod_name: str) -> None:
         """Open the mod-note editor (overlay over the plugin panel) for a given mod."""
         if self._modlist_path is None:
@@ -6708,323 +5959,6 @@ class ModListPanel(ctk.CTkFrame):
                 save_ignored_fn=self._save_ignored_missing_reqs,
                 redraw_fn=self._redraw,
             )
-
-    def _endorse_nexus_mod(self, mod_name: str, domain: str, meta) -> None:
-        """Endorse a mod on Nexus Mods in a background thread."""
-        app = self.winfo_toplevel()
-        api = getattr(app, "_nexus_api", None)
-        if api is None:
-            self._log("Nexus: Login to Nexus first.")
-            return
-        log_fn = self._log
-
-        def _worker():
-            try:
-                result = api.endorse_mod(domain, meta.mod_id, meta.version)
-                def _done(res):
-                    log_fn(f"Nexus: Endorsed '{mod_name}' ({meta.mod_id}).")
-                    if res is not None:
-                        body = json.dumps(res, indent=None)
-                        log_fn(f"  Response: {body[:500]}{'...' if len(body) > 500 else ''}")
-                    # Update meta.ini
-                    try:
-                        if self._modlist_path is not None:
-                            staging_root = self._staging_root
-                            meta_path = staging_root / mod_name / "meta.ini"
-                            if meta_path.is_file():
-                                m = read_meta(meta_path)
-                                m.endorsed = True
-                                write_meta(meta_path, m)
-                    except Exception:
-                        pass
-                    self._endorsed_mods.add(mod_name)
-                    self._redraw()
-                app.after(0, lambda: _done(result))
-            except Exception as exc:
-                app.after(0, lambda e=exc: log_fn(f"Nexus: Endorse failed — {e}"))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _abstain_nexus_mod(self, mod_name: str, domain: str, meta) -> None:
-        """Abstain from endorsing a mod on Nexus Mods in a background thread."""
-        app = self.winfo_toplevel()
-        api = getattr(app, "_nexus_api", None)
-        if api is None:
-            self._log("Nexus: Login to Nexus first.")
-            return
-        log_fn = self._log
-
-        def _worker():
-            try:
-                result = api.abstain_mod(domain, meta.mod_id, meta.version)
-                def _done(res):
-                    log_fn(f"Nexus: Abstained from '{mod_name}' ({meta.mod_id}).")
-                    if res is not None:
-                        body = json.dumps(res, indent=None)
-                        log_fn(f"  Response: {body[:500]}{'...' if len(body) > 500 else ''}")
-                    # Update meta.ini
-                    try:
-                        if self._modlist_path is not None:
-                            staging_root = self._staging_root
-                            meta_path = staging_root / mod_name / "meta.ini"
-                            if meta_path.is_file():
-                                m = read_meta(meta_path)
-                                m.endorsed = False
-                                write_meta(meta_path, m)
-                    except Exception:
-                        pass
-                    self._endorsed_mods.discard(mod_name)
-                    self._redraw()
-                app.after(0, lambda: _done(result))
-            except Exception as exc:
-                app.after(0, lambda e=exc: log_fn(f"Nexus: Abstain failed — {e}"))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _update_nexus_mod(self, mod_name: str) -> None:
-        """Show the mod files overlay so the user can pick which file to install."""
-        app = self.winfo_toplevel()
-        if getattr(app, "_nexus_api", None) is None:
-            self._log("Nexus: Login to Nexus first (Nexus button).")
-            return
-        if self._modlist_path is None:
-            return
-        staging_root = self._staging_root
-        meta_path = staging_root / mod_name / "meta.ini"
-        if not meta_path.is_file():
-            self._log(f"Nexus: No metadata for {mod_name}")
-            return
-        try:
-            meta = read_meta(meta_path)
-        except Exception as exc:
-            self._log(f"Nexus: Could not read metadata — {exc}")
-            return
-        game_name = app._topbar._game_var.get()
-        game = _GAMES.get(game_name)
-        if game is None or not game.is_configured():
-            self._log("Nexus: No configured game selected.")
-            return
-        game_domain = meta.game_domain or game.nexus_game_domain
-
-        if not meta.mod_id:
-            self._log(f"Nexus: No mod ID in metadata for {mod_name}.")
-            return
-
-        api = app._nexus_api
-        mod_panel = self
-        log_fn = self._log
-
-        def _fetch_files():
-            files_resp = api.get_mod_files(game_domain, meta.mod_id)
-            return files_resp.files
-
-        def _on_install(file_id: int, file_name: str):
-            self._download_and_install_nexus_file(
-                mod_name=mod_name,
-                game_domain=game_domain,
-                meta=meta,
-                meta_path=meta_path,
-                game=game,
-                file_id=file_id,
-            )
-
-        def _on_ignore(state: bool):
-            try:
-                m = read_meta(meta_path)
-                m.ignore_update = state
-                if state:
-                    m.has_update = False
-                    m.ignored_version = m.latest_version
-                else:
-                    m.ignored_version = ""
-                write_meta(meta_path, m)
-            except Exception as exc:
-                log_fn(f"Nexus: Could not save ignore flag — {exc}")
-            app.after(0, mod_panel._scan_update_flags)
-            app.after(0, mod_panel._redraw)
-
-        self._close_mod_files_overlay()
-        panel = ModFilesOverlay(
-            parent=self,
-            mod_name=mod_name,
-            game_domain=game_domain,
-            mod_id=meta.mod_id,
-            installed_file_id=meta.file_id,
-            ignore_update=meta.ignore_update,
-            on_install=_on_install,
-            on_ignore=_on_ignore,
-            on_close=self._close_mod_files_overlay,
-            fetch_files_fn=_fetch_files,
-        )
-        panel.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self._mod_files_panel = panel
-
-    def _close_mod_files_overlay(self):
-        panel = getattr(self, "_mod_files_panel", None)
-        if panel is not None:
-            panel.cleanup()
-            panel.place_forget()
-            panel.destroy()
-            self._mod_files_panel = None
-
-    def _download_and_install_nexus_file(
-        self,
-        mod_name: str,
-        game_domain: str,
-        meta,
-        meta_path: Path,
-        game,
-        file_id: int,
-    ) -> None:
-        """Download a specific Nexus file and install it."""
-        app = self.winfo_toplevel()
-        log_fn = self._log
-        mod_panel = self
-        cancel_event = self.get_download_cancel_event()
-        self.show_download_progress(f"Updating: {mod_name}", cancel=cancel_event)
-
-        def _worker():
-            api = app._nexus_api
-            downloader = app._nexus_downloader
-
-            is_premium = False
-            try:
-                user = api.validate()
-                is_premium = user.is_premium
-            except Exception:
-                pass
-
-            if not is_premium:
-                files_url = f"https://www.nexusmods.com/{game_domain}/mods/{meta.mod_id}?tab=files"
-                def _fallback():
-                    mod_panel.hide_download_progress(cancel=cancel_event)
-                    open_url(files_url)
-                    log_fn("Nexus: Premium required for direct download.")
-                    log_fn("Nexus: Opened files page — click \"Download with Mod Manager\" there.")
-                app.after(0, _fallback)
-                return
-
-            mod_info = None
-            file_info = None
-            try:
-                mod_info = api.get_mod(game_domain, meta.mod_id)
-                files_resp = api.get_mod_files(game_domain, meta.mod_id)
-                for f in files_resp.files:
-                    if f.file_id == file_id:
-                        file_info = f
-                        break
-            except Exception as exc:
-                app.after(0, lambda e=exc: log_fn(f"Nexus: Could not fetch mod info — {e}"))
-                app.after(0, lambda: mod_panel.hide_download_progress(cancel=cancel_event))
-                return
-
-            result = downloader.download_file(
-                game_domain=game_domain,
-                mod_id=meta.mod_id,
-                file_id=file_id,
-                progress_cb=lambda cur, total: app.after(
-                    0, lambda c=cur, t=total: mod_panel.update_download_progress(c, t, cancel=cancel_event)
-                ),
-                cancel=cancel_event,
-                dest_dir=get_download_cache_dir_for_game(getattr(game, "name", "") or ""),
-            )
-
-            if result.success and result.file_path:
-                status_bar = getattr(app, "_status", None)
-
-                def _extract_progress(done: int, total: int, phase: str | None = None):
-                    if status_bar is not None:
-                        app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
-
-                def _install_worker():
-                    def _cleanup(is_fomod: bool = False):
-                        from Utils.ui_config import (
-                            load_clear_archive_after_install,
-                            load_keep_fomod_archives,
-                        )
-                        if not load_clear_archive_after_install():
-                            return
-                        if is_fomod and load_keep_fomod_archives():
-                            return
-                        delete_archive_and_sidecar(Path(result.file_path))
-
-                    try:
-                        prebuilt = build_meta_from_download(
-                            game_domain=game_domain,
-                            mod_id=meta.mod_id,
-                            file_id=file_id,
-                            archive_name=result.file_name,
-                            mod_info=mod_info,
-                            file_info=file_info,
-                        )
-                        prebuilt.has_update = False
-                    except Exception as exc:
-                        log_fn(f"Nexus: Warning — could not build metadata: {exc}")
-                        prebuilt = None
-
-                    try:
-                        install_mod_from_archive(
-                            str(result.file_path), app, log_fn, game, mod_panel,
-                            prebuilt_meta=prebuilt,
-                            on_installed=_cleanup,
-                            progress_fn=_extract_progress,
-                            clear_progress_fn=lambda: app.after(0, status_bar.clear_progress) if status_bar is not None else None)
-                    finally:
-                        if status_bar is not None:
-                            app.after(0, status_bar.clear_progress)
-                    app.after(0, mod_panel._scan_update_flags)
-                    app.after(0, mod_panel._redraw)
-                    log_fn(f"Nexus: {mod_name} updated successfully.")
-
-                def _install():
-                    try:
-                        if app.grab_current() is not None:
-                            app.after(500, _install)
-                            return
-                    except Exception:
-                        pass
-                    mod_panel.hide_download_progress(cancel=cancel_event)
-                    log_fn(f"Nexus: Installing update for {mod_name}...")
-                    threading.Thread(target=_install_worker, daemon=True).start()
-                app.after(0, _install)
-            else:
-                def _fail():
-                    mod_panel.hide_download_progress(cancel=cancel_event)
-                    log_fn(f"Nexus: Update download failed — {result.error}")
-                app.after(0, _fail)
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _reinstall_mod(self, mod_name: str, archive_path: Path) -> None:
-        """Reinstall a mod from its recorded installation archive in the downloads folder."""
-        app = self.winfo_toplevel()
-        topbar = getattr(app, "_topbar", None)
-        game = _GAMES.get(topbar._game_var.get()) if topbar else None
-        if game is None or not game.is_configured():
-            self._log("Reinstall: No configured game selected.")
-            return
-        if not archive_path.is_file():
-            self._log(f"Reinstall: Archive not found — {archive_path}")
-            return
-        self._log(f"Reinstalling '{mod_name}' from {archive_path.name}…")
-        status_bar = getattr(app, "_status", None)
-
-        def _extract_progress(done: int, total: int, phase: str | None = None):
-            if status_bar is not None:
-                app.after(0, lambda d=done, t=total, p=phase: status_bar.set_progress(d, t, p, title="Extracting"))
-
-        def _worker():
-            try:
-                install_mod_from_archive(
-                    str(archive_path), app, self._log, game, mod_panel=self,
-                    progress_fn=_extract_progress,
-                    clear_progress_fn=lambda: app.after(0, status_bar.clear_progress) if status_bar is not None else None,
-                )
-            finally:
-                if status_bar is not None:
-                    app.after(0, status_bar.clear_progress)
-
-        threading.Thread(target=_worker, daemon=True).start()
 
     def _show_overwrites_dialog(self, mod_name: str) -> None:
         """Open the conflict detail dialog for a mod (I/O runs in a background thread)."""
@@ -7699,175 +6633,6 @@ class ModListPanel(ctk.CTkFrame):
                 pass
             self._changelog_panel = None
 
-    def _on_check_updates(self):
-        """Check for mod updates and missing requirements in one background pass."""
-        app = self.winfo_toplevel()
-        if app._nexus_api is None:
-            self._log("Nexus: Login to Nexus first (Nexus button).")
-            return
-        game = self._game
-        if game is None or not game.is_configured():
-            self._log("No configured game selected.")
-            return
-
-        staging = game.get_effective_mod_staging_path()
-        enabled_names = {e.name for e in self._entries if not e.is_separator}
-        self._update_btn.configure(text="Checking...", state="disabled")
-        log_fn = self._log
-
-        _notif = CTkNotification(app, state="info",
-                                 message=f"Checking {len(enabled_names)} mod(s) for updates...")
-
-        def _close_notif():
-            try:
-                if _notif.winfo_exists():
-                    _notif.destroy()
-            except Exception:
-                pass
-
-        def _worker():
-            try:
-                results, missing = check_for_updates(
-                    app._nexus_api, staging,
-                    game_domain=game.nexus_game_domain,
-                    progress_cb=lambda m: app.after(0, lambda msg=m: log_fn(msg)),
-                    enabled_only=enabled_names,
-                )
-
-                def _done():
-                    _close_notif()
-                    self._update_btn.configure(text="Check Updates", state="normal")
-                    if results:
-                        log_fn(f"Nexus: {len(results)} update(s) available!")
-                        for u in results:
-                            log_fn(f"  ↑ {u.mod_name}: {u.installed_version} → {u.latest_version}")
-                    else:
-                        log_fn("Nexus: All mods are up to date.")
-                    if missing:
-                        log_fn(f"Nexus: {len(missing)} mod(s) have missing requirements!")
-                        for m in missing:
-                            names = ", ".join(r.mod_name for r in m.missing[:3])
-                            suffix = f" (+{len(m.missing) - 3} more)" if len(m.missing) > 3 else ""
-                            log_fn(f"  ⚠ {m.mod_name}: needs {names}{suffix}")
-                    else:
-                        log_fn("Nexus: All mod requirements satisfied.")
-                    self._scan_meta_flags_async()
-                app.after(0, _done)
-            except Exception as exc:
-                app.after(0, lambda e=exc: (
-                    _close_notif(),
-                    self._update_btn.configure(text="Check Updates", state="normal"),
-                    log_fn(f"Nexus: Check failed — {e}"),
-                ))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_check_updates_for_mods(self, mod_names: list[str]):
-        """Check for updates for a specific set of mods (from right-click menu)."""
-        if not mod_names:
-            return
-        app = self.winfo_toplevel()
-        if app._nexus_api is None:
-            self._log("Nexus: Login to Nexus first (Nexus button).")
-            return
-        game = self._game
-        if game is None or not game.is_configured():
-            self._log("No configured game selected.")
-            return
-
-        staging = game.get_effective_mod_staging_path()
-        target_names = set(mod_names)
-        self._update_btn.configure(text="Checking...", state="disabled")
-        log_fn = self._log
-
-        _notif = CTkNotification(app, state="info",
-                                 message=f"Checking {len(target_names)} mod(s) for updates...")
-
-        def _close_notif():
-            try:
-                if _notif.winfo_exists():
-                    _notif.destroy()
-            except Exception:
-                pass
-
-        def _worker():
-            try:
-                results, missing = check_for_updates(
-                    app._nexus_api, staging,
-                    game_domain=game.nexus_game_domain,
-                    progress_cb=lambda m: app.after(0, lambda msg=m: log_fn(msg)),
-                    enabled_only=target_names,
-                )
-
-                def _done():
-                    _close_notif()
-                    self._update_btn.configure(text="Check Updates", state="normal")
-                    if results:
-                        log_fn(f"Nexus: {len(results)} update(s) available!")
-                        for u in results:
-                            log_fn(f"  ↑ {u.mod_name}: {u.installed_version} → {u.latest_version}")
-                    else:
-                        log_fn("Nexus: Selected mod(s) are up to date.")
-                    if missing:
-                        log_fn(f"Nexus: {len(missing)} mod(s) have missing requirements!")
-                        for m in missing:
-                            names = ", ".join(r.mod_name for r in m.missing[:3])
-                            suffix = f" (+{len(m.missing) - 3} more)" if len(m.missing) > 3 else ""
-                            log_fn(f"  ⚠ {m.mod_name}: needs {names}{suffix}")
-                    self._scan_meta_flags_async()
-                app.after(0, _done)
-            except Exception as exc:
-                app.after(0, lambda e=exc: (
-                    _close_notif(),
-                    self._update_btn.configure(text="Check Updates", state="normal"),
-                    log_fn(f"Nexus: Check failed — {e}"),
-                ))
-
-        threading.Thread(target=_worker, daemon=True).start()
-
-    def _on_open_filters(self):
-        """Toggle the inline filter side panel."""
-        if getattr(self, "_filter_panel_open", False):
-            self._close_filter_side_panel()
-        else:
-            self._open_filter_side_panel()
-
-    def _open_filter_side_panel(self):
-        """Show the filter side panel and sync checkboxes to current state."""
-        # Close plugin filter if open (they share the same column)
-        plugin_panel = getattr(self.winfo_toplevel(), "_plugin_panel", None)
-        if plugin_panel is not None and getattr(plugin_panel, "_plugin_filter_panel_open", False):
-            plugin_panel._close_plugin_filter_panel()
-        self._filter_panel_open = True
-        # Use scaled minsize so panel isn't squeezed at higher UI scale
-        self.grid_columnconfigure(0, minsize=scaled(380))
-        self._filter_side_panel.grid()
-        # Sync checkbox vars to current live filter state
-        self._fsp_vars["filter_show_disabled"].set(self._filter_show_disabled)
-        self._fsp_vars["filter_show_enabled"].set(self._filter_show_enabled)
-        self._fsp_vars["filter_hide_separators"].set(self._filter_hide_separators)
-        self._fsp_vars["filter_winning"].set(self._filter_conflict_winning)
-        self._fsp_vars["filter_losing"].set(self._filter_conflict_losing)
-        self._fsp_vars["filter_partial"].set(self._filter_conflict_partial)
-        self._fsp_vars["filter_full"].set(self._filter_conflict_full)
-        self._fsp_vars["filter_missing_reqs"].set(self._filter_missing_reqs)
-        self._fsp_vars["filter_has_disabled_plugins"].set(self._filter_has_disabled_plugins)
-        self._fsp_vars["filter_has_plugins"].set(self._filter_has_plugins)
-        self._fsp_vars["filter_has_disabled_files"].set(self._filter_has_disabled_files)
-        self._fsp_vars["filter_has_updates"].set(self._filter_has_updates)
-        self._fsp_vars["filter_has_notes"].set(self._filter_has_notes)
-        self._fsp_vars["filter_fomod_only"].set(self._filter_fomod_only)
-        self._fsp_vars["filter_has_bsa"].set(self._filter_has_bsa)
-        self._refresh_filter_category_list()
-        self._update_filter_btn_color()
-
-    def _close_filter_side_panel(self):
-        """Hide the filter side panel."""
-        self._filter_panel_open = False
-        self._filter_side_panel.grid_remove()
-        self.grid_columnconfigure(0, minsize=0)
-        self._update_filter_btn_color()
-
     def _on_restore_backup(self):
         """Open the backup restore panel/dialog for the current profile."""
         if not self._modlist_path or not self._modlist_path.parent.is_dir():
@@ -7895,57 +6660,6 @@ class ModListPanel(ctk.CTkFrame):
                 on_restored=lambda: app._topbar._reload_mod_panel(),
             )
             app.wait_window(dlg)
-
-    def _apply_modlist_filters(self, state: dict):
-        """Apply filter state from the filters dialog and redraw."""
-        self._filter_show_disabled = state.get("filter_show_disabled", False)
-        self._filter_show_enabled = state.get("filter_show_enabled", False)
-        self._filter_hide_separators = state.get("filter_hide_separators", False)
-        self._filter_conflict_winning = state.get("filter_winning", False)
-        self._filter_conflict_losing = state.get("filter_losing", False)
-        self._filter_conflict_partial = state.get("filter_partial", False)
-        self._filter_conflict_full = state.get("filter_full", False)
-        self._filter_missing_reqs = state.get("filter_missing_reqs", False)
-        self._filter_has_disabled_plugins = state.get("filter_has_disabled_plugins", False)
-        self._filter_has_plugins = state.get("filter_has_plugins", False)
-        self._filter_has_disabled_files = state.get("filter_has_disabled_files", False)
-        self._filter_has_updates = state.get("filter_has_updates", False)
-        self._filter_has_notes = state.get("filter_has_notes", False)
-        self._filter_fomod_only = state.get("filter_fomod_only", False)
-        self._filter_has_bsa = state.get("filter_has_bsa", False)
-        self._filter_categories = state.get("filter_categories") or frozenset()
-        self._update_filter_btn_color()
-        self._invalidate_derived_caches()
-        self._redraw()
-
-    def _any_modlist_filters_active(self) -> bool:
-        return (
-            self._filter_show_disabled
-            or self._filter_show_enabled
-            or self._filter_hide_separators
-            or self._filter_conflict_winning
-            or self._filter_conflict_losing
-            or self._filter_conflict_partial
-            or self._filter_conflict_full
-            or self._filter_missing_reqs
-            or self._filter_has_disabled_plugins
-            or self._filter_has_plugins
-            or self._filter_has_disabled_files
-            or self._filter_has_updates
-            or self._filter_has_notes
-            or self._filter_fomod_only
-            or self._filter_has_bsa
-            or bool(self._filter_categories)
-        )
-
-    def _update_filter_btn_color(self) -> None:
-        btn = getattr(self, "_filter_btn", None)
-        if btn is None:
-            return
-        if self._any_modlist_filters_active():
-            btn.configure(fg_color=ACCENT, hover_color=ACCENT_HOV)
-        else:
-            btn.configure(fg_color=BG_HEADER, hover_color=BG_HOVER)
 
     def _move_up(self):
         # Under inverted priority sort, visual up = natural down.
