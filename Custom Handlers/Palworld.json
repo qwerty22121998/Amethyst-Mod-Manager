@@ -18,7 +18,7 @@
   "conflict_ignore_filenames": [
     "*.png",
     "*.jpg",
-    "*.txt"
+    "*readme*.txt"
   ],
   "mod_folder_strip_prefixes_post": [],
   "mod_install_prefix": "",
@@ -28,6 +28,7 @@
   "mod_install_as_is_if_no_match": true,
   "restore_before_deploy": true,
   "normalize_folder_case": true,
+  "filemap_casing": "upper",
   "wine_dll_overrides": {
     "d3d9": "native,builtin"
   },
@@ -56,9 +57,15 @@
         "LogicMods"
       ],
       "flatten": true
+    },
+    {
+      "dest": "Binaries/Win64/Mods",
+      "filenames": [
+        "enabled.txt"
+      ]
     }
   ],
   "custom_frameworks": {},
-  "version": 2,
+  "version": 3,
   "editable": false
 }
