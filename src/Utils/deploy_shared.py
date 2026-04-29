@@ -967,6 +967,7 @@ def _move_runtime_files(
     prefix_len = len(game_root_str) + 1
     overwrite_str = str(overwrite_dir)
     made_dirs: set[str] = set()
+    emptied_dirs: set[Path] = set()
     moved = 0
     stack = [game_root_str]
     while stack:
@@ -989,9 +990,15 @@ def _move_runtime_files(
                             os.makedirs(dst_dir, exist_ok=True)
                             made_dirs.add(dst_dir)
                         shutil.move(entry.path, dst)
+                        emptied_dirs.add(Path(entry.path).parent)
                         moved += 1
         except OSError:
             pass
+
+    # Prune any directories left empty after moving runtime files out
+    if emptied_dirs:
+        _prune_empty_dirs(emptied_dirs, stop_dirs={game_root})
+
     return moved
 
 
