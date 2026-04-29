@@ -279,8 +279,20 @@ class LootPluginRulesOverlay(tk.Frame):
         self._drag_name = self._displayed_plugins[idx]
 
     def _on_drag_motion(self, event):
+        # Cancel any pending Listbox autoscan timer so the listbox doesn't
+        # scroll horizontally/vertically when we drag past its edges.
+        try:
+            self.tk.call("tk::CancelRepeat")
+        except tk.TclError:
+            pass
+        # Snap horizontal scroll back to the start in case autoscan already fired.
+        try:
+            if self._plugins_listbox.xview() != (0.0, 1.0):
+                self._plugins_listbox.xview_moveto(0.0)
+        except tk.TclError:
+            pass
         if not self._drag_name:
-            return
+            return "break"
         rx = event.x_root
         ry = event.y_root
         if self._drag_ghost is None:
@@ -297,6 +309,7 @@ class LootPluginRulesOverlay(tk.Frame):
 
         # Highlight drop zone if hovering over it
         self._update_drop_highlight(rx, ry)
+        return "break"
 
     def _on_drag_release(self, event):
         self._destroy_ghost()

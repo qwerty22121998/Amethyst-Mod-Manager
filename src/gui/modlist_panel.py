@@ -1924,7 +1924,10 @@ class ModListPanel(ModListFilterPanelMixin, ModListDownloadBarMixin,
 
         highlighted_sep_idx: int = -1
         if self._highlighted_mod:
-            highlighted_sep_idx = self._sep_idx_for_mod(self._highlighted_mod)
+            _hi_sep_idx = self._sep_idx_for_mod(self._highlighted_mod)
+            if (0 <= _hi_sep_idx < len(self._entries)
+                    and self._entries[_hi_sep_idx].name in self._collapsed_seps):
+                highlighted_sep_idx = _hi_sep_idx
 
         # Track which lock canvas items were repositioned this frame
         _visited_lock_keys: set[str] = set()
