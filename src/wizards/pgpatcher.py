@@ -597,7 +597,7 @@ class PGPatcherWizard(ctk.CTkFrame):
             self._body,
             text=(
                 "Before deploying, please delete any output from a previous\n"
-                "PGPatcher run (the 'PGPatcher' mod in your mod list / staging folder).\n\n"
+                "PGPatcher run (the 'PGPatcher_output' mod in your mod list / staging folder).\n\n"
                 "Once you have done this, click Deploy."
             ),
             font=FONT_NORMAL, text_color=TEXT_DIM, justify="center", wraplength=460,

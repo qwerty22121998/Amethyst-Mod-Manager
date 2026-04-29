@@ -1630,7 +1630,7 @@ class PluginPanel(ctk.CTkFrame):
             staging_path = game.get_effective_mod_staging_path() if hasattr(game, "get_effective_mod_staging_path") else None
             # Resolve the user-selected output mod folder (saved separately as
             # "PGPatcher.exe:output_mod" in exe_args.json). Falls back to
-            # staging_path/"PGPatcher" by default.
+            # staging_path/"PGPatcher_output" by default.
             _pgp_output_mod: "Path | None" = None
             if staging_path is not None:
                 _pgp_saved = self._load_exe_args("PGPatcher.exe:output_mod").strip()

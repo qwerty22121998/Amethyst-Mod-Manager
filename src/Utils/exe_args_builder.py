@@ -289,7 +289,7 @@ def _bootstrap_pgpatcher_settings(
     - exe_path   : full path to PGPatcher.exe
     - game_path  : game install root (Linux path)
     - staging_path : mods staging folder (Linux path)
-    - output_mod : explicit output folder path; defaults to staging_path / "PGPatcher"
+    - output_mod : explicit output folder path; defaults to staging_path / "PGPatcher_output"
     """
     if game_path is None or staging_path is None:
         log_fn("PGPatcher: game path not configured; skipping settings.json generation")
@@ -302,7 +302,7 @@ def _bootstrap_pgpatcher_settings(
         return  # already seeded — runtime launch will keep it up to date
 
     # Ensure the output mod folder exists so PGPatcher can write there
-    output_mod_dir = output_mod if output_mod is not None else staging_path / "PGPatcher"
+    output_mod_dir = output_mod if output_mod is not None else staging_path / "PGPatcher_output"
     output_mod_dir.mkdir(parents=True, exist_ok=True)
 
     # Load existing settings (preserve user changes) or start from template
