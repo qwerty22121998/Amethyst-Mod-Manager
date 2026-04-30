@@ -5,6 +5,11 @@ on:
     tags: ['v*']
   workflow_dispatch: {}
 
+# Required for the release-publish step (softprops/action-gh-release).
+# Default GITHUB_TOKEN is read-only; this elevates it to write releases.
+permissions:
+  contents: write
+
 jobs:
   # ────────────────────────────────────────────────────────────────────
   # Build the libloot Python extension. Split out so it can be cached
@@ -114,3 +119,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: src/appimage/dist/*.AppImage
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
