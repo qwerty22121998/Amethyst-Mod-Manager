@@ -58,8 +58,9 @@ done
 rm -f "$APP_SHARE/LOOT/rebuild_libloot.sh"
 find "$APP_SHARE" -type f -name '*.sh' -exec rm -f {} \;
 find "$APP_SHARE" -type f -name 'requirements*.txt' -delete 2>/dev/null || true
-LOOT_SO="$APP_SHARE/LOOT/loot.cpython-313-x86_64-linux-gnu.so"
-[ -f "$LOOT_SO" ] && strip --strip-unneeded "$LOOT_SO" 2>/dev/null || true
+# Strip the libloot extension regardless of which Python ABI tag it
+find "$APP_SHARE/LOOT" -maxdepth 1 -name 'loot.cpython-*-x86_64-linux-gnu.so' \
+    -exec strip --strip-unneeded {} + 2>/dev/null || true
 find "$APP_SHARE" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$APP_SHARE" -type f -name '*.py' -exec chmod -x {} \;
 

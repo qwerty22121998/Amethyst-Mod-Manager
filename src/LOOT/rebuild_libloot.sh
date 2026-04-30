@@ -16,7 +16,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="${PROJECT_DIR}/.venv"
 LIBLOOT_DIR="${SCRIPT_DIR}/libloot"
 PYTHON_DIR="${LIBLOOT_DIR}/python"
-OUT_SO_NAME="loot.cpython-313-x86_64-linux-gnu.so"
+# Build for whatever Python version is the system default
+PY_TAG="$(python3 -c 'import sys; print(f"cpython-{sys.version_info.major}{sys.version_info.minor}")')"
+PY_TAG_SHORT="$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')"
+OUT_SO_NAME="loot.${PY_TAG}-x86_64-linux-gnu.so"
 OUT_PRIMARY="${SCRIPT_DIR}/${OUT_SO_NAME}"
 REQUIREMENTS="${PROJECT_DIR}/requirements.txt"
 
@@ -118,7 +121,7 @@ cd "$PYTHON_DIR"
 # ── Locate the built wheel ────────────────────────────────────────────
 # Maturin may put target/wheels under python/ or under the repo root
 for WHEEL_DIR in "${PYTHON_DIR}/target/wheels" "${LIBLOOT_DIR}/target/wheels"; do
-    WHEEL=( "$WHEEL_DIR"/libloot-*-cp313-*linux*.whl "$WHEEL_DIR"/loot-*-cp313-*linux*.whl )
+    WHEEL=( "$WHEEL_DIR"/libloot-*-${PY_TAG_SHORT}-*linux*.whl "$WHEEL_DIR"/loot-*-${PY_TAG_SHORT}-*linux*.whl )
     for w in "${WHEEL[@]}"; do
         if [ -f "$w" ]; then
             WHEEL="$w"
@@ -127,7 +130,7 @@ for WHEEL_DIR in "${PYTHON_DIR}/target/wheels" "${LIBLOOT_DIR}/target/wheels"; d
     done
 done
 if [ -z "${WHEEL:-}" ] || [ ! -f "$WHEEL" ]; then
-    echo "ERROR: No cp313 linux wheel found in target/wheels under libloot or libloot/python." >&2
+    echo "ERROR: No ${PY_TAG_SHORT} linux wheel found in target/wheels under libloot or libloot/python." >&2
     for d in "${PYTHON_DIR}/target/wheels" "${LIBLOOT_DIR}/target/wheels"; do
         [ -d "$d" ] && ls -la "$d" 2>/dev/null || true
     done
