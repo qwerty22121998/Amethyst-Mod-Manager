@@ -17,23 +17,36 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          # python-gobject + python-pycairo are required for the GTK
-          # splash screen. Without pycairo the splash subprocess silently
-          # exits 1 and the user sees the main window appear with no
-          # splash animation. zenity is the file-picker fallback.
+          # python-gobject + python-cairo: GTK splash screen — without
+          # cairo the splash subprocess silently exits 1.
+          # tk: tkinter import inside the bundled Python.
+          # zenity: file-picker fallback used by portal_filechooser.py.
+          # libarchive: bsdtar + libarchive.so.13 for fast extraction.
+          # python-pip + base-devel: pip install --target and the
+          #   anylinux.so cc step.
+          # rust + git + unzip: building libloot from source via
+          #   src/LOOT/rebuild_libloot.sh (the .so is gitignored, not
+          #   shipped in the repo).
+          # python-customtkinter is pip-installed into _vendor/ via
+          #   requirements-appimage.txt, no need to install it here.
           pacman -Syu --noconfirm \
               python-gobject \
-              python-pycairo \
-              python-libloot \
-              python-customtkinter \
+              python-cairo \
+              python-pip \
               tk \
               zenity \
-              libarchive
+              libarchive \
+              base-devel \
+              wget \
+              rust \
+              git \
+              unzip
+
+      - name: Build libloot Python extension
+        run: bash src/LOOT/rebuild_libloot.sh
 
       - name: Build AppImage
         env:
-          # CI containers run as root; ANYLINUX_LIB needs glibc dev
-          # headers (already present in archlinux:latest unlike SteamOS).
           ANYLINUX_LIB: '1'
         run: bash src/appimage/make-appimage.sh
 
