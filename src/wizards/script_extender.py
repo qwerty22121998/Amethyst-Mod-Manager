@@ -38,6 +38,7 @@ from gui.theme import (
     TEXT_DIM, TEXT_MAIN,
     FONT_NORMAL, FONT_BOLD, FONT_SMALL,
 )
+from wizards._install_as_mod import derive_mod_name, register_as_mod
 
 _ARCHIVE_EXTS = {".zip", ".7z", ".rar", ".tar", ".tar.gz", ".tar.bz2", ".tar.xz"}
 
@@ -207,7 +208,9 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         self._archive_path: Path | None = None
         self._resolved_download_url: str | None = None
         self._game_root: Path | None = game.get_game_path()
-        self._install_to_root_folder = ctk.BooleanVar(value=False)
+        # "game" = extract to game folder (default), "root" = Root_Folder staging,
+        # "mod" = install as a managed mod (staging dir + modlist entry + rootFolder flag)
+        self._install_mode = ctk.StringVar(value="game")
 
         title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
         title_bar.pack(fill="x")
@@ -236,6 +239,22 @@ class ScriptExtenderWizard(ctk.CTkFrame):
     def _clear_body(self):
         for w in self._body.winfo_children():
             w.destroy()
+
+    def _build_install_mode_chooser(self, parent) -> ctk.CTkFrame:
+        """Three-way radio: install to game folder, Root_Folder staging, or as a mod."""
+        frame = ctk.CTkFrame(parent, fg_color="transparent")
+        for label, value in (
+            ("Install to game folder", "game"),
+            ("Install to Root_Folder (staging)", "root"),
+            ("Install as mod (managed in modlist)", "mod"),
+        ):
+            ctk.CTkRadioButton(
+                frame, text=label,
+                variable=self._install_mode, value=value,
+                font=FONT_SMALL, text_color=TEXT_DIM,
+                fg_color=ACCENT, hover_color=ACCENT_HOV,
+            ).pack(anchor="w", pady=(0, 2))
+        return frame
 
     # ------------------------------------------------------------------
     # Step 1 — Download (GitHub auto-download or manual page fallback)
@@ -322,14 +341,7 @@ class ScriptExtenderWizard(ctk.CTkFrame):
         self._dl_progress.pack(pady=(0, 16))
         self._dl_progress.start()
 
-        ctk.CTkCheckBox(
-            self._body,
-            text="Install to Root_Folder (staging) instead of game folder",
-            variable=self._install_to_root_folder,
-            font=FONT_SMALL, text_color=TEXT_DIM,
-            fg_color=ACCENT, hover_color=ACCENT_HOV,
-            checkmark_color="white",
-        ).pack(pady=(0, 8))
+        self._build_install_mode_chooser(self._body).pack(pady=(0, 8))
 
         btn_frame = ctk.CTkFrame(self._body, fg_color="transparent")
         btn_frame.pack(side="bottom", pady=(8, 0))
@@ -448,14 +460,7 @@ class ScriptExtenderWizard(ctk.CTkFrame):
                 font=FONT_SMALL, text_color="#e06c6c",
             ).pack(pady=(0, 8))
 
-        ctk.CTkCheckBox(
-            self._body,
-            text="Install to Root_Folder (staging) instead of game folder",
-            variable=self._install_to_root_folder,
-            font=FONT_SMALL, text_color=TEXT_DIM,
-            fg_color=ACCENT, hover_color=ACCENT_HOV,
-            checkmark_color="white",
-        ).pack(pady=(0, 12))
+        self._build_install_mode_chooser(self._body).pack(pady=(0, 12))
 
         ctk.CTkButton(
             self._body, text="Next \u2192", width=120, height=36,
@@ -564,30 +569,50 @@ class ScriptExtenderWizard(ctk.CTkFrame):
 
     def _do_extract(self):
         try:
-            if self._install_to_root_folder.get():
-                game_root = self._game.get_effective_root_folder_path()
-                game_root.mkdir(parents=True, exist_ok=True)
-            else:
-                game_root = self._game_root
-            if game_root is None:
-                raise RuntimeError("Game path is not configured.")
-
+            mode = self._install_mode.get()
             archive = self._archive_path
             if archive is None or not archive.is_file():
                 raise RuntimeError("Archive not found.")
 
-            self._set_status("Restoring game to vanilla state\u2026")
-            try:
-                self._game.restore(log_fn=self._log)
-            except Exception as exc:
-                self._log(f"Wizard: restore skipped or failed: {exc}")
+            install_as_mod = mode == "mod"
+            mod_name: str | None = None
+            if install_as_mod:
+                staging = self._game.get_effective_mod_staging_path()
+                if staging is None:
+                    raise RuntimeError("Mod staging path is not configured.")
+                mod_name = derive_mod_name(archive, fallback="Script Extender")
+                dest = staging / mod_name
+                if dest.exists():
+                    shutil.rmtree(dest, ignore_errors=True)
+                dest.mkdir(parents=True, exist_ok=True)
+            elif mode == "root":
+                dest = self._game.get_effective_root_folder_path()
+                dest.mkdir(parents=True, exist_ok=True)
+            else:
+                dest = self._game_root
+                if dest is None:
+                    raise RuntimeError("Game path is not configured.")
+                self._set_status("Restoring game to vanilla state\u2026")
+                try:
+                    self._game.restore(log_fn=self._log)
+                except Exception as exc:
+                    self._log(f"Wizard: restore skipped or failed: {exc}")
 
-            self._set_status("Extracting archive to game folder\u2026")
-            self._log(f"Wizard: extracting {archive.name} \u2192 {game_root}")
+            dest_label = {
+                "mod": f"mod folder ({mod_name})",
+                "root": "Root_Folder (staging)",
+                "game": "game folder",
+            }[mode]
+            self._set_status(f"Extracting archive to {dest_label}\u2026")
+            self._log(f"Wizard: extracting {archive.name} \u2192 {dest}")
 
-            paths = _extract_archive(archive, game_root)
+            paths = _extract_archive(archive, dest)
             file_count = len([p for p in paths if p.is_file()])
             self._log(f"Wizard: extracted {file_count} file(s).")
+
+            if install_as_mod:
+                register_as_mod(self._game, mod_name, archive,
+                                parent_widget=self, log_fn=self._log)
 
             try:
                 archive.unlink()
@@ -595,7 +620,6 @@ class ScriptExtenderWizard(ctk.CTkFrame):
             except OSError as exc:
                 self._log(f"Wizard: could not delete archive: {exc}")
 
-            dest_label = "Root_Folder (staging)" if self._install_to_root_folder.get() else "game folder"
             self._set_status(
                 f"Script extender installed successfully!\n"
                 f"{file_count} file(s) extracted to the {dest_label}.\n\n"
