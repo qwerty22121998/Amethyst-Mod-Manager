@@ -16,10 +16,10 @@ APPDIR="${WORK_DIR}/AppDir"
 FINAL_OUTPATH="${SCRIPT_DIR}/dist"
 
 # ── Tooling check ────────────────────────────────────────────────────
-for tool in quick-sharun sharun cc awk find ldd strings; do
+for tool in quick-sharun cc awk find ldd strings; do
     command -v "$tool" >/dev/null || {
         echo "ERROR: '$tool' not found in PATH" >&2
-        echo "Install sharun + quick-sharun into ~/.local/bin/" >&2
+        echo "Install quick-sharun (and ideally sharun) into ~/.local/bin/" >&2
         exit 1
     }
 done
