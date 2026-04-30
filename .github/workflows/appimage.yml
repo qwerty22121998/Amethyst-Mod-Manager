@@ -1,0 +1,51 @@
+name: Build AppImage
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ghcr.io/pkgforge-dev/archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare anylinux container
+        uses: pkgforge-dev/anylinux-setup-action@v2
+
+      - name: Install build dependencies
+        run: |
+          # python-gobject + python-pycairo are required for the GTK
+          # splash screen. Without pycairo the splash subprocess silently
+          # exits 1 and the user sees the main window appear with no
+          # splash animation. zenity is the file-picker fallback.
+          pacman -Syu --noconfirm \
+              python-gobject \
+              python-pycairo \
+              python-libloot \
+              python-customtkinter \
+              tk \
+              zenity \
+              libarchive
+
+      - name: Build AppImage
+        env:
+          # CI containers run as root; ANYLINUX_LIB needs glibc dev
+          # headers (already present in archlinux:latest unlike SteamOS).
+          ANYLINUX_LIB: '1'
+        run: bash src/appimage/make-appimage.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AmethystModManager-AppImage
+          path: src/appimage/dist/*.AppImage
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: src/appimage/dist/*.AppImage
