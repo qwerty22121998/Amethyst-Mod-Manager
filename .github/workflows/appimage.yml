@@ -6,7 +6,67 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  build:
+  # ────────────────────────────────────────────────────────────────────
+  # Build the libloot Python extension. Split out so it can be cached
+  # independently — the Rust compile is ~80s and only needs to re-run
+  # when libloot's master HEAD or the host Python ABI changes.
+  # ────────────────────────────────────────────────────────────────────
+  libloot:
+    name: Build libloot extension
+    runs-on: ubuntu-latest
+    container: ghcr.io/pkgforge-dev/archlinux:latest
+    outputs:
+      so-name: ${{ steps.detect.outputs.so-name }}
+      libloot-rev: ${{ steps.detect.outputs.libloot-rev }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syy --noconfirm
+          pacman -S --noconfirm \
+              python python-pip base-devel rust git unzip
+
+      - name: Resolve libloot revision and Python ABI
+        id: detect
+        run: |
+          # Latest libloot master commit — used as a cache key so that
+          # bumps to libloot trigger a rebuild but unrelated re-runs hit
+          # the cache.
+          LIBLOOT_REV=$(git ls-remote https://github.com/loot/libloot.git HEAD | awk '{print substr($1,1,12)}')
+          PY_TAG=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+          SO_NAME="loot.cpython-${PY_TAG#cp}-x86_64-linux-gnu.so"
+          echo "libloot-rev=$LIBLOOT_REV"  >> "$GITHUB_OUTPUT"
+          echo "py-tag=$PY_TAG"            >> "$GITHUB_OUTPUT"
+          echo "so-name=$SO_NAME"          >> "$GITHUB_OUTPUT"
+          echo "libloot=$LIBLOOT_REV  py=$PY_TAG  so=$SO_NAME"
+
+      - name: Cache built extension
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: src/LOOT/${{ steps.detect.outputs.so-name }}
+          key: libloot-${{ steps.detect.outputs.libloot-rev }}-${{ steps.detect.outputs.py-tag }}
+
+      - name: Build extension
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash src/LOOT/rebuild_libloot.sh
+
+      - name: Upload extension as job artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libloot-extension
+          path: src/LOOT/loot.cpython-*-x86_64-linux-gnu.so
+          if-no-files-found: error
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # Build the AppImage. Pulls the precompiled libloot .so from the
+  # previous job rather than rebuilding it.
+  # ────────────────────────────────────────────────────────────────────
+  appimage:
+    name: Build AppImage
+    needs: libloot
     runs-on: ubuntu-latest
     container: ghcr.io/pkgforge-dev/archlinux:latest
     steps:
@@ -22,13 +82,6 @@ jobs:
           # tk: tkinter import inside the bundled Python.
           # zenity: file-picker fallback used by portal_filechooser.py.
           # libarchive: bsdtar + libarchive.so.13 for fast extraction.
-          # python-pip + base-devel: pip install --target and the
-          #   anylinux.so cc step.
-          # rust + git + unzip: building libloot from source via
-          #   src/LOOT/rebuild_libloot.sh (the .so is gitignored, not
-          #   shipped in the repo).
-          # python-customtkinter is pip-installed into _vendor/ via
-          #   requirements-appimage.txt, no need to install it here.
           pacman -Syu --noconfirm \
               python-gobject \
               python-cairo \
@@ -36,14 +89,13 @@ jobs:
               tk \
               zenity \
               libarchive \
-              base-devel \
-              wget \
-              rust \
-              git \
-              unzip
+              wget
 
-      - name: Build libloot Python extension
-        run: bash src/LOOT/rebuild_libloot.sh
+      - name: Download libloot extension
+        uses: actions/download-artifact@v4
+        with:
+          name: libloot-extension
+          path: src/LOOT/
 
       - name: Build AppImage
         env:

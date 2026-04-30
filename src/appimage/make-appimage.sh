@@ -159,7 +159,7 @@ cp "$ASSETS_DIR/mod-manager.png"     "$APPDIR/usr/share/icons/hicolor/512x512/ap
 # DEPLOY_PYTHON=1   pulls /usr/bin/python3 + stdlib (incl tkinter)
 # DEPLOY_GTK=1      pulls libgtk-3 + gi typelibs for splash_gtk.py
 # ALWAYS_SOFTWARE=1 forces software rendering (matches upstream)
-TCLTK_STAGE="${WORK_DIR}/tcltk"
+TCLTK_STAGE="${WORK_DIR}/lib"
 mkdir -p "$TCLTK_STAGE"
 cp -a /usr/lib/tcl8.6 "$TCLTK_STAGE/tcl8.6"
 cp -a /usr/lib/tk8.6  "$TCLTK_STAGE/tk8.6"
