@@ -20,6 +20,7 @@ from enum import Enum, auto
 from pathlib import Path
 
 from Utils.app_log import safe_log as _safe_log
+from Utils.atomic_write import atomic_writer
 from Utils.path_utils import has_path_traversal as _has_traversal
 
 
@@ -177,24 +178,13 @@ def cleanup_custom_deploy_dirs(
             except OSError as exc:
                 _log(f"  WARN: could not remove custom-deployed {target}: {exc}")
 
-    # Restore any originals that were backed up before deployment.
-    restored = 0
-    if backup_dir.is_dir():
-        for bak_src in backup_dir.rglob("*"):
-            if not bak_src.is_file():
-                continue
-            # Reconstruct original absolute path: backup mirrors the full
-            # absolute path of the original (minus leading slash/anchor).
-            rel = bak_src.relative_to(backup_dir)
-            orig = Path("/") / rel
-            try:
-                orig.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(bak_src), str(orig))
-                restored += 1
-                _log(f"  Restored {orig.name} from custom_deploy_backup/")
-            except OSError as exc:
-                _log(f"  WARN: could not restore {orig}: {exc}")
-        shutil.rmtree(backup_dir, ignore_errors=True)
+    # Restore any originals that were backed up before deployment.  Backups
+    # under custom_deploy_backup/ mirror absolute filesystem paths, so we
+    # rebuild the destination from the filesystem root.
+    restored = _restore_backup_dir(
+        backup_dir, Path("/"), _log,
+        check_traversal=False, swallow_errors=True,
+    )
 
     _prune_empty_dirs(dirs_to_prune, stop_dirs)
 
@@ -299,6 +289,73 @@ def _prune_empty_dirs(dirs: "set[Path]", stop_dirs: "set[Path] | None" = None) -
                     break
             except OSError:
                 break
+
+
+def _restore_backup_dir(
+    backup_dir: Path,
+    target_root: Path,
+    log_fn=None,
+    *,
+    label: str | None = None,
+    check_traversal: bool = True,
+    swallow_errors: bool = False,
+) -> int:
+    """Move every file under *backup_dir* back into *target_root* (preserving
+    relative path), then remove *backup_dir*.
+
+    Used by every restore path that has a sibling backup directory holding
+    pre-deployment originals (Root_Backup/, custom_rules_backup/,
+    custom_deploy_backup/, …).
+
+    Parameters
+    ----------
+    backup_dir
+        Directory whose tree mirrors *target_root* (or absolute paths, if
+        target_root is ``Path("/")``).  No-op if missing or empty.
+    target_root
+        Where files are moved back to.  Pass ``Path("/")`` for the
+        custom-deploy case where backups mirror absolute filesystem paths.
+    label
+        Tag used in log messages (defaults to ``backup_dir.name``).  Passed
+        through unchanged so callers can keep their existing wording.
+    check_traversal
+        When True (the default), skip any backup whose reconstructed
+        destination would escape *target_root*.  Set False for the
+        absolute-path case (custom_deploy_backup), where ``target_root`` is
+        the root of the filesystem and the check is meaningless.
+    swallow_errors
+        When True, catch ``OSError`` per file and log a warning rather than
+        propagating.  Used by the cleanup paths that must keep going even if
+        a single file can't be restored.
+
+    Returns the number of files restored.
+    """
+    _log = _safe_log(log_fn)
+    if not backup_dir.is_dir():
+        return 0
+
+    tag = label if label is not None else f"{backup_dir.name}/"
+    restored = 0
+    for bak_src in backup_dir.rglob("*"):
+        if not bak_src.is_file():
+            continue
+        rel = bak_src.relative_to(backup_dir)
+        orig = target_root / rel
+        if check_traversal and not _path_under_root(orig, target_root):
+            _log(f"  SKIP: path traversal blocked — {rel}")
+            continue
+        try:
+            orig.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(bak_src), str(orig))
+            restored += 1
+            _log(f"  Restored {rel} from {tag}")
+        except OSError as exc:
+            if not swallow_errors:
+                raise
+            _log(f"  WARN: could not restore {orig}: {exc}")
+
+    shutil.rmtree(backup_dir, ignore_errors=True)
+    return restored
 
 
 class LinkMode(Enum):
@@ -609,19 +666,8 @@ def _restore_from_log(
                 removed += n
 
     # Restore backed-up originals.
-    if backup_dir is not None and backup_dir.is_dir():
-        for bak_src in backup_dir.rglob("*"):
-            if not bak_src.is_file():
-                continue
-            rel = bak_src.relative_to(backup_dir)
-            orig = target_root / rel
-            if not _path_under_root(orig, target_root):
-                _log(f"  SKIP: path traversal blocked — {rel}")
-                continue
-            orig.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(bak_src), str(orig))
-            _log(f"  Restored {rel} from {backup_dir.name}/")
-        shutil.rmtree(backup_dir, ignore_errors=True)
+    if backup_dir is not None:
+        _restore_backup_dir(backup_dir, target_root, _log)
 
     log_path.unlink()
 
@@ -890,13 +936,11 @@ def _write_deploy_snapshot(
     per file) and have been dropped.  Old snapshots remain readable.
     """
     _log = _safe_log(log_fn)
-    tmp_path = snapshot_path.with_suffix(".tmp")
     count = 0
     game_root_str = str(game_root)
     prefix_len = len(game_root_str) + 1          # +1 for trailing separator
     try:
-        tmp_path.parent.mkdir(parents=True, exist_ok=True)
-        with tmp_path.open("w", encoding="utf-8") as fh:
+        with atomic_writer(snapshot_path, "w") as fh:
             fh.write("# deploy_snapshot v2\n")
             stack = [game_root_str]
             while stack:
@@ -912,7 +956,6 @@ def _write_deploy_snapshot(
                                 count += 1
                 except OSError:
                     pass
-        tmp_path.rename(snapshot_path)
         _log(f"  Snapshot: recorded {count} files in game root.")
     except OSError as exc:
         _log(f"  WARN: could not write deploy snapshot: {exc}")
@@ -1053,11 +1096,6 @@ def _get_staging_source_path(mod_root: Path, rel_str: str, strip_prefixes: set[s
     return Path(hit) if hit is not None else None
 
 
-def _staging_source_exists(mod_root: Path, rel_str: str, strip_prefixes: set[str]) -> bool:
-    """Return True if the given file exists in the mod staging folder."""
-    return _get_staging_source_path(mod_root, rel_str, strip_prefixes) is not None
-
-
 def _build_mod_index(mod_root: Path) -> "dict[str, str | Path]":
     """Build a case-insensitive index of all files under mod_root.
 
@@ -1146,6 +1184,7 @@ __all__ = [
     "_deploy_workers",
     "_timer",
     "_prune_empty_dirs",
+    "_restore_backup_dir",
     "_default_core",
     "_transfer",
     "_clear_dir",
@@ -1162,7 +1201,6 @@ __all__ = [
     "_move_runtime_files",
     "_path_under_root",
     "_get_staging_source_path",
-    "_staging_source_exists",
     "_build_mod_index",
     "_resolve_nocase",
     # Re-exported stdlib/project imports used by other deploy_* modules

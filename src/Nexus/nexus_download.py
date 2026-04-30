@@ -124,10 +124,8 @@ def _md5_cache_load() -> dict:
 def _md5_cache_save(data: dict) -> None:
     try:
         import json
-        path = _md5_cache_path()
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
-        tmp.replace(path)
+        from Utils.atomic_write import write_atomic_text
+        write_atomic_text(_md5_cache_path(), json.dumps(data))
     except Exception:
         pass
 

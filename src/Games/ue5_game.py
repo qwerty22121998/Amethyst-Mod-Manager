@@ -50,7 +50,6 @@ from __future__ import annotations
 import fnmatch
 import json
 import shutil
-from abc import abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -58,7 +57,6 @@ from Games.base_game import BaseGame
 from Utils.deploy import LinkMode, load_per_mod_strip_prefixes, load_separator_deploy_paths, expand_separator_deploy_paths, expand_separator_raw_deploy, _resolve_nocase, _write_deploy_snapshot, _move_runtime_files, _FILEMAP_SNAPSHOT_NAME
 from Utils.modlist import read_modlist
 from Utils.config_paths import get_profiles_dir
-from Utils.steam_finder import find_prefix
 
 _PROFILES_DIR = get_profiles_dir()
 
@@ -135,13 +133,96 @@ class UE5Game(BaseGame):
         self.load_paths()
 
     # -----------------------------------------------------------------------
-    # Subclasses must provide
+    # Routing rules
     # -----------------------------------------------------------------------
+    # The default ``ue5_routing_rules`` composition is:
+    #
+    #     [
+    #         *_ue5_shared_pre_rules,            # LogicMods, pak, UE4SS normalisation
+    #         *self._ue5_pre_passthrough_rules,  # game-specific specific-folder rules
+    #         UE5Rule(dest="", folder="binaries"),
+    #         UE5Rule(dest="", folder="content"),
+    #         *self._ue5_post_passthrough_rules, # game-specific generic-extension rules
+    #     ]
+    #
+    # Subclasses normally only need to override the two hook properties below.
+    # Override ``ue5_routing_rules`` directly for fully custom orderings.
 
     @property
-    @abstractmethod
+    def _ue5_shared_pre_rules(self) -> list[UE5Rule]:
+        """Routing rules common to every UE5 game: LogicMods folder placement,
+        .pak/.utoc/.ucas → ``Content/Paks/~mods``, and UE4SS folder
+        normalisation.  Evaluated before the generic ``binaries``/``content``
+        pass-through pair."""
+        return [
+            # LogicMods folder → Content/Paks/LogicMods/ (preserved as a folder
+            # under Paks). Must come before the .pak extension rule so files
+            # inside LogicMods don't get routed to ~mods/.
+            UE5Rule(dest="Content/Paks", prefix="Content/Paks/LogicMods",
+                    strip=["Content/Paks"], flatten=True),
+            UE5Rule(dest="Content/Paks", prefix="Paks/LogicMods",
+                    strip=["Paks"], flatten=True),
+            UE5Rule(dest="Content/Paks", folder="LogicMods", flatten=True),
+            # Pak / streaming files → Content/Paks/~mods/
+            UE5Rule(
+                dest="Content/Paks/~mods",
+                extensions=[".pak", ".utoc", ".ucas"],
+                strip=["Content/Paks/~mods", "Content/Paks/~Mods", "Content/Paks", "Paks", "Content", "~mods", "~Mods"],
+                flatten=True,
+            ),
+            # Files already inside Content/Paks/~Mods (any casing) → normalise
+            # to lowercase ~mods dest so only one folder is created on disk.
+            UE5Rule(
+                dest="Content/Paks/~mods",
+                prefix="Content/Paks/~Mods",
+                strip=["Content/Paks/~Mods", "Content/Paks/~mods"],
+                flatten=True,
+            ),
+            # Mods shipping Binaries/Win64/UE4SS/… → normalise to lowercase
+            # ue4ss dest so only one folder is ever created on disk.
+            UE5Rule(
+                dest="Binaries/Win64/ue4ss",
+                prefix="Binaries/Win64/UE4SS",
+                strip=["Binaries/Win64/UE4SS", "Binaries/Win64/ue4ss"],
+                flatten=True,
+            ),
+            # ue4ss/ or UE4SS/ top-level folder → Binaries/Win64/ue4ss/
+            UE5Rule(
+                dest="Binaries/Win64/ue4ss",
+                folder="ue4ss",
+                strip=["ue4ss", "UE4SS"],
+                flatten=True,
+            ),
+        ]
+
+    @property
+    def _ue5_pre_passthrough_rules(self) -> list[UE5Rule]:
+        """Game-specific rules inserted between the shared pre-rules and the
+        ``binaries``/``content`` pass-through.  Use this for rules that target
+        a *specific* sub-folder (e.g. ``Content/Movies/Modern``) and must beat
+        the generic ``folder="content"`` catch-all."""
+        return []
+
+    @property
+    def _ue5_post_passthrough_rules(self) -> list[UE5Rule]:
+        """Game-specific rules appended after the ``binaries``/``content``
+        pass-through.  Use this for the per-game UE4SS Mods rule, Bink/.asi
+        plugins, and the trailing loose-runtime ``[".dll", ".pdb"]`` rule."""
+        return []
+
+    @property
     def ue5_routing_rules(self) -> list[UE5Rule]:
-        """Ordered list of routing rules.  First match wins."""
+        """Ordered list of routing rules.  First match wins.  Defaults to
+        ``shared_pre + pre_passthrough + binaries/content + post_passthrough``;
+        override directly only if you need a fundamentally different layout
+        (e.g. ``Ue5CustomGame``, which prepends user-defined custom rules)."""
+        return [
+            *self._ue5_shared_pre_rules,
+            *self._ue5_pre_passthrough_rules,
+            UE5Rule(dest="", folder="binaries"),
+            UE5Rule(dest="", folder="content"),
+            *self._ue5_post_passthrough_rules,
+        ]
 
     @property
     def ue5_default_dest(self) -> str:
@@ -162,66 +243,6 @@ class UE5Game(BaseGame):
         if self._staging_path is not None:
             return self._staging_path / "mods"
         return _PROFILES_DIR / self.name / "mods"
-
-    # -----------------------------------------------------------------------
-    # Configuration persistence (shared boilerplate)
-    # -----------------------------------------------------------------------
-
-    def load_paths(self) -> bool:
-        self._migrate_old_config()
-        if not self._paths_file.exists():
-            self._game_path = None
-            self._prefix_path = None
-            self._staging_path = None
-            return False
-        try:
-            data = json.loads(self._paths_file.read_text(encoding="utf-8"))
-            raw = data.get("game_path", "")
-            if raw:
-                self._game_path = Path(raw)
-            raw_pfx = data.get("prefix_path", "")
-            if raw_pfx:
-                self._prefix_path = Path(raw_pfx)
-            raw_mode = data.get("deploy_mode", "hardlink")
-            self._deploy_mode = {
-                "symlink": LinkMode.SYMLINK,
-                "copy":    LinkMode.SYMLINK,
-            }.get(raw_mode, LinkMode.HARDLINK)
-            raw_staging = data.get("staging_path", "")
-            if raw_staging:
-                self._staging_path = Path(raw_staging)
-            self._validate_staging()
-            if not self._prefix_path or not self._prefix_path.is_dir():
-                found = find_prefix(self.steam_id)
-                if found:
-                    self._prefix_path = found
-                    self.save_paths()
-            return bool(self._game_path)
-        except (json.JSONDecodeError, OSError):
-            pass
-        self._game_path = None
-        self._prefix_path = None
-        return False
-
-    def save_paths(self) -> None:
-        self._paths_file.parent.mkdir(parents=True, exist_ok=True)
-        mode_str = {
-            LinkMode.SYMLINK: "symlink",
-            LinkMode.COPY:    "copy",
-        }.get(self._deploy_mode, "hardlink")
-        data = {
-            "game_path":    str(self._game_path)    if self._game_path    else "",
-            "prefix_path":  str(self._prefix_path)  if self._prefix_path  else "",
-            "deploy_mode":  mode_str,
-            "staging_path": str(self._staging_path) if self._staging_path else "",
-        }
-        self._paths_file.write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
-
-    def set_game_path(self, path: Path | str | None) -> None:
-        self._game_path = Path(path) if path else None
-        self.save_paths()
 
     def set_staging_path(self, path: Path | str | None) -> None:
         self._staging_path = Path(path) if path else None

@@ -29,6 +29,7 @@ from gui.dialogs import (
     CollectionContinueInstallDialog,
     CollectionUpdateDialog,
 )
+from Utils.atomic_write import write_atomic_text
 from Utils.collection_diff import diff_collection, CollectionDiff
 from gui.game_helpers import (
     _create_profile,
@@ -458,10 +459,8 @@ def _apply_collection_groups(profile_dir: Path, collection_schema: dict, log_fn)
                     lines.append("    after:")
                     for item in after_items:
                         lines.append(f"      - {_q(item)}")
-        tmp = path.with_suffix(".yaml.tmp")
         if lines:
-            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            tmp.replace(path)
+            write_atomic_text(path, "\n".join(lines) + "\n")
 
     try:
         data = _parse(ul_path)

@@ -39,7 +39,6 @@ from Games.base_game import BaseGame
 from Utils.deploy import LinkMode, load_per_mod_strip_prefixes, load_separator_deploy_paths, expand_separator_deploy_paths, expand_separator_raw_deploy, _resolve_nocase, _resolve_root_path, _write_deploy_snapshot, _load_deploy_snapshot, _move_runtime_files, _FILEMAP_SNAPSHOT_NAME
 from Utils.modlist import read_modlist
 from Utils.config_paths import get_profiles_dir
-from Utils.steam_finder import find_prefix
 from Utils.tw3_filelist import update_menu_filelists
 
 _PROFILES_DIR = get_profiles_dir()
@@ -188,70 +187,6 @@ class Witcher3(BaseGame):
         if self._staging_path is not None:
             return self._staging_path / "mods"
         return _PROFILES_DIR / self.name / "mods"
-
-    # -----------------------------------------------------------------------
-    # Configuration persistence
-    # -----------------------------------------------------------------------
-
-    def load_paths(self) -> bool:
-        self._migrate_old_config()
-        if not self._paths_file.exists():
-            self._game_path = None
-            self._prefix_path = None
-            self._staging_path = None
-            return False
-        try:
-            data = json.loads(self._paths_file.read_text(encoding="utf-8"))
-            raw = data.get("game_path", "")
-            if raw:
-                self._game_path = Path(raw)
-            raw_pfx = data.get("prefix_path", "")
-            if raw_pfx:
-                self._prefix_path = Path(raw_pfx)
-            raw_mode = data.get("deploy_mode", "hardlink")
-            self._deploy_mode = {
-                "symlink": LinkMode.SYMLINK,
-                "copy":    LinkMode.SYMLINK,
-            }.get(raw_mode, LinkMode.HARDLINK)
-            raw_staging = data.get("staging_path", "")
-            if raw_staging:
-                self._staging_path = Path(raw_staging)
-            self._validate_staging()
-            if not self._prefix_path or not self._prefix_path.is_dir():
-                found = None
-                for sid in [self.steam_id] + self.alt_steam_ids:
-                    found = find_prefix(sid)
-                    if found:
-                        break
-                if found:
-                    self._prefix_path = found
-                    self.save_paths()
-            return bool(self._game_path)
-        except (json.JSONDecodeError, OSError):
-            pass
-        self._game_path = None
-        self._prefix_path = None
-        return False
-
-    def save_paths(self) -> None:
-        self._paths_file.parent.mkdir(parents=True, exist_ok=True)
-        mode_str = {
-            LinkMode.SYMLINK: "symlink",
-            LinkMode.COPY:    "copy",
-        }.get(self._deploy_mode, "hardlink")
-        data = {
-            "game_path":    str(self._game_path)    if self._game_path    else "",
-            "prefix_path":  str(self._prefix_path)  if self._prefix_path  else "",
-            "deploy_mode":  mode_str,
-            "staging_path": str(self._staging_path) if self._staging_path else "",
-        }
-        self._paths_file.write_text(
-            json.dumps(data, indent=2), encoding="utf-8"
-        )
-
-    def set_game_path(self, path: Path | str | None) -> None:
-        self._game_path = Path(path) if path else None
-        self.save_paths()
 
     def set_staging_path(self, path: "Path | str | None") -> None:
         self._staging_path = Path(path) if path else None

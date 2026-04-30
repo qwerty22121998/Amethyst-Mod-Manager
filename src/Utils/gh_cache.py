@@ -35,6 +35,7 @@ import urllib.request
 from pathlib import Path
 from typing import Optional
 
+from Utils.atomic_write import write_atomic_text
 from Utils.config_paths import get_config_dir
 
 
@@ -98,9 +99,7 @@ def _read_meta(meta_path: Path) -> dict:
 
 def _write_meta(meta_path: Path, meta: dict) -> None:
     try:
-        tmp = meta_path.with_suffix(meta_path.suffix + ".tmp")
-        tmp.write_text(json.dumps(meta), encoding="utf-8")
-        tmp.replace(meta_path)
+        write_atomic_text(meta_path, json.dumps(meta))
     except Exception:
         pass
 

@@ -25,6 +25,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from Utils.atomic_write import write_atomic_text
+
 @dataclass
 class PluginEntry:
     name: str
@@ -465,10 +467,7 @@ def read_disabled_plugins(path: Path) -> dict[str, list[str]]:
 
 def write_disabled_plugins(path: Path, data: dict[str, list[str]]) -> None:
     """Write disabled_plugins.json atomically."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    write_atomic_text(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def read_excluded_mod_files(path: Path) -> dict[str, list[str]]:
@@ -498,7 +497,4 @@ def write_excluded_mod_files(path: Path, data: dict[str, list[str]]) -> None:
 
         _write_ps(path.parent, data)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    tmp.replace(path)
+    write_atomic_text(path, json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True))

@@ -1,0 +1,90 @@
+"""
+atomic_write.py
+Shared `.tmp` → rename helpers used wherever we write a file that must never
+be observed half-written (filemap index, profile state, deploy snapshot, …).
+
+Two shapes:
+
+- ``write_atomic`` / ``write_atomic_text`` — caller hands over the full
+  payload as bytes or text. Best when the payload is built in memory.
+- ``atomic_writer`` — context manager that yields an open temp file. Best
+  when the payload is streamed (e.g. walking a directory, writing line by
+  line) so we don't have to buffer the whole thing first.
+
+All three create the parent directory, write to ``<path>.tmp`` (or a custom
+suffix), and atomically ``rename`` over the destination on success. On
+failure, the partial temp file is removed so retries see a clean slate.
+"""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from pathlib import Path
+
+
+def _tmp_for(path: Path, *, suffix: str = ".tmp") -> Path:
+    """Return the temp sibling for *path* by appending *suffix* to the full
+    filename (so ``user.reg`` → ``user.reg.tmp`` rather than ``user.tmp``)."""
+    return path.with_name(path.name + suffix)
+
+
+def write_atomic(path: Path, data: bytes, *, suffix: str = ".tmp") -> None:
+    """Write *data* to *path* atomically (write-temp → rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _tmp_for(path, suffix=suffix)
+    try:
+        tmp.write_bytes(data)
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def write_atomic_text(path: Path, text: str, *, encoding: str = "utf-8",
+                      suffix: str = ".tmp") -> None:
+    """Write *text* to *path* atomically (write-temp → rename)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _tmp_for(path, suffix=suffix)
+    try:
+        tmp.write_text(text, encoding=encoding)
+        tmp.replace(path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+
+
+@contextmanager
+def atomic_writer(path: Path, mode: str = "w", *, encoding: str | None = "utf-8",
+                  suffix: str = ".tmp"):
+    """Open ``<path><suffix>`` for writing; on clean exit rename it onto *path*.
+
+    ``mode`` follows ``open()`` semantics. For binary mode, pass
+    ``encoding=None``. On any exception the temp file is removed and the
+    original *path* is left untouched.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _tmp_for(path, suffix=suffix)
+    if "b" in mode:
+        fh = tmp.open(mode)
+    else:
+        fh = tmp.open(mode, encoding=encoding)
+    try:
+        yield fh
+        fh.close()
+        tmp.replace(path)
+    except BaseException:
+        try:
+            fh.close()
+        except Exception:
+            pass
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise

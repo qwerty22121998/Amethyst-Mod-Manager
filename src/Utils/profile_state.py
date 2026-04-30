@@ -31,6 +31,8 @@ import json
 import threading
 from pathlib import Path
 
+from Utils.atomic_write import write_atomic_text
+
 _FILENAME = "profile_state.json"
 
 # Guards read-modify-write cycles in _update_key against concurrent threads.
@@ -151,11 +153,7 @@ def read_profile_state(profile_dir: Path) -> dict:
 
 def write_profile_state(profile_dir: Path, state: dict) -> None:
     """Write profile_state.json atomically."""
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    path = _state_path(profile_dir)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(path)
+    write_atomic_text(_state_path(profile_dir), json.dumps(state, indent=2, ensure_ascii=False))
 
 
 def _read_key(profile_dir: Path, state: dict | None, key: str):

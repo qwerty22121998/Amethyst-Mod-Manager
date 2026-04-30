@@ -37,6 +37,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from Utils.app_log import safe_log as _safe_log
+from Utils.atomic_write import write_atomic_text
 
 _MENU_DIR_REL   = Path("bin/config/r4game/user_config_matrix/pc")
 _DX11_FILE      = "dx11filelist.txt"
@@ -104,11 +105,4 @@ def update_menu_filelists(game_root: Path, log_fn=None) -> None:
 
 def _write_filelist(path: Path, entries: list[str]) -> None:
     """Write *entries* to *path* atomically as ``name.xml;\n`` lines."""
-    content = "".join(f"{e};\n" for e in entries)
-    tmp = path.with_suffix(".tmp")
-    try:
-        tmp.write_text(content, encoding="utf-8")
-        tmp.replace(path)
-    except Exception:
-        tmp.unlink(missing_ok=True)
-        raise
+    write_atomic_text(path, "".join(f"{e};\n" for e in entries))

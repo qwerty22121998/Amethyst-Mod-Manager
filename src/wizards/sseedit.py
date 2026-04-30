@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
+from Utils.atomic_write import write_atomic_text
 from Utils.xdg import open_url
 from Utils.portal_filechooser import pick_file
 from gui.path_utils import _to_wine_path
@@ -155,16 +156,10 @@ def _set_winxp_compat(prefix_path: Path, exe: Path, log_fn=None) -> None:
 
         lines[body_start:body_end] = key_lines
 
-    tmp = user_reg.with_suffix(".reg.tmp")
     try:
-        tmp.write_text("".join(lines), encoding="utf-8")
-        tmp.replace(user_reg)
+        write_atomic_text(user_reg, "".join(lines))
     except OSError as exc:
         _log(f"Warning: could not write user.reg: {exc}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 class SSEEditWizard(ctk.CTkFrame):

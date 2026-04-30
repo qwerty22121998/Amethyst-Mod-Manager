@@ -825,56 +825,17 @@ class Ue5CustomGame(UE5Game):
                 ))
 
         # Built-in UE5 defaults follow — they act as fallbacks when no
-        # custom rule matched.
-        rules.extend([
-            # LogicMods folder → Content/Paks/LogicMods/ (preserved as a folder
-            # under Paks). Must come before the .pak extension rule so files
-            # inside LogicMods don't get routed to ~mods/.
-            UE5Rule(dest="Content/Paks", prefix="Content/Paks/LogicMods",
-                    strip=["Content/Paks"], flatten=True),
-            UE5Rule(dest="Content/Paks", prefix="Paks/LogicMods",
-                    strip=["Paks"], flatten=True),
-            UE5Rule(dest="Content/Paks", folder="LogicMods", flatten=True),
-            # Pak / streaming files → Content/Paks/~mods/  (checked before the
-            # generic folder="content" catch-all so mods shipped as
-            # Content/Paks/… are routed here rather than to the game root as-is)
-            UE5Rule(
-                dest="Content/Paks/~mods",
-                extensions=[".pak", ".utoc", ".ucas"],
-                strip=["Content/Paks/~mods", "Content/Paks/~Mods", "Content/Paks", "Paks", "Content", "~mods", "~Mods"],
-                flatten=True,
-            ),
-            # Files already inside Content/Paks/~Mods (any casing) → normalise
-            # to lowercase ~mods dest so only one folder is created on disk.
-            UE5Rule(
-                dest="Content/Paks/~mods",
-                prefix="Content/Paks/~Mods",
-                strip=["Content/Paks/~Mods", "Content/Paks/~mods"],
-                flatten=True,
-            ),
-            # Mods shipping Binaries/Win64/UE4SS/… → normalise to lowercase
-            # ue4ss dest so only one folder is ever created on disk.
-            UE5Rule(
-                dest="Binaries/Win64/ue4ss",
-                prefix="Binaries/Win64/UE4SS",
-                strip=["Binaries/Win64/UE4SS", "Binaries/Win64/ue4ss"],
-                flatten=True,
-            ),
-            # ue4ss/ or UE4SS/ top-level folder → Binaries/Win64/ue4ss/
-            # (catches loose ue4ss files like UE4SS-settings.ini before the
-            # extension rules can misroute them)
-            UE5Rule(
-                dest="Binaries/Win64/ue4ss",
-                folder="ue4ss",
-                strip=["ue4ss", "UE4SS"],
-                flatten=True,
-            ),
-            # Paths already starting with Binaries/ or Content/ → game root,
-            # path preserved as-is.
-            UE5Rule(dest="", folder="binaries"),
-            UE5Rule(dest="", folder="content"),
+        # custom rule matched.  Pulled from the shared base implementation.
+        rules.extend(super().ue5_routing_rules)
+        return rules
+
+    @property
+    def _ue5_post_passthrough_rules(self) -> list[UE5Rule]:
+        return [
             # Lua UE4SS scripts and companion files (config.ini, data .json)
-            # → Binaries/Win64/ue4ss/Mods/
+            # → Binaries/Win64/ue4ss/Mods/  (custom games include the legacy
+            # Binaries/Win64/Mods strip entry too, since user mods may ship
+            # either layout)
             UE5Rule(
                 dest="Binaries/Win64/ue4ss/Mods",
                 extensions=[".lua", ".ini", ".json"],
@@ -903,8 +864,7 @@ class Ue5CustomGame(UE5Game):
                 strip=["Content/Movies"],
                 flatten=True,
             ),
-        ])
-        return rules
+        ]
 
     @property
     def ue5_default_dest(self) -> str:

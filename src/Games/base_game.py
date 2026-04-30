@@ -18,9 +18,25 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from Utils.config_paths import get_game_config_dir, get_game_config_path
+from Utils.deploy import LinkMode
+from Utils.steam_finder import find_prefix as _find_steam_prefix
 
 if TYPE_CHECKING:
     from typing import Any
+
+
+# Shared serialisation tables for load_paths/save_paths. Note that we map both
+# "symlink" and "copy" → SYMLINK on read — historically the user-facing "copy"
+# option was renamed to symlink years ago and the saved string can be either.
+_DEPLOY_MODE_FROM_STR: dict[str, LinkMode] = {
+    "symlink": LinkMode.SYMLINK,
+    "copy":    LinkMode.SYMLINK,
+}
+_DEPLOY_MODE_TO_STR: dict[LinkMode, str] = {
+    LinkMode.SYMLINK: "symlink",
+    LinkMode.COPY:    "copy",
+}
+_DEFAULT_DEPLOY_MODE = LinkMode.HARDLINK
 
 
 # ---------------------------------------------------------------------------
@@ -1122,25 +1138,91 @@ class BaseGame(ABC):
         if old_path.is_file() and not new_path.is_file():
             shutil.copy2(old_path, new_path)
 
-    @abstractmethod
-    def load_paths(self) -> bool:
-        """
-        Load path configuration from the user config directory.
-        Returns True if a valid game_path was loaded, False otherwise.
-        """
+    # Subclass hooks for the shared load_paths/save_paths implementation.
+    # Override _save_paths_extra() / _load_paths_extra() to persist additional
+    # JSON keys (e.g. heroic_app_name, symlink_plugins) without rewriting the
+    # whole boilerplate.
+    def _save_paths_extra(self) -> dict:
+        """Extra JSON fields to merge into save_paths() output. Override in
+        subclasses that persist additional config beyond the standard set."""
+        return {}
 
-    @abstractmethod
+    def _load_paths_extra(self, data: dict) -> None:
+        """Apply extra JSON fields read by load_paths(). Pair with
+        :meth:`_save_paths_extra`."""
+        return None
+
+    def _find_prefix_for_load(self) -> "Path | None":
+        """Locate a Proton prefix for this game during load_paths().
+
+        Tries ``steam_id`` first, then any ``alt_steam_ids``. Subclasses with
+        non-Steam prefix sources (Heroic-only games, etc.) can override.
+        """
+        for sid in [self.steam_id, *self.alt_steam_ids]:
+            if not sid:
+                continue
+            found = _find_steam_prefix(sid)
+            if found:
+                return found
+        return None
+
+    def load_paths(self) -> bool:
+        """Load path configuration from the user config directory.
+
+        Returns True if a valid ``game_path`` was loaded, False otherwise.
+        Subclasses customise this via :meth:`_load_paths_extra` and
+        :meth:`_find_prefix_for_load` rather than overriding this method.
+        """
+        self._migrate_old_config()
+        if not self._paths_file.exists():
+            self._game_path = None
+            self._prefix_path = None
+            self._staging_path = None
+            return False
+        try:
+            data = json.loads(self._paths_file.read_text(encoding="utf-8"))
+            raw = data.get("game_path", "")
+            if raw:
+                self._game_path = Path(raw)
+            raw_pfx = data.get("prefix_path", "")
+            if raw_pfx:
+                self._prefix_path = Path(raw_pfx)
+            raw_mode = data.get("deploy_mode", "hardlink")
+            self._deploy_mode = _DEPLOY_MODE_FROM_STR.get(raw_mode, _DEFAULT_DEPLOY_MODE)
+            raw_staging = data.get("staging_path", "")
+            if raw_staging:
+                self._staging_path = Path(raw_staging)
+            self._load_paths_extra(data)
+            self._validate_staging()
+            if not self._prefix_path or not self._prefix_path.is_dir():
+                found = self._find_prefix_for_load()
+                if found:
+                    self._prefix_path = found
+                    self.save_paths()
+            return bool(self._game_path)
+        except (json.JSONDecodeError, OSError):
+            pass
+        self._game_path = None
+        self._prefix_path = None
+        return False
+
     def save_paths(self) -> None:
         """Write current path configuration to the user config directory."""
+        self._paths_file.parent.mkdir(parents=True, exist_ok=True)
+        mode_str = _DEPLOY_MODE_TO_STR.get(self._deploy_mode, "hardlink")
+        data = {
+            "game_path":    str(self._game_path)    if self._game_path    else "",
+            "prefix_path":  str(self._prefix_path)  if self._prefix_path  else "",
+            "deploy_mode":  mode_str,
+            "staging_path": str(self._staging_path) if self._staging_path else "",
+        }
+        data.update(self._save_paths_extra())
+        self._paths_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def set_game_path(self, path: Path | str | None) -> None:
-        """
-        Convenience: set game_path and immediately persist it.
-        Pass None to clear the configured path.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} must implement set_game_path()"
-        )
+        """Convenience: set game_path and immediately persist it. Pass None to clear."""
+        self._game_path = Path(path) if path else None
+        self.save_paths()
 
     def set_heroic_app_name(self, app_name: str | None) -> None:
         """Persist a discovered Heroic app name into paths.json.

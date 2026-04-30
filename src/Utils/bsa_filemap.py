@@ -31,6 +31,7 @@ from pathlib import Path
 
 import msgpack
 
+from Utils.atomic_write import atomic_writer
 from Utils.bsa_reader import read_bsa_file_list
 from Utils.filemap import (
     CONFLICT_NONE,
@@ -112,23 +113,13 @@ def read_bsa_index(
 def _write_bsa_index(index_path: Path, index: _BsaIndex) -> None:
     """Write bsa_index.bin atomically and update the in-memory cache."""
     global _bsa_cache
-    index_path.parent.mkdir(parents=True, exist_ok=True)
     mods = []
     for mod_name, archives in index.items():
         entries = [[bsa_name, mt, paths] for bsa_name, mt, paths in archives]
         mods.append([mod_name, entries])
     payload = {"v": _BSA_INDEX_VERSION, "mods": mods}
-    tmp = index_path.with_suffix(".tmp")
-    try:
-        with tmp.open("wb") as f:
-            msgpack.pack(payload, f, use_bin_type=True)
-        tmp.replace(index_path)
-    except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    with atomic_writer(index_path, "wb", encoding=None) as f:
+        msgpack.pack(payload, f, use_bin_type=True)
     with _bsa_cache_lock:
         try:
             mtime = index_path.stat().st_mtime

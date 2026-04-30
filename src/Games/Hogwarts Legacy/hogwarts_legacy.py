@@ -78,56 +78,11 @@ class HogwartsLegacy(UE5Game):
     # ``strip`` lists prefixes to remove so files don't get double-nested.
 
     @property
-    def ue5_routing_rules(self) -> list[UE5Rule]:
+    def _ue5_post_passthrough_rules(self) -> list[UE5Rule]:
         return [
-            # LogicMods folder → Content/Paks/LogicMods/ (preserved as a folder
-            # under Paks). Must come before the .pak extension rule so files
-            # inside LogicMods don't get routed to ~mods/.
-            UE5Rule(dest="Content/Paks", prefix="Content/Paks/LogicMods",
-                    strip=["Content/Paks"], flatten=True),
-            UE5Rule(dest="Content/Paks", prefix="Paks/LogicMods",
-                    strip=["Paks"], flatten=True),
-            UE5Rule(dest="Content/Paks", folder="LogicMods", flatten=True),
-            # Pak / streaming files → Content/Paks/~mods/  (checked before the
-            # generic folder="content" catch-all so mods shipped as
-            # Content/Paks/… are routed here rather than to the game root as-is)
-            UE5Rule(
-                dest="Content/Paks/~mods",
-                extensions=[".pak", ".utoc", ".ucas"],
-                strip=["Content/Paks/~mods", "Content/Paks/~Mods", "Content/Paks", "Paks", "Content", "~mods", "~Mods"],
-                flatten=True,
-            ),
-            # Files already inside Content/Paks/~Mods (any casing) → normalise
-            # to lowercase ~mods dest so only one folder is created on disk.
-            UE5Rule(
-                dest="Content/Paks/~mods",
-                prefix="Content/Paks/~Mods",
-                strip=["Content/Paks/~Mods", "Content/Paks/~mods"],
-                flatten=True,
-            ),
-            # Mods shipping Binaries/Win64/UE4SS/… → normalise to lowercase
-            # ue4ss dest so only one folder is ever created on disk.
-            UE5Rule(
-                dest="Binaries/Win64/ue4ss",
-                prefix="Binaries/Win64/UE4SS",
-                strip=["Binaries/Win64/UE4SS", "Binaries/Win64/ue4ss"],
-                flatten=True,
-            ),
-            # ue4ss/ or UE4SS/ top-level folder → Binaries/Win64/ue4ss/
-            # (catches loose ue4ss files like UE4SS-settings.ini before the
-            # extension rules can misroute them)
-            UE5Rule(
-                dest="Binaries/Win64/ue4ss",
-                folder="ue4ss",
-                strip=["ue4ss", "UE4SS"],
-                flatten=True,
-            ),
-            # Paths already starting with Binaries/ or Content/ → game root,
-            # path preserved as-is.  These mods ship the full correct structure.
-            UE5Rule(dest="", folder="binaries"),
-            UE5Rule(dest="", folder="content"),
             # Lua UE4SS scripts and companion files (config.ini, data .json,
-            # enabled.txt) → Binaries/Win64/Mods/
+            # enabled.txt) → Binaries/Win64/Mods/  (Hogwarts uses the legacy
+            # Binaries/Win64/Mods location rather than ue4ss/Mods)
             UE5Rule(
                 dest="Binaries/Win64/Mods",
                 extensions=[".lua", ".ini", ".json"],
@@ -157,11 +112,6 @@ class HogwartsLegacy(UE5Game):
                 flatten=True,
             ),
         ]
-
-    @property
-    def ue5_default_dest(self) -> str:
-        """Files that match no rule land at the game root."""
-        return ""
 
     # -----------------------------------------------------------------------
     # Mod install hints

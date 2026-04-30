@@ -20,7 +20,9 @@ from Utils.deploy_shared import (
     _deploy_workers,
     _do_link,
     _path_under_root,
+    _prune_empty_dirs,
     _resolve_source,
+    _restore_backup_dir,
 )
 
 
@@ -404,26 +406,10 @@ def restore_custom_rules(
             parent = parent.parent
 
     # Restore backed-up vanilla files
-    if backup_dir.is_dir():
-        for bak_src in backup_dir.rglob("*"):
-            if not bak_src.is_file():
-                continue
-            rel = bak_src.relative_to(backup_dir)
-            orig = game_root / rel
-            if not _path_under_root(orig, game_root):
-                _log(f"  SKIP: path traversal blocked — {rel}")
-                continue
-            orig.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(bak_src), str(orig))
-            _log(f"  Restored {rel} from custom_rules_backup/")
-        shutil.rmtree(backup_dir, ignore_errors=True)
+    _restore_backup_dir(backup_dir, game_root, _log)
 
     # Prune empty subdirectories deepest-first; never touch game_root itself
-    for d in sorted(dirs_to_prune, key=lambda x: len(x.parts), reverse=True):
-        try:
-            d.rmdir()
-        except OSError:
-            pass
+    _prune_empty_dirs(dirs_to_prune, stop_dirs={game_root})
 
     log_path.unlink()
     _log(f"  Custom rules restore: removed {removed} file(s).")

@@ -29,6 +29,7 @@ Host (PluginPanel) owns:
 import re
 from pathlib import Path
 
+from Utils.atomic_write import write_atomic_text
 from gui.game_helpers import _GAMES
 from gui.plugin_cycle_overlay import PluginCycleOverlay
 
@@ -665,13 +666,10 @@ class PluginPanelUserlistCycleMixin:
                     for item in after_items:
                         lines.append(f"      - {_quote(item)}")
 
-        tmp = path.with_suffix(".yaml.tmp")
         if lines:
-            tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            tmp.replace(path)
+            write_atomic_text(path, "\n".join(lines) + "\n")
         else:
             # Nothing left — remove the file so libloot doesn't choke on an empty document
-            tmp.unlink(missing_ok=True)
             path.unlink(missing_ok=True)
 
     def _add_plugin_to_userlist(self, plugin_name: str, idx: int):

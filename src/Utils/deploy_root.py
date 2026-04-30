@@ -19,7 +19,9 @@ from Utils.deploy_shared import (
     LinkMode,
     _deploy_workers,
     _path_under_root,
+    _prune_empty_dirs,
     _resolve_root_path,
+    _restore_backup_dir,
     _transfer,
 )
 
@@ -309,19 +311,7 @@ def restore_root_folder(
                 removed += n
 
     # Restore backed-up originals if any.
-    if backup_dir.is_dir():
-        for bak_src in backup_dir.rglob("*"):
-            if not bak_src.is_file():
-                continue
-            rel = bak_src.relative_to(backup_dir)
-            orig = game_root / rel
-            if not _path_under_root(orig, game_root):
-                _log(f"  SKIP: path traversal blocked — {rel}")
-                continue
-            orig.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(bak_src), str(orig))
-            _log(f"  Restored {rel} from Root_Backup/")
-        shutil.rmtree(backup_dir, ignore_errors=True)
+    _restore_backup_dir(backup_dir, game_root, _log)
 
     # Remove the log.
     log_path.unlink()
@@ -342,18 +332,8 @@ def restore_root_folder(
 
     # Remove any empty subdirectories left behind inside pre-existing dirs
     # (e.g. BepInEx/patchers/Tobey/ left empty after our files were removed).
-    # Walk deepest-first so parent dirs are checked after their children.
-    dirs_to_check: set[Path] = set()
-    for rel_str in placed:
-        p = (game_root / rel_str).parent
-        while p != game_root and p != game_root.parent:
-            dirs_to_check.add(p)
-            p = p.parent
-    for d in sorted(dirs_to_check, key=lambda x: len(x.parts), reverse=True):
-        try:
-            d.rmdir()  # Only succeeds if the directory is empty
-        except OSError:
-            pass
+    dirs_to_check: set[Path] = {(game_root / rel_str).parent for rel_str in placed}
+    _prune_empty_dirs(dirs_to_check, stop_dirs={game_root})
 
     print(f"  [TIMER] restore_root_folder: {_time.perf_counter() - _t_root_restore:.3f}s")
     _log(f"  Root Folder restore: removed {removed} file(s) from game root.")

@@ -13,6 +13,7 @@ import time as _time
 from pathlib import Path
 
 from Utils.app_log import safe_log as _safe_log
+from Utils.atomic_write import write_atomic_text
 
 
 # ---------------------------------------------------------------------------
@@ -278,17 +279,10 @@ def apply_wine_dll_overrides(
 
         lines[body_start:body_end] = key_lines
 
-    # Atomic write via temp file → rename
-    tmp = user_reg.with_suffix(".reg.tmp")
     try:
-        tmp.write_text("".join(lines), encoding="utf-8")
-        tmp.replace(user_reg)
+        write_atomic_text(user_reg, "".join(lines))
     except OSError as exc:
         _log(f"Warning: could not write user.reg: {exc}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def remove_wine_dll_overrides(
@@ -374,16 +368,10 @@ def remove_wine_dll_overrides(
 
     lines[body_start:body_end] = new_key_lines
 
-    tmp = user_reg.with_suffix(".reg.tmp")
     try:
-        tmp.write_text("".join(lines), encoding="utf-8")
-        tmp.replace(user_reg)
+        write_atomic_text(user_reg, "".join(lines))
     except OSError as exc:
         _log(f"Warning: could not write user.reg: {exc}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 __all__ = [

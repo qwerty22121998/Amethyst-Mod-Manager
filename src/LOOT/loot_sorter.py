@@ -33,6 +33,8 @@ import urllib.error
 from pathlib import Path
 from dataclasses import dataclass, field
 
+from Utils.atomic_write import write_atomic_text
+
 try:
     import LOOT.loot as loot
     _AVAILABLE = True
@@ -122,14 +124,10 @@ def _read_branch_cache() -> dict:
 def _write_branch_cache(cache: dict) -> None:
     path = _get_data_dir() / _BRANCH_CACHE_FILE
     cache["libloot_version"] = _libloot_version_str()
-    tmp = path.with_suffix(".tmp")
     try:
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(cache, f, indent=2)
-        tmp.replace(path)
+        write_atomic_text(path, json.dumps(cache, indent=2))
     except Exception:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
+        pass
 
 
 def _head_ok(url: str, timeout: float = 5.0) -> bool:
@@ -499,10 +497,8 @@ def write_loot_info(
         "general_messages": general_messages,
         "plugins": plugin_info,
     }
-    dest = profile_dir / "loot.json"
-    tmp = dest.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    tmp.replace(dest)
+    write_atomic_text(profile_dir / "loot.json",
+                      json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def read_loot_info(profile_dir: Path) -> dict:

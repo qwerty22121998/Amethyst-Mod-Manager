@@ -41,6 +41,7 @@ from functools import lru_cache
 
 import msgpack
 
+from Utils.atomic_write import atomic_writer
 from Utils.modlist import read_modlist
 
 # Conflict status constants (returned per-mod in build_filemap result)
@@ -467,24 +468,14 @@ def _write_mod_index(
     """
     global _index_cache
     del normalize_folder_case  # retained for back-compat; see docstring
-    index_path.parent.mkdir(parents=True, exist_ok=True)
     mods = []
     for mod_name, (normal, root) in index.items():
         files = [[k, v, "n"] for k, v in normal.items()]
         files += [[k, v, "r"] for k, v in root.items()]
         mods.append([mod_name, files])
     payload = {"v": _INDEX_VERSION, "mods": mods}
-    tmp = index_path.with_suffix(".tmp")
-    try:
-        with tmp.open("wb") as f:
-            msgpack.pack(payload, f, use_bin_type=True)
-        tmp.replace(index_path)
-    except OSError:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
+    with atomic_writer(index_path, "wb", encoding=None) as f:
+        msgpack.pack(payload, f, use_bin_type=True)
     # Update the in-memory index cache to match what was just written.
     with _index_cache_lock:
         try:
