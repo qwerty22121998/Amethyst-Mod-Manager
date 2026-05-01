@@ -1,3 +1,11 @@
+- v1.3.0
+- Added Bsa and Ba2 packing and unpacking, Loose files can be packed in the mod files tab and archives can be unpacked
+- Removed some duplicate code (Game handlers had a lot)
+- The restore function no longer leaves empty folders on root deployed games
+- Added an option to the script extenders/Bepinex wizards to intall them as mods,
+- Fomod image previews (when clicking the image) now scales to the entire panel for better visibility
+- Saved Fomod options are now highlighted in green
+
 - v1.2.14
 - Fixed staged folders not being found when deploying with cyberpunk
 - Fixed web/file browsers not opening in the flatpak build
