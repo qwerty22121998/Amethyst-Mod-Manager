@@ -265,12 +265,11 @@ EOF
     find "$VENDOR_DIR" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
 
     # Drop bundled Pillow libs we don't use (mirrors PKGBUILD's trim).
+    # Keep libxcb/libXau — eager-loaded at PIL import time.
     if [ -d "$VENDOR_DIR/pillow.libs" ]; then
         rm -f "$VENDOR_DIR/pillow.libs/"libavif-*.so*    \
               "$VENDOR_DIR/pillow.libs/"libzstd-*.so*    \
               "$VENDOR_DIR/pillow.libs/"liblzma-*.so*    \
-              "$VENDOR_DIR/pillow.libs/"libxcb-*.so*     \
-              "$VENDOR_DIR/pillow.libs/"libXau-*.so*     \
               2>/dev/null || true
     fi
 

@@ -50,15 +50,16 @@ build() {
     rm -rf "$srcdir/_vendor/bin"
     find "$srcdir/_vendor" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
 
-    # Drop bundled Pillow libs we don't use. Pillow's manylinux wheel ships
-    # AVIF/zstd/lzma/X11 libs for max format coverage; we open png/jpg/webp/
-    # gif/bmp/tga/ico only and don't screenshot. ~7.4M saved.
+    # Drop bundled Pillow libs for formats we don't open: AVIF, plus zstd/lzma
+    # which only matter for the corresponding compressed-TIFF variants.
+    # libxcb/libXau stay — Pillow's _imaging.so eagerly loads them at import,
+    # not lazily, so removing them breaks `from PIL import Image` entirely
+    # (we don't actually use ImageGrab; the linkage is just there).
+    # ~7.1M saved.
     if [ -d "$srcdir/_vendor/pillow.libs" ]; then
         rm -fv "$srcdir/_vendor/pillow.libs/"libavif-*.so*    \
                "$srcdir/_vendor/pillow.libs/"libzstd-*.so*    \
                "$srcdir/_vendor/pillow.libs/"liblzma-*.so*    \
-               "$srcdir/_vendor/pillow.libs/"libxcb-*.so*     \
-               "$srcdir/_vendor/pillow.libs/"libXau-*.so*     \
                2>/dev/null || true
     fi
 
