@@ -679,7 +679,7 @@ class FomodDialog(ctk.CTkFrame):
         avail_w = max(container.winfo_width() - 4, 200)
         avail_h = max(container.winfo_height() - 44, 200)  # subtract top bar
         orig_w, orig_h = pil_img.size
-        scale = min(avail_w / orig_w, avail_h / orig_h, 1.0)
+        scale = min(avail_w / orig_w, avail_h / orig_h)
         disp_w = max(1, int(orig_w * scale))
         disp_h = max(1, int(orig_h * scale))
 
