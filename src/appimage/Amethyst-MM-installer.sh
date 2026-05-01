@@ -68,19 +68,26 @@ mkdir -p "$APPLICATIONS_DIR"
 mkdir -p "$ICONS_DIR"
 mkdir -p "$APPLICATIONS_DESKTOP_DIR"
 
-# Download AppImage
+# Download AppImage to a sibling temp file, then atomically rename it into
+# place. Writing directly to the destination fails with ETXTBSY ("Text file
+# busy") when the currently-running AppImage is still being unmounted by the
+# kernel. rename(2) on the same filesystem only swaps the directory entry —
+# the running process keeps its open inode, so there is no conflict.
+APPIMAGE_DEST="$APPLICATIONS_DIR/$APPIMAGE_NAME"
+APPIMAGE_TMP="$APPIMAGE_DEST.new"
 echo "Downloading AppImage..."
 if command -v curl &>/dev/null; then
-    curl -L -o "$APPLICATIONS_DIR/$APPIMAGE_NAME" "$APPIMAGE_URL"
+    curl -L -o "$APPIMAGE_TMP" "$APPIMAGE_URL"
 elif command -v wget &>/dev/null; then
-    wget -O "$APPLICATIONS_DIR/$APPIMAGE_NAME" "$APPIMAGE_URL"
+    wget -O "$APPIMAGE_TMP" "$APPIMAGE_URL"
 else
     echo "Error: neither curl nor wget found. Please install one of them." >&2
     exit 1
 fi
 
-chmod +x "$APPLICATIONS_DIR/$APPIMAGE_NAME"
-echo "AppImage installed to $APPLICATIONS_DIR/$APPIMAGE_NAME (executable)."
+chmod +x "$APPIMAGE_TMP"
+mv -f "$APPIMAGE_TMP" "$APPIMAGE_DEST"
+echo "AppImage installed to $APPIMAGE_DEST (executable)."
 
 # Download icon
 echo "Downloading icon..."
