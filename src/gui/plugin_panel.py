@@ -1862,16 +1862,16 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         toolbar.grid_propagate(False)
 
         ctk.CTkButton(
-            toolbar, text="↺ Refresh", width=80, height=24,
+            toolbar, text="↺ Refresh", width=72, height=26,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
-            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
+            font=_theme.FONT_HEADER, corner_radius=4,
             command=self._refresh_ini_files_tab,
         ).pack(side="left", padx=8, pady=2)
 
         ctk.CTkButton(
-            toolbar, text="Search Content", width=140, height=24,
+            toolbar, text="Search Content", width=140, height=26,
             fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
-            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
+            font=_theme.FONT_HEADER, corner_radius=4,
             command=self._on_search_ini_content,
         ).pack(side="left", padx=(0, 8), pady=2)
 
@@ -3997,20 +3997,18 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         toolbar = tk.Frame(tab, bg=BG_HEADER, height=scaled(28), highlightthickness=0)
         toolbar.grid(row=0, column=0, sticky="ew")
         toolbar.grid_propagate(False)
-        tk.Button(
-            toolbar, text="↺ Refresh",
-            bg=ACCENT, fg=TEXT_MAIN, activebackground=ACCENT_HOV,
-            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
-            bd=0, cursor="hand2", highlightthickness=0,
+        ctk.CTkButton(
+            toolbar, text="↺ Refresh", width=72, height=26,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            font=_theme.FONT_HEADER, corner_radius=4,
             command=self._refresh_data_tab,
         ).pack(side="left", padx=(8, 2), pady=2)
 
         self._data_tree_expanded: bool = False
-        self._data_expand_btn = tk.Button(
-            toolbar, text="⊞ Expand All",
-            bg=BG_PANEL, fg=TEXT_MAIN, activebackground=BG_HOVER,
-            relief="flat", font=(_theme.FONT_FAMILY, _theme.FS10),
-            bd=0, cursor="hand2", highlightthickness=0,
+        self._data_expand_btn = ctk.CTkButton(
+            toolbar, text="⊞ Expand All", width=110, height=26,
+            fg_color=BG_PANEL, hover_color=BG_HOVER, text_color=TEXT_MAIN,
+            font=_theme.FONT_HEADER, corner_radius=4,
             command=self._toggle_data_tree_expand,
         )
         self._data_expand_btn.pack(side="left", padx=(0, 8), pady=2)
