@@ -1897,7 +1897,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         # Inline content-search bar (row 2) — hidden by default
         self._build_ini_content_search_bar(tab)
 
-        # List frame: tree | marker_strip | scrollbar
+        # List frame: tree | combined scrollbar+marker strip
         list_frame = tk.Frame(tab, bg=BG_LIST)
         list_frame.grid(row=3, column=0, sticky="nsew")
         list_frame.grid_rowconfigure(0, weight=1)
@@ -1951,25 +1951,30 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._ini_files_tree.tag_configure("game_folder", foreground=TEXT_OK)
         self._ini_files_tree.tag_configure("profile_folder", foreground=TAG_INI_PROFILE)
 
+        # Combined scrollbar + marker strip — same pattern as modlist_panel /
+        # plugins tab: one canvas paints trough, ticks, and thumb.
+        self._INI_SCROLL_W = 16
         self._ini_marker_strip = tk.Canvas(
             list_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
-            width=4, takefocus=0,
+            width=self._INI_SCROLL_W, takefocus=0,
         )
-        self._ini_marker_strip.bind("<Configure>", self._on_ini_marker_strip_resize)
-
-        _sb_bg = SCROLL_BG
-        _sb_trough = SCROLL_TROUGH
-        _sb_active = SCROLL_ACTIVE
-        self._ini_vsb = tk.Scrollbar(
-            list_frame, orient="vertical", command=self._ini_files_tree.yview,
-            bg=_sb_bg, troughcolor=_sb_trough, activebackground=_sb_active,
-            highlightthickness=0, bd=0,
-        )
-        self._ini_files_tree.configure(yscrollcommand=self._ini_vsb.set)
+        self._ini_vsb = self._ini_marker_strip  # alias kept for any external refs
+        self._ini_files_tree.configure(yscrollcommand=self._ini_scroll_set)
 
         self._ini_files_tree.grid(row=0, column=0, sticky="nsew")
         self._ini_marker_strip.grid(row=0, column=1, sticky="ns")
-        self._ini_vsb.grid(row=0, column=2, sticky="ns")
+
+        self._ini_scroll_first = 0.0
+        self._ini_scroll_last = 1.0
+        self._ini_thumb_drag_offset: float | None = None
+
+        self._ini_marker_strip.bind("<Configure>",        self._on_ini_marker_strip_resize)
+        self._ini_marker_strip.bind("<ButtonPress-1>",    self._on_ini_scrollbar_press)
+        self._ini_marker_strip.bind("<B1-Motion>",        self._on_ini_scrollbar_drag)
+        self._ini_marker_strip.bind("<ButtonRelease-1>",  self._on_ini_scrollbar_release)
+        self._ini_marker_strip.bind("<Button-4>",         lambda e: self._ini_files_tree.yview_scroll(-3, "units"))
+        self._ini_marker_strip.bind("<Button-5>",         lambda e: self._ini_files_tree.yview_scroll(3, "units"))
+        self._ini_marker_strip.bind("<MouseWheel>",       self._on_ini_mousewheel)
 
         # Search bar (bottom)
         ini_search_bar = tk.Frame(tab, bg=BG_HEADER, highlightthickness=0)
@@ -2380,27 +2385,112 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             self._ini_files_tree.item(iid, tags=tags)
 
     def _draw_ini_marker_strip(self):
-        """Draw orange tick marks for ini/json files belonging to the selected mod."""
+        """Paint the combined scrollbar + marker strip for the Ini Files tab.
+
+        Layers (bottom → top):
+          1. Trough background
+          2. Orange tick marks for ini/json files belonging to the selected mod
+          3. Thumb rectangle
+        """
         self._ini_marker_strip_after_id = None
         c = self._ini_marker_strip
-        c.delete("marker")
+        c.delete("all")
+        strip_h = c.winfo_height()
+        strip_w = c.winfo_width()
+        if strip_h <= 1 or strip_w <= 1:
+            return
+
+        c.create_rectangle(0, 0, strip_w, strip_h, fill=BG_DEEP, outline="", tags="trough")
+
         displayed = self._ini_files_displayed
         n = len(displayed)
-        if not n or not self._highlighted_ini_mod:
-            return
+        if n and self._highlighted_ini_mod:
+            highlighted_rows = [
+                i for i, (_, mod_name, _) in enumerate(displayed)
+                if mod_name == self._highlighted_ini_mod
+            ]
+            if highlighted_rows:
+                strip_max = strip_h - 4
+                inv_n = 1.0 / n
+                color = _theme.plugin_mod
+                for row_idx in highlighted_rows:
+                    y = int(row_idx * inv_n * strip_h)
+                    if y < 2:
+                        y = 2
+                    elif y > strip_max:
+                        y = strip_max
+                    c.create_rectangle(0, y, strip_w, y + 3, fill=color, outline="", tags="marker")
+
+        self._redraw_ini_thumb()
+
+    def _redraw_ini_thumb(self) -> None:
+        c = self._ini_marker_strip
+        c.delete("thumb")
         strip_h = c.winfo_height()
+        strip_w = c.winfo_width()
+        if strip_h <= 1 or strip_w <= 1:
+            return
+        first = max(0.0, min(1.0, self._ini_scroll_first))
+        last = max(first, min(1.0, self._ini_scroll_last))
+        if last - first >= 0.999:
+            return
+        y1 = int(first * strip_h)
+        y2 = max(y1 + 8, int(last * strip_h))
+        if y2 > strip_h:
+            y2 = strip_h
+            y1 = max(0, y2 - 8)
+        c.create_rectangle(
+            0, y1, strip_w, y2,
+            fill=_theme.BG_SEP, outline="", tags="thumb",
+        )
+
+    def _ini_scroll_set(self, first: str, last: str) -> None:
+        try:
+            f = float(first); l = float(last)
+        except (TypeError, ValueError):
+            return
+        if f == self._ini_scroll_first and l == self._ini_scroll_last:
+            return
+        self._ini_scroll_first = f
+        self._ini_scroll_last = l
+        self._redraw_ini_thumb()
+
+    def _on_ini_scrollbar_press(self, event):
+        strip_h = self._ini_marker_strip.winfo_height()
         if strip_h <= 1:
             return
-        highlighted_rows = {
-            i for i, (_, mod_name, _) in enumerate(displayed)
-            if mod_name == self._highlighted_ini_mod
-        }
-        if not highlighted_rows:
+        first = self._ini_scroll_first
+        last = self._ini_scroll_last
+        thumb_top = first * strip_h
+        thumb_bot = last * strip_h
+        if thumb_top <= event.y <= thumb_bot:
+            self._ini_thumb_drag_offset = (event.y - thumb_top) / strip_h
+        else:
+            self._ini_thumb_drag_offset = (last - first) / 2.0
+            self._ini_scroll_to_pointer(event.y)
+
+    def _on_ini_scrollbar_drag(self, event):
+        if self._ini_thumb_drag_offset is None:
             return
-        for row_idx in highlighted_rows:
-            frac = row_idx / n
-            y = max(2, min(int(frac * strip_h), strip_h - 4))
-            c.create_rectangle(0, y, 4, y + 3, fill=_theme.plugin_mod, outline="", tags="marker")
+        self._ini_scroll_to_pointer(event.y)
+
+    def _on_ini_scrollbar_release(self, _event):
+        self._ini_thumb_drag_offset = None
+
+    def _ini_scroll_to_pointer(self, py: int) -> None:
+        strip_h = self._ini_marker_strip.winfo_height()
+        if strip_h <= 1 or self._ini_thumb_drag_offset is None:
+            return
+        frac = (py / strip_h) - self._ini_thumb_drag_offset
+        frac = max(0.0, min(1.0, frac))
+        self._ini_files_tree.yview_moveto(frac)
+
+    def _on_ini_mousewheel(self, event):
+        delta = event.delta
+        if delta == 0:
+            return
+        step = -3 if delta > 0 else 3
+        self._ini_files_tree.yview_scroll(step, "units")
 
     def _on_ini_file_select(self, _event=None):
         self._on_ini_file_edit()
