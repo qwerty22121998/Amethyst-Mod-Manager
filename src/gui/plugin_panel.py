@@ -623,7 +623,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             border_color=BORDER, checkmark_color="white",
             bg_color=BG_HEADER,
-            command=lambda: self.show_mod_files(self._mod_files_mod_name),
+            command=lambda: self._mf_refresh_current_view(),
         ).pack(side="right", padx=(0, 8), pady=2)
 
         self._mod_files_label = tk.Label(
@@ -1367,6 +1367,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             parent = self._mf_tree.parent(parent)
 
     def _on_mf_click(self, event):
+        if getattr(self, "_mf_separator_view", False):
+            return
         iid = self._mf_tree.identify_row(event.y)
         if not iid:
             return
@@ -1379,6 +1381,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             return
 
     def _on_mf_space(self, event):
+        if getattr(self, "_mf_separator_view", False):
+            return
         sel = self._mf_tree.selection()
         if sel:
             self._mf_toggle(sel[0])
@@ -1756,8 +1760,24 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._conflict_cache = (sig, contested_keys, filemap_winner)
         return contested_keys, filemap_winner
 
+    def _mf_refresh_current_view(self):
+        """Re-render the Mod Files tab using whichever view is active —
+        either the single-mod path or the separator path."""
+        if getattr(self, "_mf_separator_view", False):
+            self.show_mod_files_for_separator(
+                getattr(self, "_mf_separator_name", "") or "",
+                getattr(self, "_mf_separator_mods", []) or [],
+            )
+        else:
+            self.show_mod_files(self._mod_files_mod_name)
+
     def show_mod_files(self, mod_name: str | None):
         """Populate the Mod Files tab for the given mod name."""
+        # Switching back from a separator view: drop the read-only flag so
+        # checkbox clicks resume working for the regular single-mod tree.
+        self._mf_separator_view = False
+        self._mf_separator_name = None
+        self._mf_separator_mods = []
         # Capture expand state (by path) + scroll position if we're rebuilding
         # the same mod, so the tree doesn't collapse / jump on every edit.
         prev_expanded: set[str] = set()
@@ -1987,6 +2007,229 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                     except Exception:
                         pass
         prev_scroll = getattr(self, "_mf_prev_scroll", None)
+        if prev_scroll:
+            try:
+                self._mf_tree.yview_moveto(prev_scroll[0])
+            except Exception:
+                pass
+
+    def show_mod_files_for_separator(
+        self, separator_name: str, mod_names: list[str],
+    ):
+        """Populate the Mod Files tab with one top-level node per mod under
+        the given separator. Read-only — clicking the checkbox columns is
+        suppressed in this mode (see ``_mf_separator_view``)."""
+        # Capture expand state when re-rendering the same separator so the
+        # tree doesn't collapse on toggle / refresh.
+        prev_expanded: set[str] = set()
+        prev_scroll: tuple[float, float] | None = None
+        if (getattr(self, "_mf_separator_view", False)
+                and getattr(self, "_mf_separator_name", None) == separator_name):
+            for iid, path in self._mf_iid_to_path.items():
+                try:
+                    if self._mf_tree.item(iid, "open") and path:
+                        prev_expanded.add(path.lower())
+                except Exception:
+                    pass
+            try:
+                prev_scroll = self._mf_tree.yview()
+            except Exception:
+                prev_scroll = None
+
+        self._mf_separator_view = True
+        self._mf_separator_name = separator_name
+        self._mf_separator_mods = list(mod_names)
+        # Disable the per-mod state used by the single-mod editing path so
+        # any stray callbacks (e.g. _mf_save_and_rebuild) become no-ops.
+        self._mod_files_mod_name = None
+        self._mf_tree.delete(*self._mf_tree.get_children())
+        self._mf_checked.clear()
+        self._mf_iid_to_key.clear()
+        self._mf_iid_to_relstr.clear()
+        self._mf_folder_iids.clear()
+        self._mf_iid_to_path.clear()
+        self._mf_path_to_iid.clear()
+        self._mf_top_level_iids.clear()
+        self._mf_stripped_paths.clear()
+        self._mf_synthetic_iids.clear()
+
+        if not mod_names:
+            self._mod_files_label.configure(
+                text=f"{separator_name} — (no mods in this separator)"
+            )
+            return
+
+        self._mod_files_label.configure(
+            text=f"{separator_name} — {len(mod_names)} mod(s) (read-only)"
+        )
+        self._mf_tree_expanded = False
+        self._mf_expand_btn.configure(text="⊞ Expand All")
+
+        # Conflict cache (post-strip rel_keys → winner). Reuse the same data
+        # as the single-mod view so colouring stays consistent.
+        full_index = None
+        if self._mod_files_index_path is not None:
+            from Utils.filemap import read_mod_index
+            full_index = read_mod_index(self._mod_files_index_path)
+        contested_keys, filemap_winner = self._get_conflict_cache(full_index)
+
+        # Per-mod strip-prefix lookup so conflict tagging keys match what
+        # the filemap actually deploys.
+        strip_map: dict[str, list[str]] = {}
+        if self._mod_files_profile_dir is not None:
+            try:
+                strip_map = read_mod_strip_prefixes(
+                    self._mod_files_profile_dir, None,
+                )
+            except Exception:
+                strip_map = {}
+
+        self._mf_tree.tag_configure("dim", foreground=TEXT_DIM)
+        self._mf_tree.tag_configure("conflict_win",  foreground=_theme.conflict_higher)
+        self._mf_tree.tag_configure("conflict_lose", foreground=_theme.conflict_lower)
+        self._mf_tree.tag_configure("mf_stripped", foreground=TEXT_DIM)
+        self._mf_tree.tag_configure("mf_disabled", foreground=TEXT_DIM)
+
+        only_conflicts = bool(
+            self._mf_only_conflicts_var and self._mf_only_conflicts_var.get()
+        )
+
+        from Utils.filemap import _scan_dir
+        staging_dir: Path | None = None
+        if self._game is not None and hasattr(self._game, "get_effective_mod_staging_path"):
+            try:
+                staging_dir = Path(self._game.get_effective_mod_staging_path())
+            except Exception:
+                staging_dir = None
+        overwrite_dir: Path | None = None
+        if self._game is not None and hasattr(self._game, "get_effective_overwrite_path"):
+            try:
+                overwrite_dir = Path(self._game.get_effective_overwrite_path())
+            except Exception:
+                overwrite_dir = None
+
+        rendered_any = False
+        for mod_name in mod_names:
+            stripped_for_mod = {
+                e.lower() for e in strip_map.get(mod_name, []) if e
+            }
+
+            if mod_name == _OVERWRITE_NAME:
+                mod_dir = overwrite_dir
+            elif staging_dir is not None:
+                mod_dir = staging_dir / mod_name
+            else:
+                mod_dir = None
+
+            files: dict[str, str] = {}
+            if mod_dir is not None and mod_dir.is_dir():
+                _name, _normal, _root, _invalid = _scan_dir(
+                    mod_name, str(mod_dir),
+                )
+                files.update(_normal)
+                files.update(_root)
+
+            def _post_strip(raw_rel_key: str, _stripped=stripped_for_mod) -> str:
+                k = raw_rel_key
+                for s in sorted(_stripped, key=len, reverse=True):
+                    if k == s or k.startswith(s + "/"):
+                        k = k[len(s):].lstrip("/")
+                        break
+                return k
+
+            def _conflict_tag(rel_key: str, _owner=mod_name,
+                              _post=_post_strip) -> str | None:
+                key = _post(rel_key)
+                if key not in contested_keys:
+                    return None
+                winner = filemap_winner.get(key.lower())
+                if winner is None:
+                    return None
+                return "conflict_win" if winner == _owner else "conflict_lose"
+
+            tree_dict: dict = {}
+            for rel_key, rel_str in sorted(files.items()):
+                if only_conflicts and _conflict_tag(rel_key) is None:
+                    continue
+                parts = rel_str.replace("\\", "/").split("/")
+                node = tree_dict
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node.setdefault("__files__", []).append((parts[-1], rel_key, rel_str))
+
+            if only_conflicts and not tree_dict:
+                continue
+            if not files:
+                continue
+
+            rendered_any = True
+            mod_iid = self._mf_tree.insert(
+                "", "end",
+                text=mod_name,
+                values=("", ""),
+                open=False,
+                tags=("dim",),
+            )
+            self._mf_folder_iids.add(mod_iid)
+            self._mf_iid_to_path[mod_iid] = mod_name
+
+            def _insert_node(parent_id, name, subtree, parent_path, depth):
+                folder_path = f"{parent_path}/{name}" if parent_path else name
+                iid = self._mf_tree.insert(
+                    parent_id, "end",
+                    text=name,
+                    values=("", ""),
+                    open=False,
+                )
+                self._mf_folder_iids.add(iid)
+                self._mf_iid_to_path[iid] = folder_path
+                for child in sorted(k for k in subtree if k != "__files__"):
+                    _insert_node(iid, child, subtree[child], folder_path, depth + 1)
+                for fname, rel_key, rel_str in sorted(subtree.get("__files__", [])):
+                    tag = _conflict_tag(rel_key)
+                    tags: tuple[str, ...] = (tag,) if tag else ()
+                    leaf_iid = self._mf_tree.insert(
+                        iid, "end",
+                        text=fname,
+                        values=("", ""),
+                        tags=tags,
+                    )
+                    self._mf_iid_to_relstr[leaf_iid] = rel_str
+                    file_path = f"{folder_path}/{fname}" if folder_path else fname
+                    self._mf_iid_to_path[leaf_iid] = file_path
+
+            mod_path_prefix = mod_name
+            for top in sorted(k for k in tree_dict if k != "__files__"):
+                _insert_node(mod_iid, top, tree_dict[top], mod_path_prefix, 1)
+            for fname, rel_key, rel_str in sorted(tree_dict.get("__files__", [])):
+                tag = _conflict_tag(rel_key)
+                tags: tuple[str, ...] = (tag,) if tag else ()
+                leaf_iid = self._mf_tree.insert(
+                    mod_iid, "end",
+                    text=fname,
+                    values=("", ""),
+                    tags=tags,
+                )
+                self._mf_iid_to_relstr[leaf_iid] = rel_str
+                self._mf_iid_to_path[leaf_iid] = f"{mod_path_prefix}/{fname}"
+
+        if not rendered_any:
+            placeholder = (
+                "  (no conflicts in this separator)"
+                if only_conflicts else
+                "  (no files found in mods under this separator)"
+            )
+            self._mf_tree.insert("", "end", text=placeholder, tags=("dim",))
+            return
+
+        # Restore expand / scroll state from the previous separator render.
+        if prev_expanded:
+            for iid, path in self._mf_iid_to_path.items():
+                if path and path.lower() in prev_expanded:
+                    try:
+                        self._mf_tree.item(iid, open=True)
+                    except Exception:
+                        pass
         if prev_scroll:
             try:
                 self._mf_tree.yview_moveto(prev_scroll[0])
@@ -2287,6 +2530,10 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         """Populate the Archive tab for the given mod name (lazy: only renders
         when the Archive tab is visible; otherwise flags dirty)."""
         self._archive_mod_name = mod_name
+        # Switching to a single-mod (or no) selection clears any active
+        # separator scope so the regular all-mods fallback works.
+        self._archive_separator_name = None
+        self._archive_separator_mods = None
         if self._arc_tree is None:
             return
         try:
@@ -2298,6 +2545,26 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             return
         self._archive_tab_dirty = False
         self._render_archive_tree(mod_name)
+
+    def show_mod_archives_for_separator(
+        self, separator_name: str, mod_names: list[str],
+    ):
+        """Populate the Archive tab with every BSA owned by any mod under the
+        given separator. Lazy: only renders when the Archive tab is visible."""
+        self._archive_mod_name = None
+        self._archive_separator_name = separator_name
+        self._archive_separator_mods = list(mod_names)
+        if self._arc_tree is None:
+            return
+        try:
+            current = self._tabs.get()
+        except Exception:
+            current = ""
+        if current != "Archive":
+            self._archive_tab_dirty = True
+            return
+        self._archive_tab_dirty = False
+        self._render_archive_tree(None)
 
     def _render_archive_tree(self, mod_name: str | None):
         """Actually populate the Archive treeview."""
@@ -2354,11 +2621,32 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         if self._arc_search_var is not None:
             query = self._arc_search_var.get().casefold()
 
-        # If the selected mod has BSAs, scope the view to that mod. Otherwise
-        # (no selection, or the selected mod has no BSAs) show every BSA in
-        # the modlist alphabetically so the user can always browse archives.
-        # Conflict colouring is per-BSA-owner.
-        if my_archives:
+        sep_name = getattr(self, "_archive_separator_name", None)
+        sep_mods = getattr(self, "_archive_separator_mods", None)
+
+        # Three view modes:
+        #  1. Separator selected → show every BSA owned by a child mod.
+        #  2. Single mod with BSAs → scope to that mod.
+        #  3. Otherwise → show all enabled mods with BSAs (the existing fallback).
+        # Conflict colouring is per-BSA-owner in all modes.
+        if sep_name is not None and sep_mods is not None:
+            scoped = [
+                m for m in sep_mods
+                if m in bsa_index and bsa_index.get(m) and m in enabled_mods
+            ]
+            scoped.sort(key=str.casefold)
+            render_units = [(m, bsa_index[m]) for m in scoped]
+            show_owner = True
+            if render_units:
+                self._archive_label.configure(
+                    text=f"{sep_name} — {len(render_units)} mod(s) with BSAs"
+                )
+            else:
+                self._archive_label.configure(
+                    text=f"{sep_name} — no mods with BSA archives"
+                )
+                return
+        elif my_archives:
             self._archive_label.configure(text=mod_name)
             render_units = [(mod_name, my_archives)]
             show_owner = False
@@ -3013,6 +3301,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
 
     def _on_mf_right_click(self, event):
         """Show context menu for Mod Files tree rows."""
+        if getattr(self, "_mf_separator_view", False):
+            return
         iid = self._mf_tree.identify_row(event.y)
         if not iid:
             return

@@ -7087,7 +7087,12 @@ class ModListPanel(ModListFilterPanelMixin, ModListDownloadBarMixin,
                 # freshly built bsa_index — it may have gone from "no index"
                 # to "all archives" after this rebuild.
                 if hasattr(pp, "show_mod_archives"):
-                    pp.show_mod_archives(pp._archive_mod_name)
+                    sep_name = getattr(pp, "_archive_separator_name", None)
+                    sep_mods = getattr(pp, "_archive_separator_mods", None)
+                    if sep_name is not None and sep_mods is not None:
+                        pp.show_mod_archives_for_separator(sep_name, sep_mods)
+                    else:
+                        pp.show_mod_archives(pp._archive_mod_name)
 
         threading.Thread(target=_worker, daemon=True).start()
 
