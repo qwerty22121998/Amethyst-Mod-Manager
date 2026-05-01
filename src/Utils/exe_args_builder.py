@@ -544,14 +544,6 @@ def build_default_exe_args(
                 update_witcher3_script_merger_config(game_path, exe_path) # type: ignore
             if name == "NPC Plugin Chooser 2.exe":
                 _bootstrap_npc_plugin_chooser_settings(exe_path, game_path, effective_staging_path, _log, pfx=pfx)
-            if name == "Pandora Behaviour Engine+.exe":
-                _bootstrap_pandora_settings(
-                    getattr(game, "game_id", None),
-                    game_path,
-                    effective_staging_path,
-                    prefix_path,
-                    _log,
-                )
             continue
 
         # Skip unknowns and already-configured entries
