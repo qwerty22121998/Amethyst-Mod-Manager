@@ -246,6 +246,149 @@ from gui.plugin_panel_loot import PluginPanelLOOTMixin
 from gui.plugin_panel_userlist_cycle import PluginPanelUserlistCycleMixin
 
 
+class _PackOptionsDialog(ctk.CTkToplevel):
+    """Modal pre-pack confirmation dialog.
+
+    Shown by the Pack BSA flow before any work starts. Surfaces the
+    overwrite warning when applicable and offers a "delete loose files"
+    checkbox so users who want a clean archive-only deploy don't have to
+    do it manually.
+
+    Use :meth:`ask` (classmethod) to display the dialog and block until
+    the user picks; returns ``{"delete_loose": bool}`` on confirm or
+    ``None`` on cancel/close.
+    """
+
+    def __init__(self, parent: tk.Misc, *, bsa_filename: str, existing: bool):
+        super().__init__(master=parent, fg_color=BG_PANEL)
+        self._parent_ref = parent
+        self.title("Pack BSA")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.withdraw()
+        self.result: dict | None = None
+
+        # Window layout — single column.
+        self.grid_columnconfigure(0, weight=1)
+
+        # Title band.
+        tk.Label(
+            self,
+            text=f"Pack {bsa_filename}",
+            font=(_theme.FONT_FAMILY, _theme.FS12, "bold"),
+            fg=TEXT_MAIN, bg=BG_PANEL, anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
+
+        # Optional overwrite warning.
+        if existing:
+            tk.Label(
+                self,
+                text=(
+                    f"⚠  {bsa_filename} already exists in this mod and will "
+                    "be overwritten."
+                ),
+                font=(_theme.FONT_FAMILY, _theme.FS10),
+                fg="#e8a83a", bg=BG_PANEL,
+                anchor="w", justify="left", wraplength=360,
+            ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+
+        # Delete-loose checkbox.
+        self._delete_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            self,
+            text="Delete loose files after packing",
+            variable=self._delete_var,
+            font=(_theme.FONT_FAMILY, _theme.FS10),
+            text_color=TEXT_MAIN,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            border_color=BORDER, checkmark_color="white",
+            checkbox_width=16, checkbox_height=16,
+        ).grid(row=2, column=0, sticky="w", padx=16, pady=(8, 4))
+
+        tk.Label(
+            self,
+            text=(
+                "Files that get packed will be removed from the mod folder. "
+                "Files outside the packable filter (plugins, readmes, .bik "
+                "videos) and files you've disabled in the Mod Files tab are "
+                "left alone."
+            ),
+            font=(_theme.FONT_FAMILY, _theme.FS9),
+            fg=TEXT_DIM, bg=BG_PANEL,
+            anchor="w", justify="left", wraplength=360,
+        ).grid(row=3, column=0, sticky="ew", padx=(36, 16), pady=(0, 12))
+
+        # Button row.
+        btn_row = tk.Frame(self, bg=BG_PANEL)
+        btn_row.grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 14))
+
+        ctk.CTkButton(
+            btn_row, text="Cancel", width=100, height=30,
+            fg_color="transparent", border_width=1,
+            text_color=TEXT_MAIN,
+            command=self._on_cancel,
+        ).pack(side="right", padx=(8, 4))
+
+        ctk.CTkButton(
+            btn_row, text="Pack", width=100, height=30,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            text_color=TEXT_ON_ACCENT,
+            command=self._on_confirm,
+        ).pack(side="right")
+
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        self.bind("<Return>", lambda e: self._on_confirm())
+
+        self._center_and_show()
+
+    def _center_and_show(self) -> None:
+        self.update_idletasks()
+        try:
+            top = self._parent_ref.winfo_toplevel()
+            top.update_idletasks()
+            px = top.winfo_rootx()
+            py = top.winfo_rooty()
+            pw = top.winfo_width()
+            ph = top.winfo_height()
+            aw = self.winfo_reqwidth()
+            ah = self.winfo_reqheight()
+            cx = px + (pw - aw) // 2
+            cy = py + (ph - ah) // 2
+            self.geometry(f"+{cx}+{cy}")
+        except Exception:
+            pass
+        self.deiconify()
+        self.lift()
+        try:
+            self.grab_set()
+        except tk.TclError:
+            pass
+        self.focus_force()
+
+    def _on_confirm(self) -> None:
+        self.result = {"delete_loose": bool(self._delete_var.get())}
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        try:
+            self.grab_release()
+        except tk.TclError:
+            pass
+        self.destroy()
+
+    @classmethod
+    def ask(cls, parent: tk.Misc, *, bsa_filename: str, existing: bool) -> dict | None:
+        """Show the dialog modally and return the user's choice."""
+        dlg = cls(parent, bsa_filename=bsa_filename, existing=existing)
+        parent.wait_window(dlg)
+        return dlg.result
+
+
 class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                   PluginPanelUserlistCycleMixin, ctk.CTkFrame):
     """Right panel: tabview with Plugins, Mod Files, Data, Downloads, Tracked."""
@@ -729,6 +872,637 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._mf_top_level_iids: set[str] = set()   # iids eligible for the Top Level checkbox
         self._mf_stripped_paths: set[str] = set()   # lowercased strip-prefix entries for this mod (from profile_state)
         self._mf_synthetic_iids: set[str] = set()   # iids for synthetic strip placeholders
+
+        # Footer with action buttons (Pack BSA, …). Row 2 stays a fixed-height
+        # strip below the tree (row 1 carries the weight).
+        tab.grid_rowconfigure(2, weight=0)
+        footer = tk.Frame(tab, bg=BG_HEADER, height=scaled(32), highlightthickness=0)
+        footer.grid(row=2, column=0, columnspan=2, sticky="ew")
+        footer.grid_propagate(False)
+
+        self._mf_pack_bsa_btn = ctk.CTkButton(
+            footer, text="Pack BSA", width=100, height=24,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
+            command=self._on_pack_bsa_click,
+            state="disabled",
+        )
+        self._mf_pack_bsa_btn.pack(side="right", padx=8, pady=4)
+
+        self._mf_unpack_bsa_btn = ctk.CTkButton(
+            footer, text="Unpack BSA", width=100, height=24,
+            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
+            command=self._on_unpack_bsa_click,
+            state="disabled",
+        )
+        self._mf_unpack_bsa_btn.pack(side="right", padx=(0, 4), pady=4)
+
+        # Track the open overlay so we can close it from anywhere.
+        self._bsa_unpack_overlay = None
+
+    def _update_pack_bsa_button_state(self) -> None:
+        """Enable Pack/Unpack BSA buttons only when a normal mod is selected
+        and the current game uses BSA archives. Hides them entirely on
+        non-BSA games. Unpack is further gated on the mod containing at
+        least one .bsa file."""
+        pack_btn = getattr(self, "_mf_pack_bsa_btn", None)
+        unpack_btn = getattr(self, "_mf_unpack_bsa_btn", None)
+        if pack_btn is None or unpack_btn is None:
+            return
+        from Utils.bsa_writer import bsa_version_for_game
+        game_id = getattr(self._game, "game_id", None) if self._game else None
+        if not game_id and self._game is not None:
+            game_id = type(self._game).__name__
+        version = bsa_version_for_game(game_id)
+        archive_exts = getattr(self._game, "archive_extensions", None) if self._game else None
+        bsa_supported = version is not None and archive_exts is not None and ".bsa" in archive_exts
+        if not bsa_supported:
+            for btn in (pack_btn, unpack_btn):
+                try:
+                    btn.pack_forget()
+                except Exception:
+                    pass
+            return
+        # Game supports BSA — make sure both buttons are visible.
+        try:
+            pack_btn.pack_info()
+        except Exception:
+            pack_btn.pack(side="right", padx=8, pady=4)
+        try:
+            unpack_btn.pack_info()
+        except Exception:
+            unpack_btn.pack(side="right", padx=(0, 4), pady=4)
+        mod_name = self._mod_files_mod_name
+        is_normal_mod = (
+            mod_name is not None
+            and mod_name != _OVERWRITE_NAME
+            and mod_name != "Root_Folder"
+        )
+        pack_btn.configure(state="normal" if is_normal_mod else "disabled")
+
+        # Unpack: also requires the mod to have at least one .bsa.
+        has_bsa = False
+        if is_normal_mod and self._staging_root is not None:
+            mod_dir = self._staging_root / mod_name
+            try:
+                has_bsa = any(
+                    p.is_file() and p.suffix.lower() == ".bsa"
+                    for p in mod_dir.iterdir()
+                )
+            except OSError:
+                has_bsa = False
+        unpack_btn.configure(state="normal" if has_bsa else "disabled")
+
+    def _is_current_profile_deployed(self) -> bool:
+        """Return True iff the profile this Mod Files tab is showing is the
+        one currently deployed to the game folder.
+
+        Pack/Unpack mutate mod-folder contents.  When that profile has
+        files hard-linked into game_root, the deploy log + snapshot go
+        stale and the next restore moves what should be tracked files
+        into ``overwrite/`` as if they were runtime-generated.  Forcing a
+        Restore first sidesteps the whole class of failure.
+        """
+        if self._game is None or not getattr(self._game, "is_configured", lambda: False)():
+            return False
+        if self._mod_files_profile_dir is None:
+            return False
+        try:
+            if not self._game.get_deploy_active():
+                return False
+            return self._game.get_last_deployed_profile() == self._mod_files_profile_dir.name
+        except Exception:
+            return False
+
+    def _on_pack_bsa_click(self) -> None:
+        """Pack the currently-selected mod's loose files into a BSA in that
+        mod's folder. Runs on a background thread with a progress popup."""
+        import threading
+        from Utils.bsa_writer import (
+            BsaWriteError, bsa_version_for_game, write_bsa, write_stub_plugin,
+        )
+        from gui.ctk_components import CTkAlert, CTkProgressPopup
+
+        mod_name = self._mod_files_mod_name
+        if not mod_name or mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._staging_root is None or self._game is None:
+            return
+
+        # Refuse to mutate mod contents while the profile is deployed:
+        # the existing hard-links in game_root would become stale and
+        # the next Restore would mis-classify them as runtime files.
+        if self._is_current_profile_deployed():
+            CTkAlert(
+                state="warning", title="Pack BSA",
+                body_text=(
+                    "This profile is currently deployed.\n\n"
+                    "Run Restore first, then pack the BSA."
+                ),
+                btn1="OK", btn2="", parent=self.winfo_toplevel(),
+            )
+            return
+
+        game_id = getattr(self._game, "game_id", None) or type(self._game).__name__
+        version = bsa_version_for_game(game_id)
+        if version is None:
+            return
+
+        mod_dir = self._staging_root / mod_name
+        if not mod_dir.is_dir():
+            CTkAlert(
+                state="warning", title="Pack BSA",
+                body_text=f"Mod folder not found:\n{mod_dir}",
+                btn1="OK", btn2="", parent=self.winfo_toplevel(),
+            )
+            return
+
+        bsa_path = mod_dir / f"{mod_name}.bsa"
+        # Show the options dialog: confirms the pack, surfaces the
+        # overwrite warning if applicable, and lets the user opt into
+        # deleting the loose files that get packed.  Returns None on
+        # cancel.
+        opts = _PackOptionsDialog.ask(
+            self.winfo_toplevel(),
+            bsa_filename=bsa_path.name,
+            existing=bsa_path.exists(),
+        )
+        if opts is None:
+            return
+        delete_loose: bool = opts["delete_loose"]
+
+        # A BSA only auto-loads if a same-named plugin sits in the load
+        # order. If the mod already ships a real same-stem plugin (.esp/
+        # .esm/.esl) we leave it alone; otherwise we stamp out a minimal
+        # stub. A previously-generated stub is replaced — its only purpose
+        # is to be the trigger file, and the format may have evolved
+        # between packs.
+        from Utils.bsa_writer import is_our_stub_plugin
+        existing_plugin = next(
+            (
+                mod_dir / f"{mod_name}{ext}"
+                for ext in (".esp", ".esm", ".esl")
+                if (mod_dir / f"{mod_name}{ext}").exists()
+            ),
+            None,
+        )
+        stub_plugin_path: Path | None = None
+        if existing_plugin is None or is_our_stub_plugin(existing_plugin):
+            stub_plugin_path = mod_dir / f"{mod_name}.esp"
+
+        # Files the user has disabled in the Mod Files tab — skip them
+        # in the pack so they aren't archived, and aren't re-enabled
+        # implicitly when we auto-disable everything that was packed.
+        excluded_now = frozenset(self._mod_files_excluded.get(mod_name, set()))
+
+        popup = CTkProgressPopup(
+            self.winfo_toplevel(),
+            title="Pack BSA",
+            label=f"Packing {mod_name}…",
+            message="Scanning files…",
+        )
+
+        def _on_done(
+            result: tuple[int, int, list[str]] | None,
+            error: str | None,
+        ) -> None:
+            if popup.winfo_exists():
+                popup.close_progress_popup()
+            if error is not None:
+                CTkAlert(
+                    state="warning", title="Pack BSA failed",
+                    body_text=error, btn1="OK", btn2="",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            assert result is not None
+            count, size, packed_keys = result
+            # Either physically delete the loose files, or just mark them
+            # disabled in the Mod Files tab so deploy skips them.  Both
+            # outcomes mean only the .bsa reaches the game's Data folder;
+            # delete is destructive, disable is reversible.
+            deleted_count = 0
+            if delete_loose:
+                deleted_count = self._delete_loose_files(mod_dir, packed_keys)
+            else:
+                self._auto_disable_packed_files(mod_name, packed_keys)
+            # Trigger a filemap rebuild — the new .bsa needs to enter the
+            # mod-index cache so conflict detection picks it up, and the
+            # auto-disable / delete changed what's on disk.
+            mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
+            if mod_panel is not None:
+                try:
+                    mod_panel._filemap_rescan_index = True
+                    mod_panel._rebuild_filemap()
+                except Exception:
+                    pass
+            # Re-render the Mod Files tree so the new .bsa shows up and
+            # the auto-disabled / removed rows reflect the new state.
+            try:
+                self.show_mod_files(mod_name)
+            except Exception:
+                pass
+            stub_msg = (
+                f"\n\nGenerated {stub_plugin_path.name} so the game will "
+                "auto-load the archive."
+                if stub_plugin_path is not None else ""
+            )
+            delete_msg = (
+                f"\n\nDeleted {deleted_count} loose file(s) from the mod folder."
+                if delete_loose else ""
+            )
+            CTkAlert(
+                state="info", title="Pack BSA",
+                body_text=(
+                    f"Packed {count} file(s) into {bsa_path.name} "
+                    f"({size / (1024 * 1024):.1f} MiB)." + stub_msg + delete_msg
+                ),
+                btn1="OK", btn2="",
+                parent=self.winfo_toplevel(),
+            )
+
+        def _worker() -> None:
+            def _progress(done: int, total: int, current: str) -> None:
+                # Marshal to the main thread.
+                def _ui() -> None:
+                    if not popup.winfo_exists():
+                        return
+                    popup.update_progress(done / max(total, 1))
+                    popup.update_message(f"{done} / {total}  —  {current[-50:]}")
+                try:
+                    self.after(0, _ui)
+                except Exception:
+                    pass
+
+            def _cancel() -> bool:
+                return bool(getattr(popup, "cancelled", False))
+
+            try:
+                result = write_bsa(
+                    bsa_path, mod_dir,
+                    version=version,
+                    compress=True,
+                    excluded_keys=excluded_now,
+                    progress=_progress,
+                    cancel=_cancel,
+                )
+                if stub_plugin_path is not None:
+                    write_stub_plugin(stub_plugin_path, game_id=game_id)
+            except BsaWriteError as exc:
+                msg = str(exc)
+                if msg == "cancelled":
+                    self.after(0, lambda: popup.close_progress_popup() if popup.winfo_exists() else None)
+                    return
+                self.after(0, lambda m=msg: _on_done(None, m))
+                return
+            except Exception as exc:  # last-resort safety net
+                self.after(0, lambda m=str(exc): _on_done(None, m))
+                return
+            self.after(0, lambda r=result: _on_done(r, None))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_unpack_bsa_click(self) -> None:
+        """Open the Unpack BSA overlay over the plugin panel."""
+        from gui.bsa_unpack_overlay import BsaUnpackOverlay
+        from gui.ctk_components import CTkAlert
+
+        mod_name = self._mod_files_mod_name
+        if not mod_name or mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._staging_root is None:
+            return
+        mod_dir = self._staging_root / mod_name
+        if not mod_dir.is_dir():
+            return
+
+        # Same gate as pack: deleting the BSA + plugin from the mod
+        # folder while the profile is deployed leaves stale hard-links
+        # in game_root that the next Restore would misroute to overwrite.
+        if self._is_current_profile_deployed():
+            CTkAlert(
+                state="warning", title="Unpack BSA",
+                body_text=(
+                    "This profile is currently deployed.\n\n"
+                    "Run Restore first, then unpack the BSA."
+                ),
+                btn1="OK", btn2="", parent=self.winfo_toplevel(),
+            )
+            return
+
+        # Close any prior overlay first.
+        self._close_bsa_unpack_overlay()
+
+        overlay = BsaUnpackOverlay(
+            self,
+            mod_name=mod_name,
+            mod_dir=mod_dir,
+            on_unpack=self._do_unpack_bsa,
+            on_close=self._close_bsa_unpack_overlay,
+        )
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._bsa_unpack_overlay = overlay
+
+    def _close_bsa_unpack_overlay(self) -> None:
+        overlay = getattr(self, "_bsa_unpack_overlay", None)
+        if overlay is not None:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+            self._bsa_unpack_overlay = None
+
+    def _do_unpack_bsa(self, bsa_path: Path) -> None:
+        """Extract *bsa_path* into its mod folder, delete the BSA + stub
+        plugin, clear the auto-disabled exclusions for the unpacked rel_keys,
+        rebuild the filemap, refresh the Mod Files tab.
+
+        Runs on a background thread with a progress popup so a multi-GB
+        archive doesn't freeze the UI."""
+        import threading
+        from Utils.bsa_extract import BsaExtractError, extract_bsa
+        from Utils.bsa_writer import is_our_stub_plugin
+        from gui.ctk_components import CTkAlert, CTkProgressPopup
+
+        mod_name = self._mod_files_mod_name
+        if not mod_name or self._staging_root is None:
+            return
+        mod_dir = self._staging_root / mod_name
+        if not mod_dir.is_dir():
+            return
+
+        self._close_bsa_unpack_overlay()
+
+        popup = CTkProgressPopup(
+            self.winfo_toplevel(),
+            title="Unpack BSA",
+            label=f"Unpacking {bsa_path.name}…",
+            message="Reading archive…",
+        )
+
+        def _on_done(
+            result: tuple[int, list[str]] | None,
+            error: str | None,
+        ) -> None:
+            if popup.winfo_exists():
+                popup.close_progress_popup()
+            if error is not None:
+                CTkAlert(
+                    state="warning", title="Unpack BSA failed",
+                    body_text=error, btn1="OK", btn2="",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            assert result is not None
+            count, written_rels = result
+
+            # Delete the BSA itself.
+            stub_msg = ""
+            try:
+                bsa_path.unlink()
+            except OSError as exc:
+                self._log(f"Unpack BSA: could not delete {bsa_path.name}: {exc}")
+
+            # Delete the same-stem stub plugin if it's one we generated
+            # (don't touch a real authored plugin).
+            stub = mod_dir / f"{bsa_path.stem}.esp"
+            if stub.is_file() and is_our_stub_plugin(stub):
+                try:
+                    stub.unlink()
+                    stub_msg = f"\n\nRemoved generated stub {stub.name}."
+                except OSError as exc:
+                    self._log(f"Unpack BSA: could not delete {stub.name}: {exc}")
+            elif stub.is_file():
+                stub_msg = (
+                    f"\n\nLeft {stub.name} in place — it doesn't look like one "
+                    "of our generated stubs."
+                )
+
+            # Clear those rel_keys from excluded_mod_files so the freshly
+            # unpacked loose files show as enabled in the Mod Files tab.
+            self._clear_excluded_for_unpack(mod_name, written_rels)
+
+            # Rebuild filemap so deploy picks up the new loose files
+            # (and forgets the now-deleted BSA).
+            mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
+            if mod_panel is not None:
+                try:
+                    mod_panel._filemap_rescan_index = True
+                    mod_panel._rebuild_filemap()
+                except Exception:
+                    pass
+
+            # Re-render the tab.
+            try:
+                self.show_mod_files(mod_name)
+            except Exception:
+                pass
+
+            CTkAlert(
+                state="info", title="Unpack BSA",
+                body_text=(
+                    f"Unpacked {count} file(s) from {bsa_path.name} into "
+                    f"the mod folder." + stub_msg
+                ),
+                btn1="OK", btn2="",
+                parent=self.winfo_toplevel(),
+            )
+
+        def _worker() -> None:
+            def _progress(done: int, total: int, current: str) -> None:
+                def _ui() -> None:
+                    if not popup.winfo_exists():
+                        return
+                    popup.update_progress(done / max(total, 1))
+                    popup.update_message(f"{done} / {total}  —  {current[-50:]}")
+                try:
+                    self.after(0, _ui)
+                except Exception:
+                    pass
+
+            def _cancel() -> bool:
+                return bool(getattr(popup, "cancelled", False))
+
+            try:
+                count, written = extract_bsa(
+                    bsa_path, mod_dir,
+                    overwrite=True,
+                    progress=_progress,
+                    cancel=_cancel,
+                )
+            except BsaExtractError as exc:
+                msg = str(exc)
+                if "cancel" in msg.lower():
+                    self.after(
+                        0,
+                        lambda: popup.close_progress_popup()
+                        if popup.winfo_exists() else None,
+                    )
+                    return
+                self.after(0, lambda m=msg: _on_done(None, m))
+                return
+            except Exception as exc:
+                self.after(0, lambda m=str(exc): _on_done(None, m))
+                return
+            self.after(0, lambda r=(count, written): _on_done(r, None))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _clear_excluded_for_unpack(
+        self, mod_name: str, unpacked_rel_keys: list[str],
+    ) -> None:
+        """Remove *unpacked_rel_keys* from this mod's excluded_mod_files
+        entry, so files that were auto-disabled by a previous Pack BSA
+        come back as enabled in the Mod Files tab.
+
+        No-op for pseudo-mods or when profile_state isn't wired up."""
+        if not unpacked_rel_keys:
+            return
+        if mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._mod_files_profile_dir is None:
+            return
+        all_excluded = read_excluded_mod_files(self._mod_files_profile_dir, None)
+        current = set(all_excluded.get(mod_name, ()))
+        if not current:
+            return
+        new_set = current - set(unpacked_rel_keys)
+        if new_set == current:
+            return  # nothing to clear
+        if new_set:
+            all_excluded[mod_name] = sorted(new_set)
+        else:
+            all_excluded.pop(mod_name, None)
+        write_excluded_mod_files(self._mod_files_profile_dir, all_excluded)
+        self._mod_files_excluded = {k: set(v) for k, v in all_excluded.items()}
+        self._log(
+            f"Unpack BSA: re-enabled {len(current) - len(new_set)} file(s) in "
+            f"'{mod_name}' (now {len(new_set)} excluded)"
+        )
+
+    def _delete_loose_files(
+        self, mod_dir: Path, packed_rel_keys: list[str],
+    ) -> int:
+        """Delete every file referenced by *packed_rel_keys* from *mod_dir*
+        and remove any folders that become empty as a result.
+
+        rel_keys are lowercase forward-slash, but on case-sensitive
+        filesystems (Linux) the on-disk path can have any casing — mods
+        ship with folders like ``Scripts/`` and ``Interface/``.  We
+        resolve each rel_key one path segment at a time against the
+        actual directory listing so wrong-cased *parent directories*
+        are matched too, not just wrong-cased filenames.
+
+        A per-directory listing cache keeps this O(files + dirs) rather
+        than O(files × depth × siblings).
+
+        Returns the number of files actually deleted."""
+        if not packed_rel_keys:
+            return 0
+
+        # Cache of dir → {lowercase_name: actual_name} for case-insensitive
+        # segment lookups.  Populated lazily.
+        listing_cache: dict[Path, dict[str, str]] = {}
+
+        def _list_lower(d: Path) -> dict[str, str]:
+            cached = listing_cache.get(d)
+            if cached is not None:
+                return cached
+            mapping: dict[str, str] = {}
+            try:
+                for entry in d.iterdir():
+                    mapping[entry.name.lower()] = entry.name
+            except OSError:
+                pass
+            listing_cache[d] = mapping
+            return mapping
+
+        def _resolve_ci(rel: str) -> Path | None:
+            """Walk *rel* segment-by-segment from mod_dir, matching each
+            segment case-insensitively against the real directory listing.
+            Returns the actual on-disk Path or None if any segment can't
+            be matched."""
+            cur = mod_dir
+            segments = rel.split("/")
+            for i, seg in enumerate(segments):
+                names = _list_lower(cur)
+                actual = names.get(seg.lower())
+                if actual is None:
+                    return None
+                cur = cur / actual
+                # Last segment is the file; intermediates must be dirs.
+                if i < len(segments) - 1 and not cur.is_dir():
+                    return None
+            return cur
+
+        deleted = 0
+        empty_candidate_dirs: set[Path] = set()
+        for rel in packed_rel_keys:
+            # Fast path first — exact lowercase match (works on
+            # case-insensitive filesystems and on already-lowercase mods).
+            target = mod_dir / rel
+            if not target.is_file():
+                resolved = _resolve_ci(rel)
+                if resolved is None or not resolved.is_file():
+                    continue
+                target = resolved
+            try:
+                target.unlink()
+                deleted += 1
+                empty_candidate_dirs.add(target.parent)
+                # Invalidate parent's listing cache so the empty-dir
+                # walk below sees an accurate post-delete view.
+                listing_cache.pop(target.parent, None)
+            except OSError as exc:
+                self._log(f"Pack BSA: could not delete {target}: {exc}")
+        # Remove any folders we may have just emptied, walking up to the
+        # mod root (but never deleting the mod root itself).
+        for d in sorted(empty_candidate_dirs, key=lambda p: -len(p.parts)):
+            cur = d
+            while cur != mod_dir and cur.is_dir():
+                try:
+                    next(cur.iterdir())
+                    break  # not empty
+                except StopIteration:
+                    try:
+                        cur.rmdir()
+                    except OSError:
+                        break
+                    cur = cur.parent
+                except OSError:
+                    break
+        if deleted:
+            self._log(
+                f"Pack BSA: deleted {deleted} loose file(s) from "
+                f"'{mod_dir.name}' after packing"
+            )
+        return deleted
+
+    def _auto_disable_packed_files(
+        self, mod_name: str, packed_rel_keys: list[str],
+    ) -> None:
+        """Add *packed_rel_keys* to this mod's excluded_mod_files entry so
+        every loose file that was just packed is hidden from deploy.
+        Existing exclusions are preserved (union, not replace).
+
+        No-op for the overwrite / Root_Folder pseudo-mods, or when the
+        profile_state path isn't wired up."""
+        if not packed_rel_keys:
+            return
+        if mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._mod_files_profile_dir is None:
+            return
+        all_excluded = read_excluded_mod_files(self._mod_files_profile_dir, None)
+        merged = set(all_excluded.get(mod_name, ())) | set(packed_rel_keys)
+        all_excluded[mod_name] = sorted(merged)
+        write_excluded_mod_files(self._mod_files_profile_dir, all_excluded)
+        self._mod_files_excluded = {k: set(v) for k, v in all_excluded.items()}
+        self._log(
+            f"Pack BSA: auto-disabled {len(packed_rel_keys)} file(s) in '{mod_name}' "
+            f"(now {len(merged)} total excluded)"
+        )
 
     # ------------------------------------------------------------------
     # Ini Files tab
@@ -1795,6 +2569,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 prev_scroll = None
 
         self._mod_files_mod_name = mod_name
+        self._update_pack_bsa_button_state()
         # Clear tree
         self._mf_tree.delete(*self._mf_tree.get_children())
         self._mf_checked.clear()
@@ -2042,6 +2817,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         # Disable the per-mod state used by the single-mod editing path so
         # any stray callbacks (e.g. _mf_save_and_rebuild) become no-ops.
         self._mod_files_mod_name = None
+        self._update_pack_bsa_button_state()
         self._mf_tree.delete(*self._mf_tree.get_children())
         self._mf_checked.clear()
         self._mf_iid_to_key.clear()
