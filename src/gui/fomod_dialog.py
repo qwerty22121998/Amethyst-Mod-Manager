@@ -32,6 +32,7 @@ from gui.theme import (
     TEXT_ON_ACCENT,
     TEXT_MAIN,
     TEXT_DIM,
+    TEXT_OK,
     TEXT_SEP,
     BORDER,
     FONT_NORMAL,
@@ -369,10 +370,19 @@ class FomodDialog(ctk.CTkFrame):
         ).grid(row=row_idx, column=0, sticky="ew", padx=8, pady=(0, 8))
         row_idx += 1
 
+        # Saved-from-previous-install plugin names per group, keyed by group
+        # name. Used to highlight prior choices in green so the user can revert
+        # if they change their mind. Empty on a fresh install.
+        saved_for_step = (self._saved_selections.get(step_key)
+                          or self._saved_selections.get(step.name)
+                          or {})
+
         # Render each group
         for group in step.groups:
             group_selections = existing.get(group.name, [])
-            row_idx = self._render_group(group, row_idx, group_selections)
+            previously_saved = set(saved_for_step.get(group.name, []))
+            row_idx = self._render_group(group, row_idx, group_selections,
+                                         previously_saved)
 
         # Unfreeze and perform a single layout pass
         inner.grid_propagate(True)
@@ -434,13 +444,15 @@ class FomodDialog(ctk.CTkFrame):
         self._group_widgets = {}
 
     def _render_group(self, group: Group, start_row: int,
-                      existing_selections: list[str]) -> int:
+                      existing_selections: list[str],
+                      previously_saved: set[str] | None = None) -> int:
         """
         Render one group into _options_scroll starting at start_row.
         Returns the next available row index.
         """
         row = start_row
         selected_set = set(existing_selections)
+        previously_saved = previously_saved or set()
 
         # Group label
         ctk.CTkLabel(
@@ -511,13 +523,19 @@ class FomodDialog(ctk.CTkFrame):
                 is_required   = ptype == "Required"
                 is_not_usable = ptype == "NotUsable"
                 locked = is_required or is_not_usable
+                if locked:
+                    fg = TEXT_DIM
+                elif plugin.name in previously_saved:
+                    fg = TEXT_OK
+                else:
+                    fg = TEXT_MAIN
                 rb = tk.Radiobutton(
                     self._options_scroll,
                     text=f" {plugin.name}", variable=radio_var, value=i,
                     command=(None if locked else lambda p=plugin, v=radio_var:
                              self._on_radio_change(group.name, v, plugins)),
                     state="disabled" if locked else "normal",
-                    **{**_radio_style, "fg": TEXT_DIM if locked else TEXT_MAIN},
+                    **{**_radio_style, "fg": fg},
                 )
                 rb.grid(row=row, column=0, sticky="w", padx=24, pady=2)
                 rb.bind("<Enter>", lambda _e, p=plugin: self._update_description_and_image(p))
@@ -553,13 +571,19 @@ class FomodDialog(ctk.CTkFrame):
                     "image": (self._check_on if is_required else self._check_off),
                     "selectimage": (self._check_on if is_required else self._check_off),
                 }
+                if locked:
+                    cb_style = locked_style
+                elif plugin.name in previously_saved:
+                    cb_style = {**_check_style, "fg": TEXT_OK}
+                else:
+                    cb_style = _check_style
                 cb = tk.Checkbutton(
                     self._options_scroll,
                     text=f" {plugin.name}", variable=var,
                     command=(None if locked else lambda p=plugin, v=var: self._on_check_change(
                         group.name, p, v
                     )),
-                    **(locked_style if locked else _check_style),
+                    **cb_style,
                 )
                 cb.grid(row=row, column=0, sticky="w", padx=24, pady=2)
                 cb.bind("<Enter>", lambda _e, p=plugin: self._update_description_and_image(p))
