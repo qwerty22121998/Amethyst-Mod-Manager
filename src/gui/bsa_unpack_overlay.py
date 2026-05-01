@@ -1,13 +1,18 @@
 """
-BSA Unpack overlay — lists every .bsa in the selected mod folder and
-unpacks the chosen one back into the mod folder.
+Archive Unpack overlay — lists each plugin in the selected mod folder
+together with every sibling archive (BSA / BA2 / ` - Main` / ` - Textures`)
+that auto-loads with it.  Selecting a plugin row unpacks all of its
+sibling archives in one go.
+
+A mod typically has at most one plugin, but some ship two (e.g. a master
+plus a patch).  Archives without a matching plugin stem are surfaced in a
+separate "(no matching plugin)" group so they're still reachable.
 
 Place over the plugin panel via place(relx=0, rely=0, relwidth=1, relheight=1).
 
-The overlay is a dumb UI; the caller passes a single ``on_unpack`` callback
-that does the actual work (extract → delete BSA + stub plugin → clear
-exclusions → trigger filemap rebuild → refresh tab). The caller is
-responsible for closing the overlay via ``on_close``.
+The overlay is a dumb UI; the caller passes ``on_unpack(paths)`` and
+``on_close()`` callbacks.  The caller is responsible for closing the
+overlay.
 """
 
 from __future__ import annotations
@@ -37,12 +42,16 @@ from Utils.bsa_reader import read_bsa_file_list
 
 
 class BsaUnpackOverlay(tk.Frame):
-    """Single-mod BSA picker.
+    """Single-mod plugin / archive picker.
 
-    Shows one row per .bsa in the mod folder with size + file count, plus
-    a single "Unpack" button per row. Clicking Unpack invokes
-    ``on_unpack(bsa_path)`` and dismisses the overlay; the caller does
-    the work and shows progress via its own popup.
+    Shows one row per plugin in the mod folder, listing every sibling
+    archive (``Plugin.bsa``, ``Plugin - Main.ba2``, ``Plugin - Textures.ba2``)
+    that auto-loads with it.  Clicking Unpack invokes
+    ``on_unpack(list_of_archive_paths)`` and dismisses the overlay; the
+    caller does the actual work.
+
+    Archives whose stem doesn't match any plugin get their own
+    "(no matching plugin)" group so they're still reachable.
     """
 
     def __init__(
@@ -51,7 +60,7 @@ class BsaUnpackOverlay(tk.Frame):
         *,
         mod_name: str,
         mod_dir: Path,
-        on_unpack: Callable[[Path], None],
+        on_unpack: Callable[[list[Path]], None],
         on_close: Callable[[], None],
     ):
         super().__init__(parent, bg=BG_DEEP)
@@ -83,8 +92,20 @@ class BsaUnpackOverlay(tk.Frame):
         toolbar.grid_columnconfigure(1, weight=0)
         toolbar.grid_rowconfigure(0, minsize=42)
 
+        # Pick a title kind based on what's in the mod folder.  If the
+        # mod has both .bsa and .ba2 (rare), fall back to "Archive".
+        groups = self._collect_groups()
+        all_archives = [p for g in groups for p in g["archives"]]
+        suffixes = {p.suffix.lower() for p in all_archives}
+        if suffixes == {".ba2"}:
+            kind_label = "BA2"
+        elif suffixes == {".bsa"}:
+            kind_label = "BSA"
+        else:
+            kind_label = "Archive"
+
         self._title_label = tk.Label(
-            toolbar, text=f"Unpack BSA — {self._mod_name}",
+            toolbar, text=f"Unpack {kind_label} — {self._mod_name}",
             font=FONT_BOLD, fg=TEXT_MAIN, bg=BG_HEADER,
             anchor="w", justify="left",
         )
@@ -96,14 +117,14 @@ class BsaUnpackOverlay(tk.Frame):
             font=FONT_BOLD, command=self._on_close,
         ).grid(row=0, column=1, sticky="ne", padx=(6, 12), pady=5)
 
-        # List of BSAs
+        # Archive list body
         body = tk.Frame(self, bg=BG_DEEP)
         body.grid(row=1, column=0, sticky="nsew", padx=12, pady=12)
         body.grid_columnconfigure(0, weight=1)
         body.grid_rowconfigure(0, weight=1)
 
-        # Scrollable container so a mod with many BSAs (rare but real for
-        # texture-pack splits) doesn't get clipped.
+        # Scrollable container so a mod with many archives (rare but
+        # real for texture-pack splits) doesn't get clipped.
         canvas = tk.Canvas(body, bg=BG_DEEP, highlightthickness=0, bd=0)
         canvas.grid(row=0, column=0, sticky="nsew")
         vsb = tk.Scrollbar(
@@ -124,24 +145,24 @@ class BsaUnpackOverlay(tk.Frame):
             lambda e: canvas.itemconfigure(inner_id, width=e.width),
         )
 
-        bsas = self._collect_bsas()
-        if not bsas:
+        if not groups:
             tk.Label(
                 inner,
-                text="No .bsa files in this mod folder.",
+                text="No archive files in this mod folder.",
                 font=FONT_NORMAL, fg=TEXT_DIM, bg=BG_DEEP,
             ).pack(anchor="w", padx=12, pady=12)
         else:
-            for path, size, file_count in bsas:
-                self._add_row(inner, path, size, file_count)
+            for group in groups:
+                self._add_group_row(inner, group)
 
         # Hint line — wraplength tracks the overlay width so it never
         # pushes content off-screen at narrow window sizes.
         self._hint_label = tk.Label(
             self,
             text=(
-                "Unpacking will extract the archive into this mod's folder, "
-                "delete the .bsa, remove its same-named generated stub plugin, "
+                "Unpacking will extract every archive listed under the "
+                "selected plugin into this mod's folder, delete those "
+                "archives, remove the plugin if it was a generated stub, "
                 "and re-enable the unpacked files in the Mod Files tab."
             ),
             font=FONT_SMALL, fg=TEXT_DIM, bg=BG_DEEP, anchor="w",
@@ -159,38 +180,122 @@ class BsaUnpackOverlay(tk.Frame):
 
     # ------------------------------------------------------------------
 
-    def _collect_bsas(self) -> list[tuple[Path, int, int]]:
-        """Return [(bsa_path, size_bytes, file_count_in_archive), ...]
-        for every .bsa in the mod folder, sorted by name."""
-        rows: list[tuple[Path, int, int]] = []
+    # Suffixes that a same-stem archive can carry while still being
+    # auto-loaded by a plugin.  Stripping these from an archive's stem
+    # gives the "logical" plugin stem.  E.g. ``Foo - Main.ba2`` and
+    # ``Foo - Textures.ba2`` both belong to plugin ``Foo``.
+    _ARCHIVE_SIDECAR_SUFFIXES = (" - Main", " - Textures")
+
+    @classmethod
+    def _archive_plugin_stem(cls, archive_name: str) -> str:
+        """Map an archive filename to its companion plugin's stem.
+
+        ``Foo - Main.ba2`` → ``foo``
+        ``Foo - Textures.ba2`` → ``foo``
+        ``Foo.bsa`` → ``foo``
+        Comparison is case-insensitive (Bethesda paths conventionally are).
+        """
+        stem = Path(archive_name).stem
+        for suffix in cls._ARCHIVE_SIDECAR_SUFFIXES:
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        return stem.lower()
+
+    def _collect_groups(self) -> list[dict]:
+        """Walk the mod folder and group archives by plugin stem.
+
+        Returns a list of group dicts, one per plugin (or one for the
+        orphan-archives bucket), sorted alphabetically.  Each group:
+
+            {
+                "label":       str,        # plugin filename or fallback
+                "is_orphan":   bool,       # True for the "no matching plugin" group
+                "archives":    list[Path], # all matching archives
+                "total_bytes": int,
+                "total_files": int,        # -1 if any archive failed to parse
+            }
+        """
+        archives_by_stem: dict[str, list[Path]] = {}
+        plugin_by_stem: dict[str, Path] = {}
         try:
-            entries = sorted(self._mod_dir.iterdir(), key=lambda p: p.name.lower())
+            entries = list(self._mod_dir.iterdir())
         except OSError:
-            return rows
+            return []
+
         for p in entries:
-            if not p.is_file() or p.suffix.lower() != ".bsa":
+            if not p.is_file():
                 continue
+            ext = p.suffix.lower()
+            if ext in (".bsa", ".ba2"):
+                stem = self._archive_plugin_stem(p.name)
+                archives_by_stem.setdefault(stem, []).append(p)
+            elif ext in (".esp", ".esm", ".esl"):
+                # Last writer wins if a mod ships both Foo.esp and
+                # Foo.esm (rare); pick whichever sorts first so the
+                # behaviour is deterministic.
+                key = p.stem.lower()
+                if key not in plugin_by_stem or p.name < plugin_by_stem[key].name:
+                    plugin_by_stem[key] = p
+
+        # Build groups: every plugin first, then orphans.
+        groups: list[dict] = []
+        seen_stems: set[str] = set()
+        for key in sorted(plugin_by_stem.keys()):
+            plugin = plugin_by_stem[key]
+            archives = sorted(
+                archives_by_stem.get(key, []),
+                key=lambda p: p.name.lower(),
+            )
+            seen_stems.add(key)
+            if not archives:
+                continue  # plugin without any archive — nothing to unpack
+            groups.append(self._build_group(plugin.name, archives, is_orphan=False))
+
+        # Orphan archives — surface them so the user can still unpack
+        # an archive whose plugin lives elsewhere or has been deleted.
+        orphan_archives: list[Path] = []
+        for stem, archs in archives_by_stem.items():
+            if stem in seen_stems:
+                continue
+            orphan_archives.extend(archs)
+        if orphan_archives:
+            orphan_archives.sort(key=lambda p: p.name.lower())
+            groups.append(self._build_group(
+                "(no matching plugin)", orphan_archives, is_orphan=True,
+            ))
+
+        return groups
+
+    def _build_group(
+        self, label: str, archives: list[Path], *, is_orphan: bool,
+    ) -> dict:
+        total_bytes = 0
+        total_files = 0
+        any_unreadable = False
+        for p in archives:
             try:
-                size = p.stat().st_size
+                total_bytes += p.stat().st_size
             except OSError:
-                continue
-            # File count is informational; if the parser can't read the
-            # archive we still want to list it (the user might want to
-            # try unpacking an unfamiliar BSA — and the extractor gives a
-            # clearer error than the reader).
+                any_unreadable = True
             try:
-                file_count = len(read_bsa_file_list(p))
+                total_files += len(read_bsa_file_list(p))
             except Exception:
-                file_count = -1
-            rows.append((p, size, file_count))
-        return rows
+                any_unreadable = True
+        return {
+            "label": label,
+            "is_orphan": is_orphan,
+            "archives": archives,
+            "total_bytes": total_bytes,
+            "total_files": -1 if any_unreadable else total_files,
+        }
 
     # ------------------------------------------------------------------
 
-    def _add_row(self, parent: tk.Widget, path: Path, size: int, file_count: int) -> None:
-        # Grid layout so the Unpack button stays anchored in column 1
-        # at a fixed minsize, while the info column (0) takes the rest
-        # and lets its labels wrap/clip without pushing the button off.
+    def _add_group_row(self, parent: tk.Widget, group: dict) -> None:
+        """Render one plugin row, listing its sibling archives, total
+        size and file count.  Unpacking the row processes every archive
+        in ``group["archives"]`` as a single operation."""
         row = tk.Frame(parent, bg=BG_PANEL, highlightthickness=1,
                        highlightbackground=BORDER)
         row.pack(fill="x", padx=2, pady=4)
@@ -201,16 +306,32 @@ class BsaUnpackOverlay(tk.Frame):
         info.grid(row=0, column=0, sticky="ew", padx=10, pady=8)
         info.grid_columnconfigure(0, weight=1)
 
+        # Plugin name (or "(no matching plugin)") on the top line.
         name_lbl = tk.Label(
-            info, text=path.name,
-            font=FONT_BOLD, fg=TEXT_MAIN, bg=BG_PANEL,
+            info, text=group["label"],
+            font=FONT_BOLD,
+            fg=TEXT_DIM if group["is_orphan"] else TEXT_MAIN,
+            bg=BG_PANEL,
             anchor="w", justify="left",
         )
         name_lbl.grid(row=0, column=0, sticky="ew")
 
-        size_mb = size / (1024 * 1024)
-        if file_count >= 0:
-            sub = f"{file_count} file(s) — {size_mb:.1f} MiB"
+        # Each sibling archive on its own dim sub-line so users can see
+        # exactly which files will be unpacked.
+        archive_labels: list[tk.Label] = []
+        for archive in group["archives"]:
+            arch_lbl = tk.Label(
+                info, text=f"  • {archive.name}",
+                font=FONT_SMALL, fg=TEXT_DIM, bg=BG_PANEL,
+                anchor="w", justify="left",
+            )
+            arch_lbl.grid(sticky="ew")
+            archive_labels.append(arch_lbl)
+
+        # Totals on the bottom line.
+        size_mb = group["total_bytes"] / (1024 * 1024)
+        if group["total_files"] >= 0:
+            sub = f"{group['total_files']} file(s) — {size_mb:.1f} MiB"
         else:
             sub = f"unreadable — {size_mb:.1f} MiB"
         sub_lbl = tk.Label(
@@ -218,25 +339,29 @@ class BsaUnpackOverlay(tk.Frame):
             font=FONT_SMALL, fg=TEXT_DIM, bg=BG_PANEL,
             anchor="w", justify="left",
         )
-        sub_lbl.grid(row=1, column=0, sticky="ew")
+        sub_lbl.grid(sticky="ew")
 
-        # Track row labels so we can update their wraplengths on resize.
+        # Track the wrapping labels (everything in the info column) so
+        # _on_resize can update their wraplengths.
         self._row_labels.append((name_lbl, sub_lbl))
+        for arch_lbl in archive_labels:
+            self._row_labels.append((arch_lbl, arch_lbl))  # same width
 
+        archives = list(group["archives"])
         ctk.CTkButton(
             row, text="Unpack", width=110, height=32,
             font=FONT_BOLD,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             text_color=TEXT_ON_ACCENT,
-            command=lambda p=path: self._handle_unpack(p),
-            state="normal" if file_count != 0 else "disabled",
+            command=lambda paths=archives: self._handle_unpack(paths),
+            state="normal" if archives else "disabled",
         ).grid(row=0, column=1, sticky="e", padx=10, pady=8)
 
-    def _handle_unpack(self, path: Path) -> None:
-        # Hand off to the caller — the overlay's job ends here. Caller is
-        # expected to close us via on_close once it has a progress popup
-        # in flight (or to leave us up if it cancels its own confirm).
-        self._on_unpack(path)
+    def _handle_unpack(self, paths: list[Path]) -> None:
+        # Hand off to the caller — the overlay's job ends here.  Caller
+        # is expected to close us via on_close once it has a progress
+        # popup in flight.
+        self._on_unpack(paths)
 
     # ------------------------------------------------------------------
 

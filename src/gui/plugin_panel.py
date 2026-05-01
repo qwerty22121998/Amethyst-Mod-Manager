@@ -50,6 +50,8 @@ from gui.theme import (
     BTN_INFO_DEEP_HOV,
     BTN_INFO_HOV,
     BTN_CANCEL,
+    RED_BTN,
+    RED_HOV,
     TONE_CYAN,
     STATUS_BADGE_RED,
     STATUS_BADGE_GREEN,
@@ -246,67 +248,103 @@ from gui.plugin_panel_loot import PluginPanelLOOTMixin
 from gui.plugin_panel_userlist_cycle import PluginPanelUserlistCycleMixin
 
 
-class _PackOptionsDialog(ctk.CTkToplevel):
-    """Modal pre-pack confirmation dialog.
+class _PackOptionsDialog(tk.Frame):
+    """In-app pre-pack confirmation overlay.
 
-    Shown by the Pack BSA flow before any work starts. Surfaces the
-    overwrite warning when applicable and offers a "delete loose files"
-    checkbox so users who want a clean archive-only deploy don't have to
-    do it manually.
+    Renders as a full-coverage dim backdrop over a host panel (typically
+    the modlist panel) with a centred card.  The card surfaces the
+    overwrite warning when applicable and offers two optional
+    behaviours:
 
-    Use :meth:`ask` (classmethod) to display the dialog and block until
-    the user picks; returns ``{"delete_loose": bool}`` on confirm or
-    ``None`` on cancel/close.
+      * "Delete loose files after packing" — destructive convenience.
+      * "Separate textures archive" — only shown for BSA; BA2 always
+        splits Main+Textures so the option is hidden there.
+
+    Use :meth:`ask` (classmethod) to display the overlay and block until
+    the user picks; returns ``{"delete_loose": bool, "split_textures":
+    bool}`` on confirm or ``None`` on cancel/close.
+
+    Compared to the previous CTkToplevel implementation, the overlay
+    can't be dragged off-window or hidden behind another app — it sits
+    inside the host panel and is dismissed only by Pack/Cancel/Esc.
     """
 
-    def __init__(self, parent: tk.Misc, *, bsa_filename: str, existing: bool):
-        super().__init__(master=parent, fg_color=BG_PANEL)
-        self._parent_ref = parent
-        self.title("Pack BSA")
-        self.resizable(False, False)
-        self.transient(parent)
-        self.withdraw()
-        self.result: dict | None = None
+    # Visual style — chunky enough to use comfortably on a Steam Deck
+    # touchscreen.  Checkbox cells, button height, and label fonts all
+    # scale together.
+    _CHECKBOX_W = 22
+    _CHECKBOX_H = 22
 
-        # Window layout — single column.
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        bsa_filename: str,
+        existing: bool,
+        kind: str = "bsa",
+    ):
+        super().__init__(parent, bg=BG_DEEP)
+        self._parent_ref = parent
+        self._kind = kind
+        self.result: dict | None = None
+        # Caller blocks on this until the user picks.  Confirm / cancel
+        # set it to True; we use wait_variable so the parent's event
+        # loop keeps spinning (lets the underlying panel render correctly
+        # and lets us catch <Escape> bound on this widget).
+        self._done_var = tk.BooleanVar(self, value=False)
+
+        # The whole frame absorbs clicks so the modlist panel under it
+        # is not interactable while the dialog is up.  We don't dim the
+        # backdrop further because BG_DEEP already contrasts with the
+        # card.
+        self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
+
+        # Centred card.
+        card = tk.Frame(self, bg=BG_PANEL, highlightthickness=1,
+                        highlightbackground=BORDER)
+        card.grid(row=0, column=0)
+        card.grid_columnconfigure(0, weight=1)
 
         # Title band.
         tk.Label(
-            self,
+            card,
             text=f"Pack {bsa_filename}",
             font=(_theme.FONT_FAMILY, _theme.FS12, "bold"),
             fg=TEXT_MAIN, bg=BG_PANEL, anchor="w",
         ).grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
 
-        # Optional overwrite warning.
+        row = 1
         if existing:
             tk.Label(
-                self,
+                card,
                 text=(
                     f"⚠  {bsa_filename} already exists in this mod and will "
                     "be overwritten."
                 ),
                 font=(_theme.FONT_FAMILY, _theme.FS10),
                 fg="#e8a83a", bg=BG_PANEL,
-                anchor="w", justify="left", wraplength=360,
-            ).grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 6))
+                anchor="w", justify="left", wraplength=380,
+            ).grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 6))
+            row += 1
 
         # Delete-loose checkbox.
         self._delete_var = tk.BooleanVar(value=False)
         ctk.CTkCheckBox(
-            self,
+            card,
             text="Delete loose files after packing",
             variable=self._delete_var,
-            font=(_theme.FONT_FAMILY, _theme.FS10),
+            font=(_theme.FONT_FAMILY, _theme.FS11),
             text_color=TEXT_MAIN,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             border_color=BORDER, checkmark_color="white",
-            checkbox_width=16, checkbox_height=16,
-        ).grid(row=2, column=0, sticky="w", padx=16, pady=(8, 4))
+            checkbox_width=self._CHECKBOX_W,
+            checkbox_height=self._CHECKBOX_H,
+        ).grid(row=row, column=0, sticky="w", padx=16, pady=(10, 4))
+        row += 1
 
         tk.Label(
-            self,
+            card,
             text=(
                 "Files that get packed will be removed from the mod folder. "
                 "Files outside the packable filter (plugins, readmes, .bik "
@@ -315,78 +353,109 @@ class _PackOptionsDialog(ctk.CTkToplevel):
             ),
             font=(_theme.FONT_FAMILY, _theme.FS9),
             fg=TEXT_DIM, bg=BG_PANEL,
-            anchor="w", justify="left", wraplength=360,
-        ).grid(row=3, column=0, sticky="ew", padx=(36, 16), pady=(0, 12))
+            anchor="w", justify="left", wraplength=380,
+        ).grid(row=row, column=0, sticky="ew", padx=(40, 16), pady=(0, 14))
+        row += 1
+
+        # Separate-textures checkbox (BSA only).  BA2 always splits
+        # Main+Textures, so showing it there would be confusing.
+        self._split_textures_var = tk.BooleanVar(value=False)
+        if kind == "bsa":
+            ctk.CTkCheckBox(
+                card,
+                text="Separate textures archive",
+                variable=self._split_textures_var,
+                font=(_theme.FONT_FAMILY, _theme.FS11),
+                text_color=TEXT_MAIN,
+                fg_color=ACCENT, hover_color=ACCENT_HOV,
+                border_color=BORDER, checkmark_color="white",
+                checkbox_width=self._CHECKBOX_W,
+                checkbox_height=self._CHECKBOX_H,
+            ).grid(row=row, column=0, sticky="w", padx=16, pady=(2, 4))
+            row += 1
+            tk.Label(
+                card,
+                text=(
+                    "Writes textures to a sibling “… - Textures.bsa” instead "
+                    "of bundling them with the main archive.  Optional for "
+                    "Skyrim / FNV / Oblivion; mostly useful for very large "
+                    "texture packs."
+                ),
+                font=(_theme.FONT_FAMILY, _theme.FS9),
+                fg=TEXT_DIM, bg=BG_PANEL,
+                anchor="w", justify="left", wraplength=380,
+            ).grid(row=row, column=0, sticky="ew", padx=(40, 16), pady=(0, 14))
+            row += 1
 
         # Button row.
-        btn_row = tk.Frame(self, bg=BG_PANEL)
-        btn_row.grid(row=4, column=0, sticky="ew", padx=12, pady=(4, 14))
+        btn_row = tk.Frame(card, bg=BG_PANEL)
+        btn_row.grid(row=row, column=0, sticky="ew", padx=12, pady=(4, 14))
 
         ctk.CTkButton(
-            btn_row, text="Cancel", width=100, height=30,
+            btn_row, text="Cancel", width=110, height=34,
             fg_color="transparent", border_width=1,
             text_color=TEXT_MAIN,
+            font=(_theme.FONT_FAMILY, _theme.FS11),
             command=self._on_cancel,
         ).pack(side="right", padx=(8, 4))
 
         ctk.CTkButton(
-            btn_row, text="Pack", width=100, height=30,
+            btn_row, text="Pack", width=110, height=34,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             text_color=TEXT_ON_ACCENT,
+            font=(_theme.FONT_FAMILY, _theme.FS11),
             command=self._on_confirm,
         ).pack(side="right")
 
+        # Make Esc / Enter work even though we're not a top-level.
         self.bind("<Escape>", lambda e: self._on_cancel())
         self.bind("<Return>", lambda e: self._on_confirm())
-
-        self._center_and_show()
-
-    def _center_and_show(self) -> None:
-        self.update_idletasks()
-        try:
-            top = self._parent_ref.winfo_toplevel()
-            top.update_idletasks()
-            px = top.winfo_rootx()
-            py = top.winfo_rooty()
-            pw = top.winfo_width()
-            ph = top.winfo_height()
-            aw = self.winfo_reqwidth()
-            ah = self.winfo_reqheight()
-            cx = px + (pw - aw) // 2
-            cy = py + (ph - ah) // 2
-            self.geometry(f"+{cx}+{cy}")
-        except Exception:
-            pass
-        self.deiconify()
-        self.lift()
-        try:
-            self.grab_set()
-        except tk.TclError:
-            pass
-        self.focus_force()
+        # Steal keyboard focus so Esc / Enter work without first
+        # clicking inside the card.
+        self.focus_set()
 
     def _on_confirm(self) -> None:
-        self.result = {"delete_loose": bool(self._delete_var.get())}
-        try:
-            self.grab_release()
-        except tk.TclError:
-            pass
-        self.destroy()
+        self.result = {
+            "delete_loose": bool(self._delete_var.get()),
+            "split_textures": bool(self._split_textures_var.get()),
+        }
+        self._done_var.set(True)
 
     def _on_cancel(self) -> None:
         self.result = None
-        try:
-            self.grab_release()
-        except tk.TclError:
-            pass
-        self.destroy()
+        self._done_var.set(True)
 
     @classmethod
-    def ask(cls, parent: tk.Misc, *, bsa_filename: str, existing: bool) -> dict | None:
-        """Show the dialog modally and return the user's choice."""
-        dlg = cls(parent, bsa_filename=bsa_filename, existing=existing)
-        parent.wait_window(dlg)
-        return dlg.result
+    def ask(
+        cls, parent: tk.Misc, *,
+        bsa_filename: str, existing: bool, kind: str = "bsa",
+    ) -> dict | None:
+        """Show the overlay over *parent* (typically the modlist panel)
+        and block until the user clicks Pack or Cancel.
+
+        Returns ``{"delete_loose": bool, "split_textures": bool}`` on
+        confirm or ``None`` on cancel / Escape.
+        """
+        overlay = cls(
+            parent,
+            bsa_filename=bsa_filename,
+            existing=existing,
+            kind=kind,
+        )
+        # Cover the entire host panel.  The card itself is centred via
+        # the overlay's grid, so the dim backdrop fills whatever's left.
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+        # Block until the user picks.  wait_variable spins the parent's
+        # event loop, so the overlay (and the rest of the app) keeps
+        # responding to events while we wait.
+        overlay.wait_variable(overlay._done_var)
+        result = overlay.result
+        try:
+            overlay.destroy()
+        except tk.TclError:
+            pass
+        return result
 
 
 class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
@@ -880,59 +949,80 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         footer.grid(row=2, column=0, columnspan=2, sticky="ew")
         footer.grid_propagate(False)
 
+        # Pack on the left (green = constructive), then Unpack to its
+        # right (red = destructive — it removes archives from the mod).
         self._mf_pack_bsa_btn = ctk.CTkButton(
             footer, text="Pack BSA", width=100, height=24,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV, text_color="white",
             font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
             command=self._on_pack_bsa_click,
             state="disabled",
         )
-        self._mf_pack_bsa_btn.pack(side="right", padx=8, pady=4)
+        self._mf_pack_bsa_btn.pack(side="left", padx=(8, 4), pady=4)
 
         self._mf_unpack_bsa_btn = ctk.CTkButton(
             footer, text="Unpack BSA", width=100, height=24,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_MAIN,
+            fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
             font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
             command=self._on_unpack_bsa_click,
             state="disabled",
         )
-        self._mf_unpack_bsa_btn.pack(side="right", padx=(0, 4), pady=4)
+        self._mf_unpack_bsa_btn.pack(side="left", padx=(0, 4), pady=4)
 
         # Track the open overlay so we can close it from anywhere.
         self._bsa_unpack_overlay = None
 
+    def _archive_kind_for_current_game(self) -> str | None:
+        """Return ``"bsa"`` for games that pack into BSA v104/v105,
+        ``"ba2"`` for games that pack into FO4-family BA2, and ``None``
+        for games that don't support archive packing yet (Starfield,
+        FO76, Morrowind, non-Bethesda).
+
+        Used to drive button labels and pack/unpack dispatch."""
+        if self._game is None:
+            return None
+        from Utils.ba2_writer import ba2_version_for_game
+        from Utils.bsa_writer import bsa_version_for_game
+        game_id = getattr(self._game, "game_id", None) or type(self._game).__name__
+        archive_exts = getattr(self._game, "archive_extensions", None) or frozenset()
+        if bsa_version_for_game(game_id) is not None and ".bsa" in archive_exts:
+            return "bsa"
+        if ba2_version_for_game(game_id) is not None and ".ba2" in archive_exts:
+            return "ba2"
+        return None
+
     def _update_pack_bsa_button_state(self) -> None:
-        """Enable Pack/Unpack BSA buttons only when a normal mod is selected
-        and the current game uses BSA archives. Hides them entirely on
-        non-BSA games. Unpack is further gated on the mod containing at
-        least one .bsa file."""
+        """Enable Pack/Unpack archive buttons only when a normal mod is
+        selected and the current game uses BSA *or* BA2 archives. Hides
+        them entirely on games we can't pack for. Button labels switch
+        between "Pack BSA" / "Pack BA2" depending on the active game.
+        Unpack is further gated on the mod containing at least one
+        archive of the matching kind."""
         pack_btn = getattr(self, "_mf_pack_bsa_btn", None)
         unpack_btn = getattr(self, "_mf_unpack_bsa_btn", None)
         if pack_btn is None or unpack_btn is None:
             return
-        from Utils.bsa_writer import bsa_version_for_game
-        game_id = getattr(self._game, "game_id", None) if self._game else None
-        if not game_id and self._game is not None:
-            game_id = type(self._game).__name__
-        version = bsa_version_for_game(game_id)
-        archive_exts = getattr(self._game, "archive_extensions", None) if self._game else None
-        bsa_supported = version is not None and archive_exts is not None and ".bsa" in archive_exts
-        if not bsa_supported:
+        kind = self._archive_kind_for_current_game()
+        if kind is None:
             for btn in (pack_btn, unpack_btn):
                 try:
                     btn.pack_forget()
                 except Exception:
                     pass
             return
-        # Game supports BSA — make sure both buttons are visible.
+        # Game supports archive packing — make sure both buttons are
+        # visible and labelled for the right kind.
+        upper = kind.upper()
+        pack_btn.configure(text=f"Pack {upper}")
+        unpack_btn.configure(text=f"Unpack {upper}")
         try:
             pack_btn.pack_info()
         except Exception:
-            pack_btn.pack(side="right", padx=8, pady=4)
+            pack_btn.pack(side="left", padx=(8, 4), pady=4)
         try:
             unpack_btn.pack_info()
         except Exception:
-            unpack_btn.pack(side="right", padx=(0, 4), pady=4)
+            unpack_btn.pack(side="left", padx=(0, 4), pady=4)
         mod_name = self._mod_files_mod_name
         is_normal_mod = (
             mod_name is not None
@@ -941,18 +1031,20 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         )
         pack_btn.configure(state="normal" if is_normal_mod else "disabled")
 
-        # Unpack: also requires the mod to have at least one .bsa.
-        has_bsa = False
+        # Unpack: also requires the mod to have at least one archive of
+        # the matching kind on disk.
+        archive_suffix = "." + kind
+        has_archive = False
         if is_normal_mod and self._staging_root is not None:
             mod_dir = self._staging_root / mod_name
             try:
-                has_bsa = any(
-                    p.is_file() and p.suffix.lower() == ".bsa"
+                has_archive = any(
+                    p.is_file() and p.suffix.lower() == archive_suffix
                     for p in mod_dir.iterdir()
                 )
             except OSError:
-                has_bsa = False
-        unpack_btn.configure(state="normal" if has_bsa else "disabled")
+                has_archive = False
+        unpack_btn.configure(state="normal" if has_archive else "disabled")
 
     def _is_current_profile_deployed(self) -> bool:
         """Return True iff the profile this Mod Files tab is showing is the
@@ -979,6 +1071,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         """Pack the currently-selected mod's loose files into a BSA in that
         mod's folder. Runs on a background thread with a progress popup."""
         import threading
+        from Utils.ba2_writer import Ba2WriteError, write_ba2, write_ba2_textures
         from Utils.bsa_writer import (
             BsaWriteError, bsa_version_for_game, write_bsa, write_stub_plugin,
         )
@@ -990,54 +1083,105 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         if self._staging_root is None or self._game is None:
             return
 
+        # Pick BSA or BA2 based on the active game.  Returns None for
+        # games we can't pack for (Starfield, FO76, Morrowind, …).
+        kind = self._archive_kind_for_current_game()
+        if kind is None:
+            return
+        kind_upper = kind.upper()
+
         # Refuse to mutate mod contents while the profile is deployed:
         # the existing hard-links in game_root would become stale and
         # the next Restore would mis-classify them as runtime files.
         if self._is_current_profile_deployed():
             CTkAlert(
-                state="warning", title="Pack BSA",
+                state="warning", title=f"Pack {kind_upper}",
                 body_text=(
                     "This profile is currently deployed.\n\n"
-                    "Run Restore first, then pack the BSA."
+                    f"Run Restore first, then pack the {kind_upper}."
                 ),
                 btn1="OK", btn2="", parent=self.winfo_toplevel(),
             )
             return
 
         game_id = getattr(self._game, "game_id", None) or type(self._game).__name__
-        version = bsa_version_for_game(game_id)
-        if version is None:
-            return
+        # BSA path needs the format version (104 vs 105); BA2 currently
+        # always emits v1 GNRL so we don't care about the value.
+        bsa_version = bsa_version_for_game(game_id) if kind == "bsa" else None
 
         mod_dir = self._staging_root / mod_name
         if not mod_dir.is_dir():
             CTkAlert(
-                state="warning", title="Pack BSA",
+                state="warning", title=f"Pack {kind_upper}",
                 body_text=f"Mod folder not found:\n{mod_dir}",
                 btn1="OK", btn2="", parent=self.winfo_toplevel(),
             )
             return
 
-        bsa_path = mod_dir / f"{mod_name}.bsa"
+        archive_suffix = "." + kind
+        # FO4 / FO4 VR's auto-loader only mounts a BA2 when its filename
+        # follows the "<plugin_stem> - Main.ba2" / " - Textures.ba2"
+        # convention.  Vanilla and every community mod ships with that
+        # naming; <stem>.ba2 silently doesn't load.  Skyrim's BSA loader
+        # is more permissive — <stem>.bsa works on its own — so we keep
+        # the bare name there.
+        #
+        # On FO4 we always write the GNRL "<stem> - Main.ba2", and if
+        # the mod has any .dds files we also write a sibling DX10
+        # "<stem> - Textures.ba2".  We don't know yet whether the mod
+        # contains textures, so we prepare both paths and let the
+        # writer raise "no DX10-eligible texture files found" when
+        # there's nothing to do.
+        # On FO4 we always write the GNRL "<stem> - Main.ba2", and if
+        # the mod has any .dds files we also write a sibling DX10
+        # "<stem> - Textures.ba2".  Skyrim's BSA loader is more
+        # permissive — <stem>.bsa works on its own — so the textures
+        # sibling there is OPTIONAL: a checkbox in _PackOptionsDialog
+        # below decides.
+        if kind == "ba2":
+            archive_path = mod_dir / f"{mod_name} - Main.ba2"
+            # archive_textures_path is set unconditionally for BA2; the
+            # writer drops it if the mod has no DDS files.
+            archive_textures_path: Path | None = mod_dir / f"{mod_name} - Textures.ba2"
+        else:
+            archive_path = mod_dir / f"{mod_name}{archive_suffix}"
+            archive_textures_path = None  # may be set after the dialog
         # Show the options dialog: confirms the pack, surfaces the
         # overwrite warning if applicable, and lets the user opt into
-        # deleting the loose files that get packed.  Returns None on
-        # cancel.
+        # deleting the loose files that get packed and (BSA only) the
+        # split-textures sibling.  Returns None on cancel.
+        existing_any = archive_path.exists() or (
+            archive_textures_path is not None and archive_textures_path.exists()
+        )
+        # Host the overlay on the modlist panel so it sits over the
+        # left-hand panel (where the user just clicked Pack BSA from
+        # the modlist's adjacent Mod Files tab).  Falling back to the
+        # plugin panel keeps the overlay in-app even if the modlist
+        # panel hasn't been wired up for some reason.
+        overlay_host = (
+            getattr(self.winfo_toplevel(), "_mod_panel", None) or self
+        )
         opts = _PackOptionsDialog.ask(
-            self.winfo_toplevel(),
-            bsa_filename=bsa_path.name,
-            existing=bsa_path.exists(),
+            overlay_host,
+            bsa_filename=archive_path.name,
+            existing=existing_any,
+            kind=kind,
         )
         if opts is None:
             return
         delete_loose: bool = opts["delete_loose"]
+        split_textures: bool = opts.get("split_textures", False)
+        # For BSA, only allocate the textures sibling path if the user
+        # ticked the "Separate textures archive" checkbox.
+        if kind == "bsa" and split_textures:
+            archive_textures_path = mod_dir / f"{mod_name} - Textures.bsa"
 
-        # A BSA only auto-loads if a same-named plugin sits in the load
-        # order. If the mod already ships a real same-stem plugin (.esp/
-        # .esm/.esl) we leave it alone; otherwise we stamp out a minimal
-        # stub. A previously-generated stub is replaced — its only purpose
-        # is to be the trigger file, and the format may have evolved
-        # between packs.
+        # An archive only auto-loads if a same-named plugin sits in the
+        # load order.  If the mod already ships a real same-stem plugin
+        # (.esp/.esm/.esl) we leave it alone; otherwise we stamp out a
+        # minimal stub.  A previously-generated stub is replaced — its
+        # only purpose is to be the trigger file, and the format may
+        # have evolved between packs.
         from Utils.bsa_writer import is_our_stub_plugin
         existing_plugin = next(
             (
@@ -1058,38 +1202,41 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
 
         popup = CTkProgressPopup(
             self.winfo_toplevel(),
-            title="Pack BSA",
+            title=f"Pack {kind_upper}",
             label=f"Packing {mod_name}…",
             message="Scanning files…",
         )
 
+        # Result shape from the worker:
+        #   ("ok", main_count, main_size, tex_count, tex_size, all_packed_keys)
+        # tex_count == 0 means no textures archive was written.
         def _on_done(
-            result: tuple[int, int, list[str]] | None,
+            result: tuple | None,
             error: str | None,
         ) -> None:
             if popup.winfo_exists():
                 popup.close_progress_popup()
             if error is not None:
                 CTkAlert(
-                    state="warning", title="Pack BSA failed",
+                    state="warning", title=f"Pack {kind_upper} failed",
                     body_text=error, btn1="OK", btn2="",
                     parent=self.winfo_toplevel(),
                 )
                 return
             assert result is not None
-            count, size, packed_keys = result
+            main_count, main_size, tex_count, tex_size, packed_keys = result
             # Either physically delete the loose files, or just mark them
             # disabled in the Mod Files tab so deploy skips them.  Both
-            # outcomes mean only the .bsa reaches the game's Data folder;
-            # delete is destructive, disable is reversible.
+            # outcomes mean only the archive reaches the game's Data
+            # folder; delete is destructive, disable is reversible.
             deleted_count = 0
             if delete_loose:
                 deleted_count = self._delete_loose_files(mod_dir, packed_keys)
             else:
                 self._auto_disable_packed_files(mod_name, packed_keys)
-            # Trigger a filemap rebuild — the new .bsa needs to enter the
-            # mod-index cache so conflict detection picks it up, and the
-            # auto-disable / delete changed what's on disk.
+            # Trigger a filemap rebuild — the new archive needs to enter
+            # the mod-index cache so conflict detection picks it up, and
+            # the auto-disable / delete changed what's on disk.
             mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
             if mod_panel is not None:
                 try:
@@ -1097,8 +1244,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                     mod_panel._rebuild_filemap()
                 except Exception:
                     pass
-            # Re-render the Mod Files tree so the new .bsa shows up and
-            # the auto-disabled / removed rows reflect the new state.
+            # Re-render the Mod Files tree so the new archive shows up
+            # and the auto-disabled / removed rows reflect the new state.
             try:
                 self.show_mod_files(mod_name)
             except Exception:
@@ -1112,12 +1259,22 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 f"\n\nDeleted {deleted_count} loose file(s) from the mod folder."
                 if delete_loose else ""
             )
+            # Build the success body — one line per archive emitted.
+            lines = []
+            if main_count > 0:
+                lines.append(
+                    f"Packed {main_count} file(s) into {archive_path.name} "
+                    f"({main_size / (1024 * 1024):.1f} MiB)."
+                )
+            if tex_count > 0 and archive_textures_path is not None:
+                lines.append(
+                    f"Packed {tex_count} texture file(s) into "
+                    f"{archive_textures_path.name} "
+                    f"({tex_size / (1024 * 1024):.1f} MiB)."
+                )
             CTkAlert(
-                state="info", title="Pack BSA",
-                body_text=(
-                    f"Packed {count} file(s) into {bsa_path.name} "
-                    f"({size / (1024 * 1024):.1f} MiB)." + stub_msg + delete_msg
-                ),
+                state="info", title=f"Pack {kind_upper}",
+                body_text="\n".join(lines) + stub_msg + delete_msg,
                 btn1="OK", btn2="",
                 parent=self.winfo_toplevel(),
             )
@@ -1138,18 +1295,108 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             def _cancel() -> bool:
                 return bool(getattr(popup, "cancelled", False))
 
+            main_count = 0
+            main_size = 0
+            tex_count = 0
+            tex_size = 0
+            all_packed: list[str] = []
+
             try:
-                result = write_bsa(
-                    bsa_path, mod_dir,
-                    version=version,
-                    compress=True,
-                    excluded_keys=excluded_now,
-                    progress=_progress,
-                    cancel=_cancel,
-                )
+                if kind == "ba2":
+                    # GNRL pass — everything except .dds.  May raise
+                    # "no packable files found" if the mod is *only*
+                    # textures; we treat that as non-fatal and continue
+                    # to the textures pass.
+                    try:
+                        main_count, main_size, packed_main = write_ba2(
+                            archive_path, mod_dir,
+                            game_id=game_id,
+                            compress=True,
+                            excluded_keys=excluded_now,
+                            exclude_textures=True,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                        all_packed.extend(packed_main)
+                    except Ba2WriteError as exc:
+                        if "no packable" not in str(exc).lower():
+                            raise
+                    # DX10 pass — only .dds files.  May raise
+                    # "no packable texture files found" / "no DX10-
+                    # eligible" if the mod has no DDS or only legacy
+                    # (non-DX10) DDS.  Non-fatal.
+                    try:
+                        tex_count, tex_size, packed_tex = write_ba2_textures(
+                            archive_textures_path, mod_dir,
+                            game_id=game_id,
+                            compress=True,
+                            excluded_keys=excluded_now,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                        all_packed.extend(packed_tex)
+                    except Ba2WriteError as exc:
+                        msg = str(exc).lower()
+                        if "no packable" not in msg and "no dx10" not in msg:
+                            raise
+                    if main_count == 0 and tex_count == 0:
+                        raise Ba2WriteError("no packable files found")
+                else:
+                    # BSA path.  When the user opted into the split
+                    # ("Separate textures archive"), we run two passes:
+                    # the base archive excludes textures, the sibling
+                    # contains only textures.  Either pass can raise
+                    # "no packable files found" without aborting the
+                    # other (a textures-only mod still produces a
+                    # ` - Textures.bsa`; a no-textures mod still
+                    # produces the base BSA).
+                    if split_textures and archive_textures_path is not None:
+                        try:
+                            main_count, main_size, packed_main = write_bsa(
+                                archive_path, mod_dir,
+                                version=bsa_version,
+                                game_id=game_id,
+                                compress=True,
+                                excluded_keys=excluded_now,
+                                texture_mode="exclude",
+                                progress=_progress,
+                                cancel=_cancel,
+                            )
+                            all_packed.extend(packed_main)
+                        except BsaWriteError as exc:
+                            if "no packable" not in str(exc).lower():
+                                raise
+                        try:
+                            tex_count, tex_size, packed_tex = write_bsa(
+                                archive_textures_path, mod_dir,
+                                version=bsa_version,
+                                game_id=game_id,
+                                compress=True,
+                                excluded_keys=excluded_now,
+                                texture_mode="only",
+                                progress=_progress,
+                                cancel=_cancel,
+                            )
+                            all_packed.extend(packed_tex)
+                        except BsaWriteError as exc:
+                            if "no packable" not in str(exc).lower():
+                                raise
+                        if main_count == 0 and tex_count == 0:
+                            raise BsaWriteError("no packable files found")
+                    else:
+                        main_count, main_size, packed_main = write_bsa(
+                            archive_path, mod_dir,
+                            version=bsa_version,
+                            game_id=game_id,
+                            compress=True,
+                            excluded_keys=excluded_now,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                        all_packed.extend(packed_main)
                 if stub_plugin_path is not None:
                     write_stub_plugin(stub_plugin_path, game_id=game_id)
-            except BsaWriteError as exc:
+            except (BsaWriteError, Ba2WriteError) as exc:
                 msg = str(exc)
                 if msg == "cancelled":
                     self.after(0, lambda: popup.close_progress_popup() if popup.winfo_exists() else None)
@@ -1159,12 +1406,17 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             except Exception as exc:  # last-resort safety net
                 self.after(0, lambda m=str(exc): _on_done(None, m))
                 return
+            result = (main_count, main_size, tex_count, tex_size, all_packed)
             self.after(0, lambda r=result: _on_done(r, None))
 
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_unpack_bsa_click(self) -> None:
-        """Open the Unpack BSA overlay over the plugin panel."""
+        """Open the Unpack archive overlay over the plugin panel.
+
+        Despite the legacy method / attribute names ('bsa'), this drives
+        unpacking for both BSA and BA2 archives — dispatch happens in
+        :meth:`_do_unpack_bsa` based on the chosen file's suffix."""
         from gui.bsa_unpack_overlay import BsaUnpackOverlay
         from gui.ctk_components import CTkAlert
 
@@ -1177,15 +1429,17 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         if not mod_dir.is_dir():
             return
 
-        # Same gate as pack: deleting the BSA + plugin from the mod
+        # Same gate as pack: deleting the archive + plugin from the mod
         # folder while the profile is deployed leaves stale hard-links
         # in game_root that the next Restore would misroute to overwrite.
+        kind = self._archive_kind_for_current_game()
+        kind_upper = kind.upper() if kind else "Archive"
         if self._is_current_profile_deployed():
             CTkAlert(
-                state="warning", title="Unpack BSA",
+                state="warning", title=f"Unpack {kind_upper}",
                 body_text=(
                     "This profile is currently deployed.\n\n"
-                    "Run Restore first, then unpack the BSA."
+                    f"Run Restore first, then unpack the {kind_upper}."
                 ),
                 btn1="OK", btn2="", parent=self.winfo_toplevel(),
             )
@@ -1213,18 +1467,28 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 pass
             self._bsa_unpack_overlay = None
 
-    def _do_unpack_bsa(self, bsa_path: Path) -> None:
-        """Extract *bsa_path* into its mod folder, delete the BSA + stub
-        plugin, clear the auto-disabled exclusions for the unpacked rel_keys,
-        rebuild the filemap, refresh the Mod Files tab.
+    def _do_unpack_bsa(self, archive_paths: list[Path]) -> None:
+        """Extract every archive in *archive_paths* into the mod folder
+        as a single operation, then delete each archive, remove the
+        same-stem stub plugin if it's one we generated, clear
+        ``excluded_mod_files`` for the union of unpacked rel_keys,
+        rebuild the filemap and refresh the Mod Files tab.
 
-        Runs on a background thread with a progress popup so a multi-GB
-        archive doesn't freeze the UI."""
+        *archive_paths* always shares a single plugin stem (the overlay
+        groups by it); there's only one stub plugin to consider per
+        invocation.
+
+        Runs on a background thread with one shared progress popup so a
+        multi-archive plugin (e.g. ``- Main.ba2`` + ``- Textures.ba2``)
+        looks like one operation to the user."""
         import threading
+        from Utils.ba2_extract import Ba2ExtractError, extract_ba2
         from Utils.bsa_extract import BsaExtractError, extract_bsa
         from Utils.bsa_writer import is_our_stub_plugin
         from gui.ctk_components import CTkAlert, CTkProgressPopup
 
+        if not archive_paths:
+            return
         mod_name = self._mod_files_mod_name
         if not mod_name or self._staging_root is None:
             return
@@ -1234,10 +1498,34 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
 
         self._close_bsa_unpack_overlay()
 
+        # Determine the plugin stem these archives share, by stripping
+        # the FO4 ` - Main` / ` - Textures` sidecar suffixes.  All paths
+        # in *archive_paths* should resolve to the same stem (the
+        # overlay grouped them); we trust the first one.
+        first = archive_paths[0]
+        archive_stem = first.stem
+        for suffix in (" - Main", " - Textures"):
+            if archive_stem.endswith(suffix):
+                archive_stem = archive_stem[: -len(suffix)]
+                break
+
+        # Determine whether this is a BSA or BA2 group for dialog text.
+        suffixes = {p.suffix.lower() for p in archive_paths}
+        if suffixes == {".ba2"}:
+            kind_upper = "BA2"
+        elif suffixes == {".bsa"}:
+            kind_upper = "BSA"
+        else:
+            kind_upper = "Archive"
+
+        popup_label = (
+            f"Unpacking {first.name}…" if len(archive_paths) == 1
+            else f"Unpacking {len(archive_paths)} archives for {archive_stem}…"
+        )
         popup = CTkProgressPopup(
             self.winfo_toplevel(),
-            title="Unpack BSA",
-            label=f"Unpacking {bsa_path.name}…",
+            title=f"Unpack {kind_upper}",
+            label=popup_label,
             message="Reading archive…",
         )
 
@@ -1249,42 +1537,47 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 popup.close_progress_popup()
             if error is not None:
                 CTkAlert(
-                    state="warning", title="Unpack BSA failed",
+                    state="warning", title=f"Unpack {kind_upper} failed",
                     body_text=error, btn1="OK", btn2="",
                     parent=self.winfo_toplevel(),
                 )
                 return
             assert result is not None
-            count, written_rels = result
+            total_count, all_written_rels = result
 
-            # Delete the BSA itself.
-            stub_msg = ""
-            try:
-                bsa_path.unlink()
-            except OSError as exc:
-                self._log(f"Unpack BSA: could not delete {bsa_path.name}: {exc}")
+            # Delete every archive we successfully extracted.
+            for ap in archive_paths:
+                try:
+                    ap.unlink()
+                except OSError as exc:
+                    self._log(
+                        f"Unpack {kind_upper}: could not delete {ap.name}: {exc}"
+                    )
 
-            # Delete the same-stem stub plugin if it's one we generated
+            # Delete the shared stub plugin if it's one we generated
             # (don't touch a real authored plugin).
-            stub = mod_dir / f"{bsa_path.stem}.esp"
+            stub = mod_dir / f"{archive_stem}.esp"
+            stub_msg = ""
             if stub.is_file() and is_our_stub_plugin(stub):
                 try:
                     stub.unlink()
                     stub_msg = f"\n\nRemoved generated stub {stub.name}."
                 except OSError as exc:
-                    self._log(f"Unpack BSA: could not delete {stub.name}: {exc}")
+                    self._log(
+                        f"Unpack {kind_upper}: could not delete {stub.name}: {exc}"
+                    )
             elif stub.is_file():
                 stub_msg = (
-                    f"\n\nLeft {stub.name} in place — it doesn't look like one "
-                    "of our generated stubs."
+                    f"\n\nLeft {stub.name} in place — it doesn't look like "
+                    "one of our generated stubs."
                 )
 
             # Clear those rel_keys from excluded_mod_files so the freshly
             # unpacked loose files show as enabled in the Mod Files tab.
-            self._clear_excluded_for_unpack(mod_name, written_rels)
+            self._clear_excluded_for_unpack(mod_name, all_written_rels)
 
             # Rebuild filemap so deploy picks up the new loose files
-            # (and forgets the now-deleted BSA).
+            # (and forgets the now-deleted archives).
             mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
             if mod_panel is not None:
                 try:
@@ -1293,45 +1586,79 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 except Exception:
                     pass
 
-            # Re-render the tab.
             try:
                 self.show_mod_files(mod_name)
             except Exception:
                 pass
 
+            archives_label = (
+                archive_paths[0].name if len(archive_paths) == 1
+                else f"{len(archive_paths)} archives"
+            )
             CTkAlert(
-                state="info", title="Unpack BSA",
+                state="info", title=f"Unpack {kind_upper}",
                 body_text=(
-                    f"Unpacked {count} file(s) from {bsa_path.name} into "
-                    f"the mod folder." + stub_msg
+                    f"Unpacked {total_count} file(s) from {archives_label} "
+                    f"into the mod folder." + stub_msg
                 ),
                 btn1="OK", btn2="",
                 parent=self.winfo_toplevel(),
             )
 
         def _worker() -> None:
-            def _progress(done: int, total: int, current: str) -> None:
-                def _ui() -> None:
-                    if not popup.winfo_exists():
-                        return
-                    popup.update_progress(done / max(total, 1))
-                    popup.update_message(f"{done} / {total}  —  {current[-50:]}")
-                try:
-                    self.after(0, _ui)
-                except Exception:
-                    pass
-
             def _cancel() -> bool:
                 return bool(getattr(popup, "cancelled", False))
 
+            total_count = 0
+            all_written: list[str] = []
+
             try:
-                count, written = extract_bsa(
-                    bsa_path, mod_dir,
-                    overwrite=True,
-                    progress=_progress,
-                    cancel=_cancel,
-                )
-            except BsaExtractError as exc:
+                # Loop through every archive in the group.  Progress for
+                # each is independent (per-archive %, with the popup
+                # label updated to show which one is in flight).
+                for i, ap in enumerate(archive_paths):
+                    if _cancel():
+                        self.after(0, lambda: popup.close_progress_popup() if popup.winfo_exists() else None)
+                        return
+                    label_text = (
+                        f"Unpacking {ap.name}"
+                        if len(archive_paths) == 1
+                        else f"Unpacking {ap.name} ({i + 1} / {len(archive_paths)})"
+                    )
+                    self.after(0, lambda lbl=label_text: popup.update_label(lbl) if popup.winfo_exists() else None)
+
+                    def _progress(done: int, total: int, current: str,
+                                  _ap=ap) -> None:
+                        def _ui() -> None:
+                            if not popup.winfo_exists():
+                                return
+                            popup.update_progress(done / max(total, 1))
+                            popup.update_message(
+                                f"{done} / {total}  —  {current[-50:]}"
+                            )
+                        try:
+                            self.after(0, _ui)
+                        except Exception:
+                            pass
+
+                    is_ba2 = ap.suffix.lower() == ".ba2"
+                    if is_ba2:
+                        count, written = extract_ba2(
+                            ap, mod_dir,
+                            overwrite=True,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                    else:
+                        count, written = extract_bsa(
+                            ap, mod_dir,
+                            overwrite=True,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                    total_count += count
+                    all_written.extend(written)
+            except (BsaExtractError, Ba2ExtractError) as exc:
                 msg = str(exc)
                 if "cancel" in msg.lower():
                     self.after(
@@ -1345,7 +1672,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             except Exception as exc:
                 self.after(0, lambda m=str(exc): _on_done(None, m))
                 return
-            self.after(0, lambda r=(count, written): _on_done(r, None))
+            self.after(0, lambda r=(total_count, all_written): _on_done(r, None))
 
         threading.Thread(target=_worker, daemon=True).start()
 

@@ -258,10 +258,7 @@ def _extract(
         if not overwrite and out_path.exists():
             # Skip silently — caller chose not to clobber.
             if progress is not None:
-                try:
-                    progress(done, total, rel)
-                except Exception:
-                    pass
+                progress(done, total, rel)
             continue
         out_path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic-ish write: temp file + rename.  We don't cross-link with
@@ -273,9 +270,6 @@ def _extract(
         written.append(rel)
 
         if progress is not None:
-            try:
-                progress(done, total, rel)
-            except Exception:
-                pass
+            progress(done, total, rel)
 
     return len(written), written

@@ -71,67 +71,20 @@ class BsaWriteError(Exception):
     behind on the destination path; a stale .bsa.tmp may remain on disk."""
 
 
-# ---------------------------------------------------------------------------
-# Filter — what gets packed vs. left loose.
-#
-# Derived from CAO/bethutil behaviour: plugins, nested archives, readmes,
-# tool configs, executables, dotfiles, and known mod-manager metadata files
-# are excluded. Everything else is fair game.
-# ---------------------------------------------------------------------------
+# Re-export for callers importing Utils.bsa_writer.is_packable.
+from Utils.archive_rules import is_packable  # noqa: F401
 
-_PACKABLE_EXCLUDE_EXT: frozenset[str] = frozenset({
-    # Plugins — must remain loose so plugins.txt loads them.
-    ".esp", ".esl", ".esm",
-    # Nested archives — game cannot mount BSAs inside BSAs.
-    ".bsa", ".ba2",
-    # Bink videos — the Bethesda engine streams these straight from disk
-    # via its Bink decoder; they are not loadable from inside a BSA.
-    # Packing them is harmless to the game but bloats the archive (the
-    # already-encoded data also doesn't compress).
-    ".bik",
-    # Document formats Skyrim never reads.  Note ".txt" is NOT here:
-    # interface translations, animation manifests, and SWF configs all
-    # ship inside vanilla BSAs as .txt under interface/, meshes/, etc.
-    # Root-level readme.txt is dropped anyway by the "no root files"
-    # rule in _collect_files (BSA format requires every file under a
-    # folder), so this can't accidentally pack a top-level readme.
-    ".md", ".rtf", ".pdf", ".docx",
-    # Tool configs.  Surveying every BSA in the user's mod library
-    # found zero .json/.yaml/.toml entries — engine reads none of them.
-    ".json", ".yaml", ".yml", ".toml",
-    # Source archives the user forgot to delete.
-    ".7z", ".zip", ".rar",
-    # Executables & shortcuts.  SKSE plugins (.dll) MUST be loose — the
-    # script extender refuses to load DLLs from inside a BSA.
-    ".lnk", ".url", ".exe", ".dll", ".bat", ".cmd", ".sh",
-})
-
-_PACKABLE_EXCLUDE_NAME: frozenset[str] = frozenset({
-    "meta.ini", "info.xml", "modinfo.json", "mod.json",
-})
-
+# Per-extension "do not compress" list — kept here because it drives
+# ``write_bsa``'s compression-bit decision and is independent of the
+# packable-or-not question (an .ogg under sound/ IS packable but should
+# not be re-compressed).  Superset of bethutil's incompressible-set
+# extension list.
 _INCOMPRESSIBLE_EXT: frozenset[str] = frozenset({
     ".wav", ".mp3", ".ogg", ".flac", ".xwm",
     ".mp4", ".bk2",
     ".fuz", ".lip",
     ".dlstrings", ".ilstrings", ".strings",
 })
-
-
-def is_packable(rel_path: str) -> bool:
-    """Return True if *rel_path* (forward-slash, any case) should go into
-    a BSA produced by ``write_bsa``."""
-    name = rel_path.rsplit("/", 1)[-1]
-    if not name or name.startswith("."):
-        return False
-    lower = name.lower()
-    if lower in _PACKABLE_EXCLUDE_NAME:
-        return False
-    dot = lower.rfind(".")
-    ext = lower[dot:] if dot >= 0 else ""
-    if ext in _PACKABLE_EXCLUDE_EXT:
-        return False
-    return True
 
 
 def _is_incompressible(name_lower: str) -> bool:
@@ -216,6 +169,8 @@ _HEDR_VERSION: dict[str, float] = {
     "skyrimvr":     1.7,
     "enderal":      0.94,
     "enderalse":    1.7,
+    "Fallout4":     0.95,    # FO4 / FO4 VR / FO4 Next-Gen all use 0.95
+    "Fallout4VR":   0.95,
 }
 
 # Per-game TES4 record-header internal version (uint16 at offset 20). xEdit
@@ -230,6 +185,8 @@ _INTERNAL_VERSION: dict[str, int] = {
     "skyrimvr":     44,
     "enderal":      43,
     "enderalse":    44,
+    "Fallout4":     131,     # FO4 / FO4 VR
+    "Fallout4VR":   131,
 }
 
 # ESL flag — only meaningful for engines that support light masters.
@@ -237,6 +194,7 @@ _INTERNAL_VERSION: dict[str, int] = {
 _TES4_FLAG_ESL = 0x0200
 _ESL_CAPABLE_GAMES: frozenset[str] = frozenset({
     "skyrim_se", "skyrimvr", "enderalse",
+    "Fallout4", "Fallout4VR",     # FO4 introduced the ESL flag
 })
 
 
@@ -360,6 +318,17 @@ def write_stub_plugin(
 # ---------------------------------------------------------------------------
 
 
+# Per-extension "magic OR" applied to hash1 — verified against vanilla
+# BSAs.  Same table is consumed by the self-test as a known-good
+# reference; if you change a value, update both places.
+TES4_EXT_MAGIC: dict[bytes, int] = {
+    b".kf":  0x80,
+    b".nif": 0xA000,
+    b".dds": 0x8080,
+    b".wav": 0x80000000,
+}
+
+
 def _tes4_hash(name: bytes) -> int:
     """Hash a single name (cp1252 bytes, lowercase, no leading slash)."""
     if not name:
@@ -386,15 +355,7 @@ def _tes4_hash(name: bytes) -> int:
         | (n << 16)
         | (root[0] << 24)
     ) & 0xFFFFFFFF
-
-    if ext == b".kf":
-        h1 |= 0x80
-    elif ext == b".nif":
-        h1 |= 0xA000
-    elif ext == b".dds":
-        h1 |= 0x8080
-    elif ext == b".wav":
-        h1 |= 0x80000000
+    h1 |= TES4_EXT_MAGIC.get(ext, 0)
 
     h2 = 0
     if n > 3:
@@ -451,21 +412,27 @@ _FILE_SIZE_MASK       = 0x3FFFFFFF
 def _collect_files(
     source_dir: Path,
     excluded_keys: frozenset[str] = frozenset(),
+    game_id: str | None = None,
+    texture_mode: str = "all",
 ) -> tuple[dict[str, list[tuple[str, Path]]], list[str]]:
-    """Walk *source_dir* and return a mapping of:
+    """Walk *source_dir* and return:
 
-        backslash_folder_path_lowercase -> [(file_name_lower, abs_path), ...]
+        ({backslash_folder_lower: [(file_lower, abs_path), ...]},
+         [rel_key_lower_fwd_slash, ...])
 
-    Plus a flat list of every packable rel_key (lowercase forward-slash
-    relative path) that *was* included, so callers can persist e.g. an
-    auto-disable list once the pack succeeds.
-
-    Only files passing ``is_packable`` are returned. Files whose rel_key
-    is in *excluded_keys* (the Mod Files tab's "disable" list) are also
-    skipped. Files at the root of the mod folder (no parent directory)
-    cannot be stored in BSA — every file must live under at least one
-    folder — so they are dropped with no error.
+    Files passing ``is_packable(rel_key, game_id)`` are kept; entries
+    in *excluded_keys* and root-level files (BSA requires every file
+    under a folder) are dropped silently.  ``texture_mode`` further
+    filters the allowlist hits: ``"all"`` keeps everything, ``"exclude"``
+    drops textures, ``"only"`` keeps only textures (see
+    ``archive_rules.texture_extensions_for_game``).
     """
+    from Utils.archive_rules import texture_extensions_for_game
+    texture_exts = (
+        texture_extensions_for_game(game_id) if texture_mode != "all"
+        else frozenset()
+    )
+
     folders: dict[str, list[tuple[str, Path]]] = {}
     packed_rel_keys: list[str] = []
     src = source_dir.resolve()
@@ -488,8 +455,17 @@ def _collect_files(
             rel_key = rel_dir_fwd + "/" + fn.lower()
             if rel_key in excluded_keys:
                 continue
-            if not is_packable(rel_key):
+            if not is_packable(rel_key, game_id):
                 continue
+            if texture_mode != "all":
+                fn_lower = fn.lower()
+                dot = fn_lower.rfind(".")
+                ext = fn_lower[dot:] if dot >= 0 else ""
+                is_texture = ext in texture_exts
+                if texture_mode == "exclude" and is_texture:
+                    continue
+                if texture_mode == "only" and not is_texture:
+                    continue
             entry = (fn.lower(), Path(dirpath) / fn)
             folders.setdefault(rel_dir_norm, []).append(entry)
             packed_rel_keys.append(rel_key)
@@ -510,8 +486,10 @@ def write_bsa(
     source_dir: Path,
     *,
     version: int = 105,
+    game_id: str | None = None,
     compress: bool = True,
     excluded_keys: frozenset[str] = frozenset(),
+    texture_mode: str = "all",
     progress: ProgressCb | None = None,
     cancel: CancelCb | None = None,
 ) -> tuple[int, int, list[str]]:
@@ -523,12 +501,22 @@ def write_bsa(
                        folder are written into the archive.
         version:       104 (Oblivion / FO3 / FNV / Skyrim LE) or
                        105 (Skyrim SE / VR).
+        game_id:       Game ID (e.g. ``"skyrim_se"``) — selects the
+                       per-game packable allowlist.  ``None`` falls
+                       back to a permissive policy (intended for the
+                       self-test only).
         compress:      Archive-default compression. Per-file overrides
                        automatically disable compression for known
                        incompressible formats.
         excluded_keys: rel_keys (lowercase forward-slash relative paths)
                        that should be skipped — e.g. files the user
                        disabled in the Mod Files tab.
+        texture_mode:  ``"all"`` (default) packs everything; ``"exclude"``
+                       drops files whose extension is in the game's
+                       texture allowlist (use for the non-textures
+                       sibling of a split pair); ``"only"`` keeps only
+                       texture files (use for the ``- Textures.bsa``
+                       sibling).
         progress:      Optional callback ``(done, total, current_path)``.
         cancel:        Optional callback returning True to abort. The .tmp
                        file is removed on cancel; *bsa_path* is left
@@ -545,13 +533,17 @@ def write_bsa(
     """
     if version not in (104, 105):
         raise BsaWriteError(f"unsupported BSA version {version}")
+    if texture_mode not in ("all", "exclude", "only"):
+        raise BsaWriteError(f"unsupported texture_mode {texture_mode!r}")
 
     bsa_path = Path(bsa_path)
     source_dir = Path(source_dir)
     if not source_dir.is_dir():
         raise BsaWriteError(f"source directory does not exist: {source_dir}")
 
-    folders, packed_rel_keys = _collect_files(source_dir, excluded_keys)
+    folders, packed_rel_keys = _collect_files(
+        source_dir, excluded_keys, game_id=game_id, texture_mode=texture_mode,
+    )
     if not folders:
         raise BsaWriteError("no packable files found")
 
@@ -691,29 +683,31 @@ def write_bsa(
                     if version == 105:
                         # Skyrim SE/VR — LZ4 frame format. Engine rejects
                         # zlib payloads in v105 archives.
-                        compressed = lz4.frame.compress(
-                            raw, compression_level=9,
-                        )
+                        compressed = lz4.frame.compress(raw, compression_level=9)
                     else:
                         # v104 — zlib deflate.
                         compressed = zlib.compress(raw, 9)
                     payload = struct.pack("<I", len(raw)) + compressed
-                    fh.write(payload)
-                    on_disk_size = len(payload)
                 else:
-                    fh.write(raw)
-                    on_disk_size = len(raw)
+                    payload = raw
+                on_disk_size = len(payload)
 
-                # The size field stores the on-disk byte count. Bit 30 is
-                # set when this file's compression state is **inverted**
-                # relative to archive_flags. So:
-                #   archive=compressed, file=compressed   → bit clear
-                #   archive=compressed, file=uncompressed → bit SET
-                #   archive=uncompressed, file=uncompressed → bit clear
-                #   archive=uncompressed, file=compressed → bit SET (we
-                #     don't currently use this case)
+                # Per-file size field is 30 bits — files larger than
+                # ~1 GiB don't fit and must stay loose.  Check before
+                # writing so we don't leave a partial archive on disk.
+                if on_disk_size > _FILE_SIZE_MASK:
+                    raise BsaWriteError(
+                        f"file too large for BSA size field "
+                        f"({on_disk_size} bytes > {_FILE_SIZE_MASK}): {fn}"
+                    )
+                fh.write(payload)
+
+                # Bit 30 of the size field is set when this file's
+                # compression state is *inverted* relative to
+                # archive_flags (so size_field stays the on-disk byte
+                # count).
                 invert = compress != do_compress
-                size_field = on_disk_size & _FILE_SIZE_MASK
+                size_field = on_disk_size
                 if invert:
                     size_field |= _FILE_COMPRESS_INVERT
 
@@ -721,12 +715,19 @@ def write_bsa(
 
                 done += 1
                 if progress is not None:
-                    try:
-                        progress(done, total, fn)
-                    except Exception:
-                        pass
+                    progress(done, total, fn)
 
             end_offset = fh.tell()
+
+            # v104 BSAs use 32-bit offsets; the engine cannot read past
+            # 4 GiB.  v105 widened folder offsets to 64-bit but file
+            # records still pack data_offset as uint32 (line below) — so
+            # archives >4 GiB are unsafe in either version.
+            if end_offset > 0xFFFFFFFF:
+                raise BsaWriteError(
+                    f"BSA exceeds 4 GiB ({end_offset} bytes); split textures "
+                    "or shrink the mod and try again"
+                )
 
             # --- Patch folder records ----------------------------------
             fh.seek(folder_record_block_offset)
@@ -746,7 +747,7 @@ def write_bsa(
                         "<QII",
                         folder_hash,
                         len(files),
-                        (block_offset + total_file_name_length) & 0xFFFFFFFF,
+                        block_offset + total_file_name_length,
                     ))
 
             # --- Patch file records ------------------------------------

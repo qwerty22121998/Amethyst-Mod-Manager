@@ -21,6 +21,31 @@ from Utils.config_paths import get_profiles_dir
 _PROFILES_DIR = get_profiles_dir()
 
 
+def _read_ini_key(ini_path: Path, section: str, key: str) -> "str | None":
+    """Return the current value for [section] key, or None if not present."""
+    try:
+        text = ini_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+    except UnicodeDecodeError:
+        text = ini_path.read_text(encoding="utf-8", errors="replace")
+
+    section_re = re.compile(r"^\s*\[(?P<name>[^\]]+)\]\s*$")
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=(?P<value>.*)$")
+
+    in_section = False
+    for line in text.splitlines():
+        m = section_re.match(line)
+        if m:
+            in_section = m.group("name").strip() == section
+            continue
+        if in_section:
+            km = key_re.match(line)
+            if km:
+                return km.group("value").rstrip("\r")
+    return None
+
+
 def _set_ini_key(ini_path: Path, section: str, key: str, value: "str | None") -> None:
     """Set or remove a single INI key without disturbing the rest of the file.
 
@@ -361,6 +386,7 @@ class Fallout_3(BaseGame):
     _MYGAMES_SUBPATH_GOG = Path("Fallout3 GOG")
     _ARCHIVE_INI_FILENAME = "FALLOUT.ini"
     archive_invalidation_enabled = True
+    _archive_invalidation_extra_keys: tuple[tuple[str, str], ...] = ()
 
     @property
     def _script_extender_exe(self) -> str:
@@ -502,6 +528,11 @@ class Fallout_3(BaseGame):
 
         ini_path.parent.mkdir(parents=True, exist_ok=True)
         _set_ini_key(ini_path, "Archive", "bInvalidateOlderFiles", "1")
+        for key, value in self._archive_invalidation_extra_keys:
+            if _read_ini_key(ini_path, "Archive", key) is not None:
+                _log(f"  {key} already set in {ini_path.name} — leaving as-is.")
+                continue
+            _set_ini_key(ini_path, "Archive", key, value)
         _log(f"  Archive invalidation enabled in {ini_path.name}.")
 
     def revert_archive_invalidation(self, log_fn) -> None:
@@ -514,6 +545,11 @@ class Fallout_3(BaseGame):
             return
 
         _set_ini_key(ini_path, "Archive", "bInvalidateOlderFiles", None)
+        for key, value in self._archive_invalidation_extra_keys:
+            current = _read_ini_key(ini_path, "Archive", key)
+            if current is None or current != value:
+                continue
+            _set_ini_key(ini_path, "Archive", key, None)
         _log(f"  Archive invalidation reverted in {ini_path.name}.")
 
     def swap_launcher(self, log_fn) -> None:
@@ -902,6 +938,7 @@ class Fallout_4(Fallout_3):
     _MYGAMES_SUBPATH = Path("Fallout4")
     _MYGAMES_SUBPATH_GOG = Path("Fallout4 GOG")
     _ARCHIVE_INI_FILENAME = "Fallout4.ini"
+    _archive_invalidation_extra_keys = (("sResourceDataDirsFinal", ""),)
 
     @property
     def _script_extender_exe(self) -> str:
@@ -988,6 +1025,7 @@ class Fallout_4VR(Fallout_3):
     _APPDATA_SUBPATH = Path("drive_c/users/steamuser/AppData/Local/Fallout4VR")
     _MYGAMES_SUBPATH = Path("Fallout4VR")
     _ARCHIVE_INI_FILENAME = "Fallout4.ini"
+    _archive_invalidation_extra_keys = (("sResourceDataDirsFinal", ""),)
 
     @property
     def _script_extender_exe(self) -> str:

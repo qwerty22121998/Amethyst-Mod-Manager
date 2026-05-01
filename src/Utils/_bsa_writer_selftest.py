@@ -138,37 +138,49 @@ def _tes4_ref(name: bytes, ext: bytes) -> int:
 # ---------------------------------------------------------------------------
 
 def test_filter() -> None:
-    # Should pack
-    assert is_packable("textures/sky.dds")
-    assert is_packable("meshes/foo.nif")
-    assert is_packable("sound/fx/door.wav")
-    assert is_packable("interface/skyui.swf")
-    # .txt inside engine folders (translations, configs, animation
-    # manifests) is required content — vanilla SkyUI / moreHUD / etc.
-    # all ship .txt inside their BSAs.  Root-level readme.txt is still
-    # filtered by _collect_files (the "no root files" rule).
-    assert is_packable("interface/translations/foo_english.txt")
-    assert is_packable("interface/exported/morehud/config.txt")
-    assert is_packable("source/scripts/foo.psc")  # Papyrus source
+    """Verify the per-game allowlist (Utils.archive_rules) — not just the
+    always-excluded globals.  Skyrim SE is the canonical reference."""
+    sse = "skyrim_se"
 
-    # Should NOT pack
-    assert not is_packable("plugin.esp")
-    assert not is_packable("plugin.esl")
-    assert not is_packable("plugin.esm")
-    assert not is_packable("nested.bsa")
-    assert not is_packable("nested.ba2")
-    assert not is_packable("video/intro.bik")  # engine streams BIKs from disk
-    assert not is_packable("docs/manual.md")
-    assert not is_packable("docs/manual.pdf")
-    assert not is_packable("config.json")
-    assert not is_packable("loose.7z")
-    assert not is_packable(".gitignore")
-    assert not is_packable("subdir/.DS_Store")
-    assert not is_packable("meta.ini")
-    assert not is_packable("info.xml")
-    assert not is_packable("install.exe")
-    assert not is_packable("skse/plugins/foo.dll")  # SKSE refuses BSA-loaded DLLs
-    print("✓ filter")
+    # Should pack — bethutil's tes5_default_sets allows these.
+    assert is_packable("textures/sky.dds", sse)
+    assert is_packable("meshes/foo.nif", sse)
+    assert is_packable("sound/door.wav", sse)
+    assert is_packable("interface/skyui.swf", sse)
+    assert is_packable("interface/translations/foo_english.txt", sse)
+    # bethutil allows .txt under {interface, meshes, scripts}; subdirs
+    # of those count because we match on the *first* relative segment.
+    assert is_packable("interface/exported/morehud/config.txt", sse)
+    assert is_packable("scripts/source/foo.psc", sse)
+    assert is_packable("source/scripts/bar.psc", sse)
+    assert is_packable("scripts/myscript.pex", sse)
+    assert is_packable("strings/lang.dlstrings", sse)
+    assert is_packable("seq/quest.seq", sse)
+
+    # Should NOT pack — these would break the mod or pollute the archive.
+    assert not is_packable("plugin.esp", sse)
+    assert not is_packable("plugin.esl", sse)
+    assert not is_packable("plugin.esm", sse)
+    assert not is_packable("nested.bsa", sse)
+    assert not is_packable("nested.ba2", sse)
+    # Wrong directory for a packable extension — engine would never read
+    # it from inside the archive.
+    assert not is_packable("docs/manual.txt", sse)        # .txt only under interface/meshes/scripts
+    assert not is_packable("random/stray.dds", sse)       # .dds only under textures/interface
+    # Extensions outside the allowlist entirely.
+    assert not is_packable("video/intro.bik", sse)        # videos stream from disk
+    assert not is_packable("video/intro.bk2", sse)        # ditto
+    assert not is_packable("docs/manual.md", sse)
+    assert not is_packable("docs/manual.pdf", sse)
+    assert not is_packable("config.json", sse)
+    assert not is_packable("loose.7z", sse)
+    assert not is_packable(".gitignore", sse)
+    assert not is_packable("subdir/.DS_Store", sse)
+    assert not is_packable("meta.ini", sse)
+    assert not is_packable("info.xml", sse)
+    assert not is_packable("install.exe", sse)
+    assert not is_packable("skse/plugins/foo.dll", sse)   # SKSE refuses BSA-loaded DLLs
+    print("✓ filter (skyrim_se allowlist)")
 
 
 # ---------------------------------------------------------------------------
@@ -305,6 +317,7 @@ def test_roundtrip(version: int) -> None:
         count, size, packed_keys = write_bsa(
             bsa_path, src,
             version=version,
+            game_id="skyrim_se" if version == 105 else "skyrim",
             compress=True,
             progress=_progress,
         )
@@ -356,7 +369,12 @@ def test_extract_roundtrip(version: int) -> None:
         expected = _make_test_tree(src)
 
         bsa_path = tmp_path / "MyMod.bsa"
-        write_bsa(bsa_path, src, version=version, compress=True)
+        write_bsa(
+            bsa_path, src,
+            version=version,
+            game_id="skyrim_se" if version == 105 else "skyrim",
+            compress=True,
+        )
 
         out = tmp_path / "Out"
         progress_calls: list[tuple[int, int, str]] = []
@@ -405,7 +423,10 @@ def test_extract_cancel() -> None:
         src.mkdir()
         _make_test_tree(src)
         bsa_path = tmp_path / "MyMod.bsa"
-        write_bsa(bsa_path, src, version=105, compress=True)
+        write_bsa(
+            bsa_path, src,
+            version=105, game_id="skyrim_se", compress=True,
+        )
 
         out = tmp_path / "Out"
         try:
@@ -433,7 +454,8 @@ def test_excluded_keys() -> None:
 
         bsa_path = Path(tmp) / "out.bsa"
         count, _size, packed_keys = write_bsa(
-            bsa_path, src, version=105, excluded_keys=excluded,
+            bsa_path, src,
+            version=105, game_id="skyrim_se", excluded_keys=excluded,
         )
         listed = set(read_bsa_file_list(bsa_path))
         # The two excluded files must be absent.
@@ -445,6 +467,67 @@ def test_excluded_keys() -> None:
         # Excluded keys are also absent from the returned packed list.
         assert excluded.isdisjoint(packed_keys)
     print("✓ excluded_keys")
+
+
+def test_split_textures() -> None:
+    """texture_mode='exclude' produces a base BSA without textures;
+    'only' produces a BSA with only textures.  Together they should
+    cover the same set of files as a single 'all' pack, with no
+    overlap."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        src = tmp_path / "MyMod"
+        src.mkdir()
+        _make_test_tree(src)
+
+        # Reference: full pack.
+        full_path = tmp_path / "Full.bsa"
+        _, _, full_packed = write_bsa(
+            full_path, src, version=105, game_id="skyrim_se",
+        )
+        full_set = set(full_packed)
+
+        # Split pack: base (no textures) + textures-only.
+        base_path = tmp_path / "Base.bsa"
+        tex_path = tmp_path / "Textures.bsa"
+        _, _, base_packed = write_bsa(
+            base_path, src, version=105, game_id="skyrim_se",
+            texture_mode="exclude",
+        )
+        _, _, tex_packed = write_bsa(
+            tex_path, src, version=105, game_id="skyrim_se",
+            texture_mode="only",
+        )
+        base_set = set(base_packed)
+        tex_set = set(tex_packed)
+
+        # Coverage and disjointness.
+        assert base_set | tex_set == full_set, (
+            f"split coverage: missing {full_set - (base_set | tex_set)}, "
+            f"extra {(base_set | tex_set) - full_set}"
+        )
+        assert base_set.isdisjoint(tex_set), (
+            f"split overlap: {base_set & tex_set}"
+        )
+
+        # Sanity: textures sibling really only contains DDS / texture-rule files.
+        from Utils.archive_rules import texture_extensions_for_game
+        tex_exts = texture_extensions_for_game("skyrim_se")
+        for rk in tex_set:
+            ext = "." + rk.rsplit(".", 1)[-1] if "." in rk else ""
+            assert ext in tex_exts, f"non-texture in textures sibling: {rk}"
+        # And the base really excludes them.
+        for rk in base_set:
+            ext = "." + rk.rsplit(".", 1)[-1] if "." in rk else ""
+            assert ext not in tex_exts, f"texture leaked into base: {rk}"
+
+        # Reading back: every file in either archive should match the
+        # source on disk.
+        for rk in full_set:
+            assert rk in (
+                set(read_bsa_file_list(base_path)) | set(read_bsa_file_list(tex_path))
+            ), rk
+    print("✓ split textures (texture_mode=exclude/only)")
 
 
 def test_no_packable_files() -> None:
@@ -475,6 +558,41 @@ def test_root_files_skipped() -> None:
             print("✓ root-level-only mod raises BsaWriteError")
             return
         raise AssertionError("expected BsaWriteError for root-only mod")
+
+
+def test_oversized_file_rejected() -> None:
+    """A single file larger than the BSA size field (~1 GiB) must raise
+    rather than silently truncate."""
+    # We can't actually allocate 1 GiB on disk in CI/dev loops, so we
+    # monkey-patch read_bytes to return a stubbed-large payload.  This
+    # exercises the size-field guard path without writing 1 GiB of data.
+    from Utils import bsa_writer
+    real_read_bytes = Path.read_bytes
+    big = 0x40000001  # one byte past _FILE_SIZE_MASK
+    class _BigBytes(bytes):
+        # Pretend the file is "big" bytes long without actually allocating.
+        def __new__(cls):
+            return super().__new__(cls)
+        def __len__(self):
+            return big
+    def fake(self):
+        return _BigBytes()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = Path(tmp) / "MyMod"
+        src.mkdir()
+        (src / "meshes").mkdir()
+        (src / "meshes" / "huge.nif").write_bytes(b"x")
+        Path.read_bytes = fake          # type: ignore[assignment]
+        try:
+            write_bsa(Path(tmp) / "out.bsa", src,
+                      version=105, game_id="skyrim_se", compress=False)
+        except bsa_writer.BsaWriteError as e:
+            assert "too large" in str(e).lower(), e
+        else:
+            raise AssertionError("expected BsaWriteError for oversized file")
+        finally:
+            Path.read_bytes = real_read_bytes  # type: ignore[assignment]
+    print("✓ oversized file rejected")
 
 
 def test_stub_plugin() -> None:
@@ -571,7 +689,9 @@ if __name__ == "__main__":
     test_extract_roundtrip(105)
     test_extract_cancel()
     test_excluded_keys()
+    test_split_textures()
     test_no_packable_files()
     test_root_files_skipped()
+    test_oversized_file_rejected()
     test_stub_plugin()
     print("all good")
