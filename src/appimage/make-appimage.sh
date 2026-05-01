@@ -189,6 +189,12 @@ if [ "$MM_USE_PKGBUILD" = "1" ]; then
     # shell wrappers need this manual step.
     sed -i -e 's|/usr/share|"$APPDIR"/share|g' "$APPDIR/bin/mod-manager"
 
+    # Strip __pycache__ from our app tree. The PKGBUILD's package() cleans these,
+    # but Arch's python ALPM hook re-generates .pyc files on `pacman -U`; quick-
+    # sharun's DEBLOAT_SYS_PYTHON only touches $APPDIR/shared/lib/python*. ~4M.
+    find "$APPDIR/share/amethyst-mod-manager" -type d -name '__pycache__' \
+        -exec rm -rf {} + 2>/dev/null || true
+
     # Font goes directly into the AppDir (quick-sharun doesn't deploy fonts).
     if [ -f "$AUX_DIR/fonts/Cantarell-VF.otf" ]; then
         install -Dm644 "$AUX_DIR/fonts/Cantarell-VF.otf" \
@@ -218,7 +224,8 @@ else
     find "$APP_SHARE" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
     find "$APP_SHARE" -type f -name '*.py' -exec chmod -x {} \;
 
-    # Wrapper — quick-sharun rewrites /usr to "$APPDIR" for scripts in $APPDIR/bin/.
+    # Wrapper — uses the FHS /usr/share path; the post-quick-sharun sed step
+    # below rewrites it to "$APPDIR"/share (sharun's flattened runtime layout).
     cat > "$APPDIR/bin/mod-manager" <<'EOF'
 #!/bin/sh
 APP_SHARE=/usr/share/amethyst-mod-manager
@@ -256,6 +263,16 @@ EOF
     rm -rf "$VENDOR_DIR/bin"
     find "$APP_SHARE" -type f -name '*.py' -exec chmod -x {} \;
     find "$VENDOR_DIR" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+    # Drop bundled Pillow libs we don't use (mirrors PKGBUILD's trim).
+    if [ -d "$VENDOR_DIR/pillow.libs" ]; then
+        rm -f "$VENDOR_DIR/pillow.libs/"libavif-*.so*    \
+              "$VENDOR_DIR/pillow.libs/"libzstd-*.so*    \
+              "$VENDOR_DIR/pillow.libs/"liblzma-*.so*    \
+              "$VENDOR_DIR/pillow.libs/"libxcb-*.so*     \
+              "$VENDOR_DIR/pillow.libs/"libXau-*.so*     \
+              2>/dev/null || true
+    fi
 
     # 7zzs + zenity-rs: PKGBUILD mode gets these from /usr/bin (installed by
     # the package). AppDir mode doesn't run pacman, so download them inline.

@@ -50,6 +50,18 @@ build() {
     rm -rf "$srcdir/_vendor/bin"
     find "$srcdir/_vendor" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
 
+    # Drop bundled Pillow libs we don't use. Pillow's manylinux wheel ships
+    # AVIF/zstd/lzma/X11 libs for max format coverage; we open png/jpg/webp/
+    # gif/bmp/tga/ico only and don't screenshot. ~7.4M saved.
+    if [ -d "$srcdir/_vendor/pillow.libs" ]; then
+        rm -fv "$srcdir/_vendor/pillow.libs/"libavif-*.so*    \
+               "$srcdir/_vendor/pillow.libs/"libzstd-*.so*    \
+               "$srcdir/_vendor/pillow.libs/"liblzma-*.so*    \
+               "$srcdir/_vendor/pillow.libs/"libxcb-*.so*     \
+               "$srcdir/_vendor/pillow.libs/"libXau-*.so*     \
+               2>/dev/null || true
+    fi
+
     # 7zzs (standalone 7-Zip)
     rm -rf "$srcdir/.7z"
     mkdir -p "$srcdir/.7z"
@@ -99,7 +111,8 @@ package() {
     cp -r "$srcdir/_vendor" "$app_share/_vendor"
 
     # Wrapper installed as `mod-manager` to match the .desktop file's Exec=
-    # entry. quick-sharun rewrites the /usr/share path to "$APPDIR"/share on deploy.
+    # entry. The /usr/share path is rewritten to "$APPDIR"/share by a sed
+    # step in make-appimage.sh after quick-sharun deploys.
     cat > "$pkgdir/usr/bin/mod-manager" <<EOF
 #!/bin/sh
 APP_SHARE=/usr/share/$pkgname
