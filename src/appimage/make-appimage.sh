@@ -184,6 +184,11 @@ if [ "$MM_USE_PKGBUILD" = "1" ]; then
         "$TCLTK_STAGE/tk8.6"               \
         $( [ -f "$AUX_DIR/bin/bsdtar" ] && printf %s "$AUX_DIR/bin/bsdtar" )
 
+    # Rewrite the wrapper's /usr/share path to "$APPDIR"/share — quick-sharun's
+    # built-in /usr → "$APPDIR" rewrite only fires for dotnet scripts, so plain
+    # shell wrappers need this manual step.
+    sed -i -e 's|/usr/share|"$APPDIR"/share|g' "$APPDIR/bin/mod-manager"
+
     # Font goes directly into the AppDir (quick-sharun doesn't deploy fonts).
     if [ -f "$AUX_DIR/fonts/Cantarell-VF.otf" ]; then
         install -Dm644 "$AUX_DIR/fonts/Cantarell-VF.otf" \
@@ -293,6 +298,9 @@ EOF
         "$TCLTK_STAGE/tcl8.6"            \
         "$TCLTK_STAGE/tk8.6"             \
         $( [ -f "$APPDIR/bin/bsdtar" ] && printf %s "$APPDIR/bin/bsdtar" )
+
+    # See PKGBUILD-mode comment above for why this manual rewrite is needed.
+    sed -i -e 's|/usr/share|"$APPDIR"/share|g' "$APPDIR/bin/mod-manager"
 fi
 
 # ── Build the AppImage ───────────────────────────────────────────────
