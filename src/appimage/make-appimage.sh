@@ -264,14 +264,13 @@ EOF
     find "$APP_SHARE" -type f -name '*.py' -exec chmod -x {} \;
     find "$VENDOR_DIR" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
 
-    # Drop bundled Pillow libs we don't use (mirrors PKGBUILD's trim).
-    # Keep libxcb/libXau — eager-loaded at PIL import time.
+    # Drop AVIF (mirrors PKGBUILD trim). AVIF is the only Pillow format lazy-
+    # loaded via a separate .so plugin; everything else is in _imaging.so's
+    # DT_NEEDED and can't be removed without breaking PIL import.
     if [ -d "$VENDOR_DIR/pillow.libs" ]; then
-        rm -f "$VENDOR_DIR/pillow.libs/"libavif-*.so*    \
-              "$VENDOR_DIR/pillow.libs/"libzstd-*.so*    \
-              "$VENDOR_DIR/pillow.libs/"liblzma-*.so*    \
-              2>/dev/null || true
+        rm -f "$VENDOR_DIR/pillow.libs/"libavif-*.so* 2>/dev/null || true
     fi
+    rm -f "$VENDOR_DIR/PIL/"_avif.cpython-*.so 2>/dev/null || true
 
     # 7zzs + zenity-rs: PKGBUILD mode gets these from /usr/bin (installed by
     # the package). AppDir mode doesn't run pacman, so download them inline.

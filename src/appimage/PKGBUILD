@@ -50,18 +50,14 @@ build() {
     rm -rf "$srcdir/_vendor/bin"
     find "$srcdir/_vendor" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
 
-    # Drop bundled Pillow libs for formats we don't open: AVIF, plus zstd/lzma
-    # which only matter for the corresponding compressed-TIFF variants.
-    # libxcb/libXau stay — Pillow's _imaging.so eagerly loads them at import,
-    # not lazily, so removing them breaks `from PIL import Image` entirely
-    # (we don't actually use ImageGrab; the linkage is just there).
-    # ~7.1M saved.
+    # Drop AVIF support: lib (5M) + Pillow's _avif plugin. AVIF is the only
+    # format Pillow lazy-loads via a separate .so; everything else (zstd/lzma/
+    # xcb/Xau/webp/openjp2/etc.) is in _imaging.so's DT_NEEDED and removing
+    # any of them breaks `from PIL import Image` at import time.
     if [ -d "$srcdir/_vendor/pillow.libs" ]; then
-        rm -fv "$srcdir/_vendor/pillow.libs/"libavif-*.so*    \
-               "$srcdir/_vendor/pillow.libs/"libzstd-*.so*    \
-               "$srcdir/_vendor/pillow.libs/"liblzma-*.so*    \
-               2>/dev/null || true
+        rm -fv "$srcdir/_vendor/pillow.libs/"libavif-*.so* 2>/dev/null || true
     fi
+    rm -fv "$srcdir/_vendor/PIL/"_avif.cpython-*.so 2>/dev/null || true
 
     # 7zzs (standalone 7-Zip)
     rm -rf "$srcdir/.7z"
