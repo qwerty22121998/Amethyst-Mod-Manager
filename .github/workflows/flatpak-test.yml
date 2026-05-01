@@ -1,0 +1,55 @@
+name: Test Flatpak Build
+
+# Smoke-test that the Flatpak manifest still builds. Does NOT publish
+# anything — no release attachment, no flathub submission. Artifact is
+# kept for 7 days so you can download and test the bundle if you want.
+#
+# Eventually this can be merged into the release workflow alongside the
+# AppImage build; for now it runs independently.
+
+on:
+  push:
+    branches: [Testing, main]
+    paths:
+      - 'flatpak/**'
+      - 'src/**'
+      - '.github/workflows/flatpak-test.yml'
+  pull_request:
+    paths:
+      - 'flatpak/**'
+      - 'src/**'
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    name: Build .flatpak bundle
+    runs-on: ubuntu-latest
+    # flatpak-github-actions provides a pre-baked container with
+    # flatpak-builder, the GNOME runtimes/SDKs, and bundle tooling
+    # already installed — much faster than installing them ourselves.
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Flatpak bundle
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          # Output bundle filename (relative to repo root inside container).
+          bundle: AmethystModManager.flatpak
+          # Manifest path (relative to repo root).
+          manifest-path: flatpak/io.github.Amethyst.ModManager.yml
+          # The id whose data we bundle.
+          cache-key: flatpak-builder-${{ github.sha }}
+          # Skip uploading to flathub — this is just a build test.
+          upload-artifact: false
+
+      - name: Upload bundle as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AmethystModManager-flatpak
+          path: AmethystModManager.flatpak
+          if-no-files-found: error
+          # Test artifacts don't need long retention.
+          retention-days: 7
