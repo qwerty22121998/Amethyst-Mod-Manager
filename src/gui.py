@@ -1406,8 +1406,30 @@ class App(ctk.CTk):
                 bsa_higher_mods=bsa_higher or None,
                 bsa_lower_mods=bsa_lower or None,
             )
-            self._plugin_panel.show_mod_files(mod_name)
-            self._plugin_panel.show_mod_archives(mod_name)
+            # If a single (non-overwrite) separator is the anchor selection,
+            # show its child mods in the Mod Files / Archive tabs.
+            sep_anchor_idx = -1
+            if (self._mod_panel._sel_idx >= 0
+                    and self._mod_panel._sel_idx < len(self._mod_panel._entries)):
+                anchor = self._mod_panel._entries[self._mod_panel._sel_idx]
+                if anchor.is_separator and anchor.name != _OVERWRITE_NAME:
+                    sep_anchor_idx = self._mod_panel._sel_idx
+            if sep_anchor_idx >= 0:
+                sep_entry = self._mod_panel._entries[sep_anchor_idx]
+                child_mods: list[str] = []
+                for ci in self._mod_panel._sep_block_range(sep_anchor_idx):
+                    child = self._mod_panel._entries[ci]
+                    if not child.is_separator:
+                        child_mods.append(child.name)
+                self._plugin_panel.show_mod_files_for_separator(
+                    sep_entry.display_name, child_mods,
+                )
+                self._plugin_panel.show_mod_archives_for_separator(
+                    sep_entry.display_name, child_mods,
+                )
+            else:
+                self._plugin_panel.show_mod_files(mod_name)
+                self._plugin_panel.show_mod_archives(mod_name)
             # If the missing-requirements panel is currently open and the newly
             # selected mod also has missing requirements, switch the panel to it.
             if (getattr(self, "_missing_reqs_panel", None) is not None

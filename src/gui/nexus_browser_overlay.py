@@ -106,31 +106,62 @@ class _FileChooserOverlay(tk.Frame):
         except Exception:
             card_w = self._MIN_WIDTH
 
-        # Card
+        # Card — use grid so header/list/footer can each take their natural
+        # share, with the list section the only one that's allowed to flex
+        # and scroll when the file count is large.
         card = tk.Frame(self._backdrop, bg=BG_DEEP, bd=1, relief="solid",
                         highlightbackground=BORDER, highlightthickness=1)
-        card.place(relx=0.5, rely=0.5, anchor="center", width=card_w)
+        card.grid_columnconfigure(0, weight=1)
+        card.grid_rowconfigure(1, weight=1)  # list section flexes
 
-        # Header
+        # Header (fixed)
+        header = tk.Frame(card, bg=BG_DEEP)
+        header.grid(row=0, column=0, sticky="ew")
         tk.Label(
-            card, text=f"'{mod_name}' has multiple main files.",
+            header, text=f"'{mod_name}' has multiple main files.",
             font=FONT_BOLD, fg=TEXT_MAIN, bg=BG_DEEP, anchor="w",
         ).pack(fill="x", padx=pad, pady=(pad, 2))
         tk.Label(
-            card, text="Select which file to install:",
+            header, text="Select which file to install:",
             font=FONT_SMALL, fg=TEXT_DIM, bg=BG_DEEP, anchor="w",
         ).pack(fill="x", padx=pad, pady=(0, 8))
 
-        # File list
-        list_frame = tk.Frame(card, bg=BORDER)
-        list_frame.pack(fill="x", padx=pad, pady=(0, 8))
+        # Scrollable file list
+        list_outer = tk.Frame(card, bg=BG_DEEP)
+        list_outer.grid(row=1, column=0, sticky="nsew", padx=pad, pady=(0, 8))
+        list_outer.grid_columnconfigure(0, weight=1)
+        list_outer.grid_rowconfigure(0, weight=1)
+
+        canvas = tk.Canvas(list_outer, bg=BORDER, bd=0, highlightthickness=0)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vbar = tk.Scrollbar(list_outer, orient="vertical", command=canvas.yview)
+        vbar.grid(row=0, column=1, sticky="ns")
+        canvas.configure(yscrollcommand=vbar.set)
+
+        list_frame = tk.Frame(canvas, bg=BORDER)
+        list_window = canvas.create_window((0, 0), window=list_frame, anchor="nw")
+
+        def _on_list_configure(_evt=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        list_frame.bind("<Configure>", _on_list_configure)
+
+        def _on_canvas_configure(evt):
+            canvas.itemconfigure(list_window, width=evt.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _on_mousewheel(evt):
+            delta = -1 if getattr(evt, "delta", 0) > 0 or getattr(evt, "num", 0) == 4 else 1
+            canvas.yview_scroll(delta * 3, "units")
+            return "break"
 
         files = sorted(files, key=lambda f: -(f.uploaded_timestamp or 0))
 
+        row_widgets = []
         for idx, f in enumerate(files):
             bg = BG_ROW if idx % 2 == 0 else BG_ROW_ALT
             row = tk.Frame(list_frame, bg=bg, cursor="hand2")
             row.pack(fill="x", ipady=6)
+            row_widgets.append(row)
 
             name_text = f.name or f.file_name
             tk.Label(
@@ -165,14 +196,41 @@ class _FileChooserOverlay(tk.Frame):
                 widget.bind("<Enter>", _enter)
                 widget.bind("<Leave>", _leave)
                 widget.bind("<Button-1>", _click)
+                widget.bind("<MouseWheel>", _on_mousewheel)
+                widget.bind("<Button-4>", _on_mousewheel)
+                widget.bind("<Button-5>", _on_mousewheel)
 
-        # Cancel button
+        for w in (canvas, list_frame):
+            w.bind("<MouseWheel>", _on_mousewheel)
+            w.bind("<Button-4>", _on_mousewheel)
+            w.bind("<Button-5>", _on_mousewheel)
+
+        # Cancel button (fixed footer)
+        footer = tk.Frame(card, bg=BG_DEEP)
+        footer.grid(row=2, column=0, sticky="ew")
         ctk.CTkButton(
-            card, text="Cancel", width=100, height=30,
+            footer, text="Cancel", width=100, height=30,
             fg_color="#555", hover_color="#666",
             text_color="white", font=FONT_BOLD,
             command=lambda: self._dismiss(None),
         ).pack(pady=(0, pad))
+
+        # Place + size the card. Compute desired height from header+rows+footer
+        # and clamp to the parent's available height so header and footer
+        # always remain visible — the list canvas absorbs the overflow.
+        ROW_H = 34
+        try:
+            parent.update_idletasks()
+            parent_h = parent.winfo_height() or 600
+        except Exception:
+            parent_h = 600
+        max_card_h = max(240, parent_h - 40)
+        # Estimate fixed chrome (header ~70px, footer ~60px, paddings).
+        chrome_h = 70 + 60 + pad * 2
+        desired_h = chrome_h + len(files) * ROW_H + 8
+        card_h = min(desired_h, max_card_h)
+        card.place(relx=0.5, rely=0.5, anchor="center",
+                   width=card_w, height=card_h)
 
     def _dismiss(self, chosen):
         self.result = chosen

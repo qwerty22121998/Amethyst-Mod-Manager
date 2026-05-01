@@ -118,19 +118,45 @@ jobs:
 
       - name: Install build dependencies
         run: |
+          # gtk3: explicit because python-gobject doesn't require it
+          # directly; quick-sharun's DEPLOY_GTK=1 needs it on disk to bundle.
           # python-gobject + python-cairo: GTK splash screen — without
           # cairo the splash subprocess silently exits 1.
           # tk: tkinter import inside the bundled Python.
-          # zenity: file-picker fallback used by portal_filechooser.py.
           # libarchive: bsdtar + libarchive.so.13 for fast extraction.
+          # sudo: needed for `sudo -u builder` makepkg invocation.
+          # (base-devel is already pulled in by anylinux-setup-action.)
+          # zenity is bundled from zenity-rs-bin (static, GTK-free) by the
+          # PKGBUILD; not installed here so we don't pull GTK4 alongside
+          # our bundled GTK3.
           pacman -Syu --noconfirm \
+              gtk3 \
               python-gobject \
               python-cairo \
               python-pip \
               tk \
-              zenity \
               libarchive \
-              wget
+              wget \
+              sudo
+
+      - name: Install debloated GTK / icu / libxml2 stack
+        run: |
+          get-debloated-pkgs \
+              gtk3-mini \
+              gdk-pixbuf2-mini \
+              librsvg-mini \
+              icu-mini \
+              libxml2-mini
+
+      - name: Create makepkg build user
+        run: |
+          # makepkg refuses to run as root. The container is root by
+          # default, so create a user the script can sudo to.
+          if ! id builder >/dev/null 2>&1; then
+              useradd -m -G wheel builder
+              echo 'builder ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/builder
+              chmod 0440 /etc/sudoers.d/builder
+          fi
 
       - name: Download libloot extension
         uses: actions/download-artifact@v4
@@ -141,6 +167,7 @@ jobs:
       - name: Build AppImage
         env:
           ANYLINUX_LIB: '1'
+          MM_USE_PKGBUILD: '1'
         run: bash src/appimage/make-appimage.sh
 
       - uses: actions/upload-artifact@v4

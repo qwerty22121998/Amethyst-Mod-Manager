@@ -101,10 +101,11 @@ class ModListFilterPanelMixin:
         scroll_frame.pack(fill="both", expand=True, padx=8, pady=6)
 
         self._fsp_vars: dict[str, tk.BooleanVar] = {}
+        self._fsp_checkboxes: dict[str, ctk.CTkCheckBox] = {}
         for key, label, _attr in _FILTER_CHECKBOXES:
             var = tk.BooleanVar(value=False)
             self._fsp_vars[key] = var
-            ctk.CTkCheckBox(
+            cb = ctk.CTkCheckBox(
                 scroll_frame,
                 text=label,
                 variable=var,
@@ -115,7 +116,9 @@ class ModListFilterPanelMixin:
                 border_color=BORDER,
                 checkmark_color="white",
                 command=self._on_filter_panel_change,
-            ).pack(anchor="w", fill="x", pady=3)
+            )
+            cb.pack(anchor="w", fill="x", pady=3)
+            self._fsp_checkboxes[key] = cb
 
         ctk.CTkLabel(
             scroll_frame, text="", height=8, fg_color="transparent",
@@ -217,8 +220,27 @@ class ModListFilterPanelMixin:
         self._filter_side_panel.grid()
         for key, _label, attr in _FILTER_CHECKBOXES:
             self._fsp_vars[key].set(getattr(self, attr))
+        self._refresh_archive_filter_label()
         self._refresh_filter_category_list()
         self._update_filter_btn_color()
+
+    def _refresh_archive_filter_label(self) -> None:
+        """Relabel the 'has archives' checkbox to match the active game's
+        archive type — 'BSA archives' for older Bethesda titles, 'BA2
+        archives' for Fallout 4 / Starfield. Falls back to 'BSA' for
+        games without archive support."""
+        cb = getattr(self, "_fsp_checkboxes", {}).get("filter_has_bsa")
+        if cb is None:
+            return
+        archive_exts = getattr(self._game, "archive_extensions", None) if getattr(self, "_game", None) else None
+        if archive_exts and ".ba2" in archive_exts:
+            label = "Show only mods with BA2 archives"
+        else:
+            label = "Show only mods with BSA archives"
+        try:
+            cb.configure(text=label)
+        except Exception:
+            pass
 
     def _close_filter_side_panel(self):
         self._filter_panel_open = False

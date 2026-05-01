@@ -50,6 +50,8 @@ from gui.theme import (
     BTN_INFO_DEEP_HOV,
     BTN_INFO_HOV,
     BTN_CANCEL,
+    RED_BTN,
+    RED_HOV,
     TONE_CYAN,
     STATUS_BADGE_RED,
     STATUS_BADGE_GREEN,
@@ -244,6 +246,216 @@ def _parse_launch_options(opts: str, command: list) -> "tuple[dict, list]":
 from gui.plugin_panel_exe_launcher import PluginPanelExeLauncherMixin
 from gui.plugin_panel_loot import PluginPanelLOOTMixin
 from gui.plugin_panel_userlist_cycle import PluginPanelUserlistCycleMixin
+
+
+class _PackOptionsDialog(tk.Frame):
+    """In-app pre-pack confirmation overlay.
+
+    Renders as a full-coverage dim backdrop over a host panel (typically
+    the modlist panel) with a centred card.  The card surfaces the
+    overwrite warning when applicable and offers two optional
+    behaviours:
+
+      * "Delete loose files after packing" — destructive convenience.
+      * "Separate textures archive" — only shown for BSA; BA2 always
+        splits Main+Textures so the option is hidden there.
+
+    Use :meth:`ask` (classmethod) to display the overlay and block until
+    the user picks; returns ``{"delete_loose": bool, "split_textures":
+    bool}`` on confirm or ``None`` on cancel/close.
+
+    Compared to the previous CTkToplevel implementation, the overlay
+    can't be dragged off-window or hidden behind another app — it sits
+    inside the host panel and is dismissed only by Pack/Cancel/Esc.
+    """
+
+    # Visual style — chunky enough to use comfortably on a Steam Deck
+    # touchscreen.  Checkbox cells, button height, and label fonts all
+    # scale together.
+    _CHECKBOX_W = 22
+    _CHECKBOX_H = 22
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        *,
+        bsa_filename: str,
+        existing: bool,
+        kind: str = "bsa",
+    ):
+        super().__init__(parent, bg=BG_DEEP)
+        self._parent_ref = parent
+        self._kind = kind
+        self.result: dict | None = None
+        # Caller blocks on this until the user picks.  Confirm / cancel
+        # set it to True; we use wait_variable so the parent's event
+        # loop keeps spinning (lets the underlying panel render correctly
+        # and lets us catch <Escape> bound on this widget).
+        self._done_var = tk.BooleanVar(self, value=False)
+
+        # The whole frame absorbs clicks so the modlist panel under it
+        # is not interactable while the dialog is up.  We don't dim the
+        # backdrop further because BG_DEEP already contrasts with the
+        # card.
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        # Centred card.
+        card = tk.Frame(self, bg=BG_PANEL, highlightthickness=1,
+                        highlightbackground=BORDER)
+        card.grid(row=0, column=0)
+        card.grid_columnconfigure(0, weight=1)
+
+        # Title band.
+        tk.Label(
+            card,
+            text=f"Pack {bsa_filename}",
+            font=(_theme.FONT_FAMILY, _theme.FS12, "bold"),
+            fg=TEXT_MAIN, bg=BG_PANEL, anchor="w",
+        ).grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 4))
+
+        row = 1
+        if existing:
+            tk.Label(
+                card,
+                text=(
+                    f"⚠  {bsa_filename} already exists in this mod and will "
+                    "be overwritten."
+                ),
+                font=(_theme.FONT_FAMILY, _theme.FS10),
+                fg="#e8a83a", bg=BG_PANEL,
+                anchor="w", justify="left", wraplength=380,
+            ).grid(row=row, column=0, sticky="ew", padx=16, pady=(0, 6))
+            row += 1
+
+        # Delete-loose checkbox.
+        self._delete_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            card,
+            text="Delete loose files after packing",
+            variable=self._delete_var,
+            font=(_theme.FONT_FAMILY, _theme.FS11),
+            text_color=TEXT_MAIN,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            border_color=BORDER, checkmark_color="white",
+            checkbox_width=self._CHECKBOX_W,
+            checkbox_height=self._CHECKBOX_H,
+        ).grid(row=row, column=0, sticky="w", padx=16, pady=(10, 4))
+        row += 1
+
+        tk.Label(
+            card,
+            text=(
+                "Files that get packed will be removed from the mod folder. "
+                "Files outside the packable filter (plugins, readmes, .bik "
+                "videos) and files you've disabled in the Mod Files tab are "
+                "left alone."
+            ),
+            font=(_theme.FONT_FAMILY, _theme.FS9),
+            fg=TEXT_DIM, bg=BG_PANEL,
+            anchor="w", justify="left", wraplength=380,
+        ).grid(row=row, column=0, sticky="ew", padx=(40, 16), pady=(0, 14))
+        row += 1
+
+        # Separate-textures checkbox (BSA only).  BA2 always splits
+        # Main+Textures, so showing it there would be confusing.
+        self._split_textures_var = tk.BooleanVar(value=False)
+        if kind == "bsa":
+            ctk.CTkCheckBox(
+                card,
+                text="Separate textures archive",
+                variable=self._split_textures_var,
+                font=(_theme.FONT_FAMILY, _theme.FS11),
+                text_color=TEXT_MAIN,
+                fg_color=ACCENT, hover_color=ACCENT_HOV,
+                border_color=BORDER, checkmark_color="white",
+                checkbox_width=self._CHECKBOX_W,
+                checkbox_height=self._CHECKBOX_H,
+            ).grid(row=row, column=0, sticky="w", padx=16, pady=(2, 4))
+            row += 1
+            tk.Label(
+                card,
+                text=(
+                    "Writes textures to a sibling “… - Textures.bsa” instead "
+                    "of bundling them with the main archive.  Optional for "
+                    "Skyrim / FNV / Oblivion; mostly useful for very large "
+                    "texture packs."
+                ),
+                font=(_theme.FONT_FAMILY, _theme.FS9),
+                fg=TEXT_DIM, bg=BG_PANEL,
+                anchor="w", justify="left", wraplength=380,
+            ).grid(row=row, column=0, sticky="ew", padx=(40, 16), pady=(0, 14))
+            row += 1
+
+        # Button row.
+        btn_row = tk.Frame(card, bg=BG_PANEL)
+        btn_row.grid(row=row, column=0, sticky="ew", padx=12, pady=(4, 14))
+
+        ctk.CTkButton(
+            btn_row, text="Cancel", width=110, height=34,
+            fg_color="transparent", border_width=1,
+            text_color=TEXT_MAIN,
+            font=(_theme.FONT_FAMILY, _theme.FS11),
+            command=self._on_cancel,
+        ).pack(side="right", padx=(8, 4))
+
+        ctk.CTkButton(
+            btn_row, text="Pack", width=110, height=34,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            text_color=TEXT_ON_ACCENT,
+            font=(_theme.FONT_FAMILY, _theme.FS11),
+            command=self._on_confirm,
+        ).pack(side="right")
+
+        # Make Esc / Enter work even though we're not a top-level.
+        self.bind("<Escape>", lambda e: self._on_cancel())
+        self.bind("<Return>", lambda e: self._on_confirm())
+        # Steal keyboard focus so Esc / Enter work without first
+        # clicking inside the card.
+        self.focus_set()
+
+    def _on_confirm(self) -> None:
+        self.result = {
+            "delete_loose": bool(self._delete_var.get()),
+            "split_textures": bool(self._split_textures_var.get()),
+        }
+        self._done_var.set(True)
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self._done_var.set(True)
+
+    @classmethod
+    def ask(
+        cls, parent: tk.Misc, *,
+        bsa_filename: str, existing: bool, kind: str = "bsa",
+    ) -> dict | None:
+        """Show the overlay over *parent* (typically the modlist panel)
+        and block until the user clicks Pack or Cancel.
+
+        Returns ``{"delete_loose": bool, "split_textures": bool}`` on
+        confirm or ``None`` on cancel / Escape.
+        """
+        overlay = cls(
+            parent,
+            bsa_filename=bsa_filename,
+            existing=existing,
+            kind=kind,
+        )
+        # Cover the entire host panel.  The card itself is centred via
+        # the overlay's grid, so the dim backdrop fills whatever's left.
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        overlay.lift()
+        # Block until the user picks.  wait_variable spins the parent's
+        # event loop, so the overlay (and the rest of the app) keeps
+        # responding to events while we wait.
+        overlay.wait_variable(overlay._done_var)
+        result = overlay.result
+        try:
+            overlay.destroy()
+        except tk.TclError:
+            pass
+        return result
 
 
 class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
@@ -623,7 +835,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             fg_color=ACCENT, hover_color=ACCENT_HOV,
             border_color=BORDER, checkmark_color="white",
             bg_color=BG_HEADER,
-            command=lambda: self.show_mod_files(self._mod_files_mod_name),
+            command=lambda: self._mf_refresh_current_view(),
         ).pack(side="right", padx=(0, 8), pady=2)
 
         self._mod_files_label = tk.Label(
@@ -729,6 +941,895 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._mf_top_level_iids: set[str] = set()   # iids eligible for the Top Level checkbox
         self._mf_stripped_paths: set[str] = set()   # lowercased strip-prefix entries for this mod (from profile_state)
         self._mf_synthetic_iids: set[str] = set()   # iids for synthetic strip placeholders
+
+        # Footer with action buttons (Pack BSA, …). Row 2 stays a fixed-height
+        # strip below the tree (row 1 carries the weight).
+        tab.grid_rowconfigure(2, weight=0)
+        footer = tk.Frame(tab, bg=BG_HEADER, height=scaled(32), highlightthickness=0)
+        footer.grid(row=2, column=0, columnspan=2, sticky="ew")
+        footer.grid_propagate(False)
+
+        # Pack on the left (green = constructive), then Unpack to its
+        # right (red = destructive — it removes archives from the mod).
+        self._mf_pack_bsa_btn = ctk.CTkButton(
+            footer, text="Pack BSA", width=100, height=24,
+            fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV, text_color="white",
+            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
+            command=self._on_pack_bsa_click,
+            state="disabled",
+        )
+        self._mf_pack_bsa_btn.pack(side="left", padx=(8, 4), pady=4)
+
+        self._mf_unpack_bsa_btn = ctk.CTkButton(
+            footer, text="Unpack BSA", width=100, height=24,
+            fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
+            font=(_theme.FONT_FAMILY, _theme.FS10), corner_radius=4,
+            command=self._on_unpack_bsa_click,
+            state="disabled",
+        )
+        self._mf_unpack_bsa_btn.pack(side="left", padx=(0, 4), pady=4)
+
+        # Track the open overlay so we can close it from anywhere.
+        self._bsa_unpack_overlay = None
+
+    def _archive_kind_for_current_game(self) -> str | None:
+        """Return ``"bsa"`` for games that pack into BSA v104/v105,
+        ``"ba2"`` for games that pack into FO4-family BA2, and ``None``
+        for games that don't support archive packing yet (Starfield,
+        FO76, Morrowind, non-Bethesda).
+
+        Used to drive button labels and pack/unpack dispatch."""
+        if self._game is None:
+            return None
+        from Utils.ba2_writer import ba2_version_for_game
+        from Utils.bsa_writer import bsa_version_for_game
+        game_id = getattr(self._game, "game_id", None) or type(self._game).__name__
+        archive_exts = getattr(self._game, "archive_extensions", None) or frozenset()
+        if bsa_version_for_game(game_id) is not None and ".bsa" in archive_exts:
+            return "bsa"
+        if ba2_version_for_game(game_id) is not None and ".ba2" in archive_exts:
+            return "ba2"
+        return None
+
+    def _update_pack_bsa_button_state(self) -> None:
+        """Enable Pack/Unpack archive buttons only when a normal mod is
+        selected and the current game uses BSA *or* BA2 archives. Hides
+        them entirely on games we can't pack for. Button labels switch
+        between "Pack BSA" / "Pack BA2" depending on the active game.
+        Unpack is further gated on the mod containing at least one
+        archive of the matching kind."""
+        pack_btn = getattr(self, "_mf_pack_bsa_btn", None)
+        unpack_btn = getattr(self, "_mf_unpack_bsa_btn", None)
+        if pack_btn is None or unpack_btn is None:
+            return
+        kind = self._archive_kind_for_current_game()
+        if kind is None:
+            for btn in (pack_btn, unpack_btn):
+                try:
+                    btn.pack_forget()
+                except Exception:
+                    pass
+            return
+        # Game supports archive packing — make sure both buttons are
+        # visible and labelled for the right kind.
+        upper = kind.upper()
+        pack_btn.configure(text=f"Pack {upper}")
+        unpack_btn.configure(text=f"Unpack {upper}")
+        try:
+            pack_btn.pack_info()
+        except Exception:
+            pack_btn.pack(side="left", padx=(8, 4), pady=4)
+        try:
+            unpack_btn.pack_info()
+        except Exception:
+            unpack_btn.pack(side="left", padx=(0, 4), pady=4)
+        mod_name = self._mod_files_mod_name
+        is_normal_mod = (
+            mod_name is not None
+            and mod_name != _OVERWRITE_NAME
+            and mod_name != "Root_Folder"
+        )
+        pack_btn.configure(state="normal" if is_normal_mod else "disabled")
+
+        # Unpack: also requires the mod to have at least one archive of
+        # the matching kind on disk.
+        archive_suffix = "." + kind
+        has_archive = False
+        if is_normal_mod and self._staging_root is not None:
+            mod_dir = self._staging_root / mod_name
+            try:
+                has_archive = any(
+                    p.is_file() and p.suffix.lower() == archive_suffix
+                    for p in mod_dir.iterdir()
+                )
+            except OSError:
+                has_archive = False
+        unpack_btn.configure(state="normal" if has_archive else "disabled")
+
+    def _is_current_profile_deployed(self) -> bool:
+        """Return True iff the profile this Mod Files tab is showing is the
+        one currently deployed to the game folder.
+
+        Pack/Unpack mutate mod-folder contents.  When that profile has
+        files hard-linked into game_root, the deploy log + snapshot go
+        stale and the next restore moves what should be tracked files
+        into ``overwrite/`` as if they were runtime-generated.  Forcing a
+        Restore first sidesteps the whole class of failure.
+        """
+        if self._game is None or not getattr(self._game, "is_configured", lambda: False)():
+            return False
+        if self._mod_files_profile_dir is None:
+            return False
+        try:
+            if not self._game.get_deploy_active():
+                return False
+            return self._game.get_last_deployed_profile() == self._mod_files_profile_dir.name
+        except Exception:
+            return False
+
+    def _on_pack_bsa_click(self) -> None:
+        """Pack the currently-selected mod's loose files into a BSA in that
+        mod's folder. Runs on a background thread with a progress popup."""
+        import threading
+        from Utils.ba2_writer import Ba2WriteError, write_ba2, write_ba2_textures
+        from Utils.bsa_writer import (
+            BsaWriteError, bsa_version_for_game, write_bsa, write_stub_plugin,
+        )
+        from gui.ctk_components import CTkAlert, CTkProgressPopup
+
+        mod_name = self._mod_files_mod_name
+        if not mod_name or mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._staging_root is None or self._game is None:
+            return
+
+        # Pick BSA or BA2 based on the active game.  Returns None for
+        # games we can't pack for (Starfield, FO76, Morrowind, …).
+        kind = self._archive_kind_for_current_game()
+        if kind is None:
+            return
+        kind_upper = kind.upper()
+
+        # Refuse to mutate mod contents while the profile is deployed:
+        # the existing hard-links in game_root would become stale and
+        # the next Restore would mis-classify them as runtime files.
+        if self._is_current_profile_deployed():
+            CTkAlert(
+                state="warning", title=f"Pack {kind_upper}",
+                body_text=(
+                    "This profile is currently deployed.\n\n"
+                    f"Run Restore first, then pack the {kind_upper}."
+                ),
+                btn1="OK", btn2="", parent=self.winfo_toplevel(),
+            )
+            return
+
+        game_id = getattr(self._game, "game_id", None) or type(self._game).__name__
+        # BSA path needs the format version (104 vs 105); BA2 currently
+        # always emits v1 GNRL so we don't care about the value.
+        bsa_version = bsa_version_for_game(game_id) if kind == "bsa" else None
+
+        mod_dir = self._staging_root / mod_name
+        if not mod_dir.is_dir():
+            CTkAlert(
+                state="warning", title=f"Pack {kind_upper}",
+                body_text=f"Mod folder not found:\n{mod_dir}",
+                btn1="OK", btn2="", parent=self.winfo_toplevel(),
+            )
+            return
+
+        archive_suffix = "." + kind
+        # FO4 / FO4 VR's auto-loader only mounts a BA2 when its filename
+        # follows the "<plugin_stem> - Main.ba2" / " - Textures.ba2"
+        # convention.  Vanilla and every community mod ships with that
+        # naming; <stem>.ba2 silently doesn't load.  Skyrim's BSA loader
+        # is more permissive — <stem>.bsa works on its own — so we keep
+        # the bare name there.
+        #
+        # On FO4 we always write the GNRL "<stem> - Main.ba2", and if
+        # the mod has any .dds files we also write a sibling DX10
+        # "<stem> - Textures.ba2".  We don't know yet whether the mod
+        # contains textures, so we prepare both paths and let the
+        # writer raise "no DX10-eligible texture files found" when
+        # there's nothing to do.
+        # On FO4 we always write the GNRL "<stem> - Main.ba2", and if
+        # the mod has any .dds files we also write a sibling DX10
+        # "<stem> - Textures.ba2".  Skyrim's BSA loader is more
+        # permissive — <stem>.bsa works on its own — so the textures
+        # sibling there is OPTIONAL: a checkbox in _PackOptionsDialog
+        # below decides.
+        if kind == "ba2":
+            archive_path = mod_dir / f"{mod_name} - Main.ba2"
+            # archive_textures_path is set unconditionally for BA2; the
+            # writer drops it if the mod has no DDS files.
+            archive_textures_path: Path | None = mod_dir / f"{mod_name} - Textures.ba2"
+        else:
+            archive_path = mod_dir / f"{mod_name}{archive_suffix}"
+            archive_textures_path = None  # may be set after the dialog
+        # Show the options dialog: confirms the pack, surfaces the
+        # overwrite warning if applicable, and lets the user opt into
+        # deleting the loose files that get packed and (BSA only) the
+        # split-textures sibling.  Returns None on cancel.
+        existing_any = archive_path.exists() or (
+            archive_textures_path is not None and archive_textures_path.exists()
+        )
+        # Host the overlay on the modlist panel so it sits over the
+        # left-hand panel (where the user just clicked Pack BSA from
+        # the modlist's adjacent Mod Files tab).  Falling back to the
+        # plugin panel keeps the overlay in-app even if the modlist
+        # panel hasn't been wired up for some reason.
+        overlay_host = (
+            getattr(self.winfo_toplevel(), "_mod_panel", None) or self
+        )
+        opts = _PackOptionsDialog.ask(
+            overlay_host,
+            bsa_filename=archive_path.name,
+            existing=existing_any,
+            kind=kind,
+        )
+        if opts is None:
+            return
+        delete_loose: bool = opts["delete_loose"]
+        split_textures: bool = opts.get("split_textures", False)
+        # For BSA, only allocate the textures sibling path if the user
+        # ticked the "Separate textures archive" checkbox.
+        if kind == "bsa" and split_textures:
+            archive_textures_path = mod_dir / f"{mod_name} - Textures.bsa"
+
+        # An archive only auto-loads if a same-named plugin sits in the
+        # load order.  If the mod already ships a real same-stem plugin
+        # (.esp/.esm/.esl) we leave it alone; otherwise we stamp out a
+        # minimal stub.  A previously-generated stub is replaced — its
+        # only purpose is to be the trigger file, and the format may
+        # have evolved between packs.
+        from Utils.bsa_writer import is_our_stub_plugin
+        existing_plugin = next(
+            (
+                mod_dir / f"{mod_name}{ext}"
+                for ext in (".esp", ".esm", ".esl")
+                if (mod_dir / f"{mod_name}{ext}").exists()
+            ),
+            None,
+        )
+        stub_plugin_path: Path | None = None
+        if existing_plugin is None or is_our_stub_plugin(existing_plugin):
+            stub_plugin_path = mod_dir / f"{mod_name}.esp"
+
+        # Files the user has disabled in the Mod Files tab — skip them
+        # in the pack so they aren't archived, and aren't re-enabled
+        # implicitly when we auto-disable everything that was packed.
+        excluded_now = frozenset(self._mod_files_excluded.get(mod_name, set()))
+
+        popup = CTkProgressPopup(
+            self.winfo_toplevel(),
+            title=f"Pack {kind_upper}",
+            label=f"Packing {mod_name}…",
+            message="Scanning files…",
+        )
+
+        # Result shape from the worker:
+        #   ("ok", main_count, main_size, tex_count, tex_size, all_packed_keys)
+        # tex_count == 0 means no textures archive was written.
+        def _on_done(
+            result: tuple | None,
+            error: str | None,
+        ) -> None:
+            if popup.winfo_exists():
+                popup.close_progress_popup()
+            if error is not None:
+                CTkAlert(
+                    state="warning", title=f"Pack {kind_upper} failed",
+                    body_text=error, btn1="OK", btn2="",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            assert result is not None
+            main_count, main_size, tex_count, tex_size, packed_keys = result
+            # Either physically delete the loose files, or just mark them
+            # disabled in the Mod Files tab so deploy skips them.  Both
+            # outcomes mean only the archive reaches the game's Data
+            # folder; delete is destructive, disable is reversible.
+            deleted_count = 0
+            if delete_loose:
+                deleted_count = self._delete_loose_files(mod_dir, packed_keys)
+            else:
+                self._auto_disable_packed_files(mod_name, packed_keys)
+            # Trigger a filemap rebuild — the new archive needs to enter
+            # the mod-index cache so conflict detection picks it up, and
+            # the auto-disable / delete changed what's on disk.
+            mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
+            if mod_panel is not None:
+                try:
+                    mod_panel._filemap_rescan_index = True
+                    mod_panel._rebuild_filemap()
+                except Exception:
+                    pass
+            # Re-render the Mod Files tree so the new archive shows up
+            # and the auto-disabled / removed rows reflect the new state.
+            try:
+                self.show_mod_files(mod_name)
+            except Exception:
+                pass
+            stub_msg = (
+                f"\n\nGenerated {stub_plugin_path.name} so the game will "
+                "auto-load the archive."
+                if stub_plugin_path is not None else ""
+            )
+            delete_msg = (
+                f"\n\nDeleted {deleted_count} loose file(s) from the mod folder."
+                if delete_loose else ""
+            )
+            # Build the success body — one line per archive emitted.
+            lines = []
+            if main_count > 0:
+                lines.append(
+                    f"Packed {main_count} file(s) into {archive_path.name} "
+                    f"({main_size / (1024 * 1024):.1f} MiB)."
+                )
+            if tex_count > 0 and archive_textures_path is not None:
+                lines.append(
+                    f"Packed {tex_count} texture file(s) into "
+                    f"{archive_textures_path.name} "
+                    f"({tex_size / (1024 * 1024):.1f} MiB)."
+                )
+            CTkAlert(
+                state="info", title=f"Pack {kind_upper}",
+                body_text="\n".join(lines) + stub_msg + delete_msg,
+                btn1="OK", btn2="",
+                parent=self.winfo_toplevel(),
+            )
+
+        def _worker() -> None:
+            def _progress(done: int, total: int, current: str) -> None:
+                # Marshal to the main thread.
+                def _ui() -> None:
+                    if not popup.winfo_exists():
+                        return
+                    popup.update_progress(done / max(total, 1))
+                    popup.update_message(f"{done} / {total}  —  {current[-50:]}")
+                try:
+                    self.after(0, _ui)
+                except Exception:
+                    pass
+
+            def _cancel() -> bool:
+                return bool(getattr(popup, "cancelled", False))
+
+            main_count = 0
+            main_size = 0
+            tex_count = 0
+            tex_size = 0
+            all_packed: list[str] = []
+
+            try:
+                if kind == "ba2":
+                    # GNRL pass — everything except .dds.  May raise
+                    # "no packable files found" if the mod is *only*
+                    # textures; we treat that as non-fatal and continue
+                    # to the textures pass.
+                    try:
+                        main_count, main_size, packed_main = write_ba2(
+                            archive_path, mod_dir,
+                            game_id=game_id,
+                            compress=True,
+                            excluded_keys=excluded_now,
+                            exclude_textures=True,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                        all_packed.extend(packed_main)
+                    except Ba2WriteError as exc:
+                        if "no packable" not in str(exc).lower():
+                            raise
+                    # DX10 pass — only .dds files.  May raise
+                    # "no packable texture files found" / "no DX10-
+                    # eligible" if the mod has no DDS or only legacy
+                    # (non-DX10) DDS.  Non-fatal.
+                    try:
+                        tex_count, tex_size, packed_tex = write_ba2_textures(
+                            archive_textures_path, mod_dir,
+                            game_id=game_id,
+                            compress=True,
+                            excluded_keys=excluded_now,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                        all_packed.extend(packed_tex)
+                    except Ba2WriteError as exc:
+                        msg = str(exc).lower()
+                        if "no packable" not in msg and "no dx10" not in msg:
+                            raise
+                    if main_count == 0 and tex_count == 0:
+                        raise Ba2WriteError("no packable files found")
+                else:
+                    # BSA path.  When the user opted into the split
+                    # ("Separate textures archive"), we run two passes:
+                    # the base archive excludes textures, the sibling
+                    # contains only textures.  Either pass can raise
+                    # "no packable files found" without aborting the
+                    # other (a textures-only mod still produces a
+                    # ` - Textures.bsa`; a no-textures mod still
+                    # produces the base BSA).
+                    if split_textures and archive_textures_path is not None:
+                        try:
+                            main_count, main_size, packed_main = write_bsa(
+                                archive_path, mod_dir,
+                                version=bsa_version,
+                                game_id=game_id,
+                                compress=True,
+                                excluded_keys=excluded_now,
+                                texture_mode="exclude",
+                                progress=_progress,
+                                cancel=_cancel,
+                            )
+                            all_packed.extend(packed_main)
+                        except BsaWriteError as exc:
+                            if "no packable" not in str(exc).lower():
+                                raise
+                        try:
+                            tex_count, tex_size, packed_tex = write_bsa(
+                                archive_textures_path, mod_dir,
+                                version=bsa_version,
+                                game_id=game_id,
+                                compress=True,
+                                excluded_keys=excluded_now,
+                                texture_mode="only",
+                                progress=_progress,
+                                cancel=_cancel,
+                            )
+                            all_packed.extend(packed_tex)
+                        except BsaWriteError as exc:
+                            if "no packable" not in str(exc).lower():
+                                raise
+                        if main_count == 0 and tex_count == 0:
+                            raise BsaWriteError("no packable files found")
+                    else:
+                        main_count, main_size, packed_main = write_bsa(
+                            archive_path, mod_dir,
+                            version=bsa_version,
+                            game_id=game_id,
+                            compress=True,
+                            excluded_keys=excluded_now,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                        all_packed.extend(packed_main)
+                if stub_plugin_path is not None:
+                    write_stub_plugin(stub_plugin_path, game_id=game_id)
+            except (BsaWriteError, Ba2WriteError) as exc:
+                msg = str(exc)
+                if msg == "cancelled":
+                    self.after(0, lambda: popup.close_progress_popup() if popup.winfo_exists() else None)
+                    return
+                self.after(0, lambda m=msg: _on_done(None, m))
+                return
+            except Exception as exc:  # last-resort safety net
+                self.after(0, lambda m=str(exc): _on_done(None, m))
+                return
+            result = (main_count, main_size, tex_count, tex_size, all_packed)
+            self.after(0, lambda r=result: _on_done(r, None))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_unpack_bsa_click(self) -> None:
+        """Open the Unpack archive overlay over the plugin panel.
+
+        Despite the legacy method / attribute names ('bsa'), this drives
+        unpacking for both BSA and BA2 archives — dispatch happens in
+        :meth:`_do_unpack_bsa` based on the chosen file's suffix."""
+        from gui.bsa_unpack_overlay import BsaUnpackOverlay
+        from gui.ctk_components import CTkAlert
+
+        mod_name = self._mod_files_mod_name
+        if not mod_name or mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._staging_root is None:
+            return
+        mod_dir = self._staging_root / mod_name
+        if not mod_dir.is_dir():
+            return
+
+        # Same gate as pack: deleting the archive + plugin from the mod
+        # folder while the profile is deployed leaves stale hard-links
+        # in game_root that the next Restore would misroute to overwrite.
+        kind = self._archive_kind_for_current_game()
+        kind_upper = kind.upper() if kind else "Archive"
+        if self._is_current_profile_deployed():
+            CTkAlert(
+                state="warning", title=f"Unpack {kind_upper}",
+                body_text=(
+                    "This profile is currently deployed.\n\n"
+                    f"Run Restore first, then unpack the {kind_upper}."
+                ),
+                btn1="OK", btn2="", parent=self.winfo_toplevel(),
+            )
+            return
+
+        # Close any prior overlay first.
+        self._close_bsa_unpack_overlay()
+
+        overlay = BsaUnpackOverlay(
+            self,
+            mod_name=mod_name,
+            mod_dir=mod_dir,
+            on_unpack=self._do_unpack_bsa,
+            on_close=self._close_bsa_unpack_overlay,
+        )
+        overlay.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self._bsa_unpack_overlay = overlay
+
+    def _close_bsa_unpack_overlay(self) -> None:
+        overlay = getattr(self, "_bsa_unpack_overlay", None)
+        if overlay is not None:
+            try:
+                overlay.destroy()
+            except Exception:
+                pass
+            self._bsa_unpack_overlay = None
+
+    def _do_unpack_bsa(self, archive_paths: list[Path]) -> None:
+        """Extract every archive in *archive_paths* into the mod folder
+        as a single operation, then delete each archive, remove the
+        same-stem stub plugin if it's one we generated, clear
+        ``excluded_mod_files`` for the union of unpacked rel_keys,
+        rebuild the filemap and refresh the Mod Files tab.
+
+        *archive_paths* always shares a single plugin stem (the overlay
+        groups by it); there's only one stub plugin to consider per
+        invocation.
+
+        Runs on a background thread with one shared progress popup so a
+        multi-archive plugin (e.g. ``- Main.ba2`` + ``- Textures.ba2``)
+        looks like one operation to the user."""
+        import threading
+        from Utils.ba2_extract import Ba2ExtractError, extract_ba2
+        from Utils.bsa_extract import BsaExtractError, extract_bsa
+        from Utils.bsa_writer import is_our_stub_plugin
+        from gui.ctk_components import CTkAlert, CTkProgressPopup
+
+        if not archive_paths:
+            return
+        mod_name = self._mod_files_mod_name
+        if not mod_name or self._staging_root is None:
+            return
+        mod_dir = self._staging_root / mod_name
+        if not mod_dir.is_dir():
+            return
+
+        self._close_bsa_unpack_overlay()
+
+        # Determine the plugin stem these archives share, by stripping
+        # the FO4 ` - Main` / ` - Textures` sidecar suffixes.  All paths
+        # in *archive_paths* should resolve to the same stem (the
+        # overlay grouped them); we trust the first one.
+        first = archive_paths[0]
+        archive_stem = first.stem
+        for suffix in (" - Main", " - Textures"):
+            if archive_stem.endswith(suffix):
+                archive_stem = archive_stem[: -len(suffix)]
+                break
+
+        # Determine whether this is a BSA or BA2 group for dialog text.
+        suffixes = {p.suffix.lower() for p in archive_paths}
+        if suffixes == {".ba2"}:
+            kind_upper = "BA2"
+        elif suffixes == {".bsa"}:
+            kind_upper = "BSA"
+        else:
+            kind_upper = "Archive"
+
+        popup_label = (
+            f"Unpacking {first.name}…" if len(archive_paths) == 1
+            else f"Unpacking {len(archive_paths)} archives for {archive_stem}…"
+        )
+        popup = CTkProgressPopup(
+            self.winfo_toplevel(),
+            title=f"Unpack {kind_upper}",
+            label=popup_label,
+            message="Reading archive…",
+        )
+
+        def _on_done(
+            result: tuple[int, list[str]] | None,
+            error: str | None,
+        ) -> None:
+            if popup.winfo_exists():
+                popup.close_progress_popup()
+            if error is not None:
+                CTkAlert(
+                    state="warning", title=f"Unpack {kind_upper} failed",
+                    body_text=error, btn1="OK", btn2="",
+                    parent=self.winfo_toplevel(),
+                )
+                return
+            assert result is not None
+            total_count, all_written_rels = result
+
+            # Delete every archive we successfully extracted.
+            for ap in archive_paths:
+                try:
+                    ap.unlink()
+                except OSError as exc:
+                    self._log(
+                        f"Unpack {kind_upper}: could not delete {ap.name}: {exc}"
+                    )
+
+            # Delete the shared stub plugin if it's one we generated
+            # (don't touch a real authored plugin).
+            stub = mod_dir / f"{archive_stem}.esp"
+            stub_msg = ""
+            if stub.is_file() and is_our_stub_plugin(stub):
+                try:
+                    stub.unlink()
+                    stub_msg = f"\n\nRemoved generated stub {stub.name}."
+                except OSError as exc:
+                    self._log(
+                        f"Unpack {kind_upper}: could not delete {stub.name}: {exc}"
+                    )
+            elif stub.is_file():
+                stub_msg = (
+                    f"\n\nLeft {stub.name} in place — it doesn't look like "
+                    "one of our generated stubs."
+                )
+
+            # Clear those rel_keys from excluded_mod_files so the freshly
+            # unpacked loose files show as enabled in the Mod Files tab.
+            self._clear_excluded_for_unpack(mod_name, all_written_rels)
+
+            # Rebuild filemap so deploy picks up the new loose files
+            # (and forgets the now-deleted archives).
+            mod_panel = getattr(self.winfo_toplevel(), "_mod_panel", None)
+            if mod_panel is not None:
+                try:
+                    mod_panel._filemap_rescan_index = True
+                    mod_panel._rebuild_filemap()
+                except Exception:
+                    pass
+
+            try:
+                self.show_mod_files(mod_name)
+            except Exception:
+                pass
+
+            archives_label = (
+                archive_paths[0].name if len(archive_paths) == 1
+                else f"{len(archive_paths)} archives"
+            )
+            CTkAlert(
+                state="info", title=f"Unpack {kind_upper}",
+                body_text=(
+                    f"Unpacked {total_count} file(s) from {archives_label} "
+                    f"into the mod folder." + stub_msg
+                ),
+                btn1="OK", btn2="",
+                parent=self.winfo_toplevel(),
+            )
+
+        def _worker() -> None:
+            def _cancel() -> bool:
+                return bool(getattr(popup, "cancelled", False))
+
+            total_count = 0
+            all_written: list[str] = []
+
+            try:
+                # Loop through every archive in the group.  Progress for
+                # each is independent (per-archive %, with the popup
+                # label updated to show which one is in flight).
+                for i, ap in enumerate(archive_paths):
+                    if _cancel():
+                        self.after(0, lambda: popup.close_progress_popup() if popup.winfo_exists() else None)
+                        return
+                    label_text = (
+                        f"Unpacking {ap.name}"
+                        if len(archive_paths) == 1
+                        else f"Unpacking {ap.name} ({i + 1} / {len(archive_paths)})"
+                    )
+                    self.after(0, lambda lbl=label_text: popup.update_label(lbl) if popup.winfo_exists() else None)
+
+                    def _progress(done: int, total: int, current: str,
+                                  _ap=ap) -> None:
+                        def _ui() -> None:
+                            if not popup.winfo_exists():
+                                return
+                            popup.update_progress(done / max(total, 1))
+                            popup.update_message(
+                                f"{done} / {total}  —  {current[-50:]}"
+                            )
+                        try:
+                            self.after(0, _ui)
+                        except Exception:
+                            pass
+
+                    is_ba2 = ap.suffix.lower() == ".ba2"
+                    if is_ba2:
+                        count, written = extract_ba2(
+                            ap, mod_dir,
+                            overwrite=True,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                    else:
+                        count, written = extract_bsa(
+                            ap, mod_dir,
+                            overwrite=True,
+                            progress=_progress,
+                            cancel=_cancel,
+                        )
+                    total_count += count
+                    all_written.extend(written)
+            except (BsaExtractError, Ba2ExtractError) as exc:
+                msg = str(exc)
+                if "cancel" in msg.lower():
+                    self.after(
+                        0,
+                        lambda: popup.close_progress_popup()
+                        if popup.winfo_exists() else None,
+                    )
+                    return
+                self.after(0, lambda m=msg: _on_done(None, m))
+                return
+            except Exception as exc:
+                self.after(0, lambda m=str(exc): _on_done(None, m))
+                return
+            self.after(0, lambda r=(total_count, all_written): _on_done(r, None))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _clear_excluded_for_unpack(
+        self, mod_name: str, unpacked_rel_keys: list[str],
+    ) -> None:
+        """Remove *unpacked_rel_keys* from this mod's excluded_mod_files
+        entry, so files that were auto-disabled by a previous Pack BSA
+        come back as enabled in the Mod Files tab.
+
+        No-op for pseudo-mods or when profile_state isn't wired up."""
+        if not unpacked_rel_keys:
+            return
+        if mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._mod_files_profile_dir is None:
+            return
+        all_excluded = read_excluded_mod_files(self._mod_files_profile_dir, None)
+        current = set(all_excluded.get(mod_name, ()))
+        if not current:
+            return
+        new_set = current - set(unpacked_rel_keys)
+        if new_set == current:
+            return  # nothing to clear
+        if new_set:
+            all_excluded[mod_name] = sorted(new_set)
+        else:
+            all_excluded.pop(mod_name, None)
+        write_excluded_mod_files(self._mod_files_profile_dir, all_excluded)
+        self._mod_files_excluded = {k: set(v) for k, v in all_excluded.items()}
+        self._log(
+            f"Unpack BSA: re-enabled {len(current) - len(new_set)} file(s) in "
+            f"'{mod_name}' (now {len(new_set)} excluded)"
+        )
+
+    def _delete_loose_files(
+        self, mod_dir: Path, packed_rel_keys: list[str],
+    ) -> int:
+        """Delete every file referenced by *packed_rel_keys* from *mod_dir*
+        and remove any folders that become empty as a result.
+
+        rel_keys are lowercase forward-slash, but on case-sensitive
+        filesystems (Linux) the on-disk path can have any casing — mods
+        ship with folders like ``Scripts/`` and ``Interface/``.  We
+        resolve each rel_key one path segment at a time against the
+        actual directory listing so wrong-cased *parent directories*
+        are matched too, not just wrong-cased filenames.
+
+        A per-directory listing cache keeps this O(files + dirs) rather
+        than O(files × depth × siblings).
+
+        Returns the number of files actually deleted."""
+        if not packed_rel_keys:
+            return 0
+
+        # Cache of dir → {lowercase_name: actual_name} for case-insensitive
+        # segment lookups.  Populated lazily.
+        listing_cache: dict[Path, dict[str, str]] = {}
+
+        def _list_lower(d: Path) -> dict[str, str]:
+            cached = listing_cache.get(d)
+            if cached is not None:
+                return cached
+            mapping: dict[str, str] = {}
+            try:
+                for entry in d.iterdir():
+                    mapping[entry.name.lower()] = entry.name
+            except OSError:
+                pass
+            listing_cache[d] = mapping
+            return mapping
+
+        def _resolve_ci(rel: str) -> Path | None:
+            """Walk *rel* segment-by-segment from mod_dir, matching each
+            segment case-insensitively against the real directory listing.
+            Returns the actual on-disk Path or None if any segment can't
+            be matched."""
+            cur = mod_dir
+            segments = rel.split("/")
+            for i, seg in enumerate(segments):
+                names = _list_lower(cur)
+                actual = names.get(seg.lower())
+                if actual is None:
+                    return None
+                cur = cur / actual
+                # Last segment is the file; intermediates must be dirs.
+                if i < len(segments) - 1 and not cur.is_dir():
+                    return None
+            return cur
+
+        deleted = 0
+        empty_candidate_dirs: set[Path] = set()
+        for rel in packed_rel_keys:
+            # Fast path first — exact lowercase match (works on
+            # case-insensitive filesystems and on already-lowercase mods).
+            target = mod_dir / rel
+            if not target.is_file():
+                resolved = _resolve_ci(rel)
+                if resolved is None or not resolved.is_file():
+                    continue
+                target = resolved
+            try:
+                target.unlink()
+                deleted += 1
+                empty_candidate_dirs.add(target.parent)
+                # Invalidate parent's listing cache so the empty-dir
+                # walk below sees an accurate post-delete view.
+                listing_cache.pop(target.parent, None)
+            except OSError as exc:
+                self._log(f"Pack BSA: could not delete {target}: {exc}")
+        # Remove any folders we may have just emptied, walking up to the
+        # mod root (but never deleting the mod root itself).
+        for d in sorted(empty_candidate_dirs, key=lambda p: -len(p.parts)):
+            cur = d
+            while cur != mod_dir and cur.is_dir():
+                try:
+                    next(cur.iterdir())
+                    break  # not empty
+                except StopIteration:
+                    try:
+                        cur.rmdir()
+                    except OSError:
+                        break
+                    cur = cur.parent
+                except OSError:
+                    break
+        if deleted:
+            self._log(
+                f"Pack BSA: deleted {deleted} loose file(s) from "
+                f"'{mod_dir.name}' after packing"
+            )
+        return deleted
+
+    def _auto_disable_packed_files(
+        self, mod_name: str, packed_rel_keys: list[str],
+    ) -> None:
+        """Add *packed_rel_keys* to this mod's excluded_mod_files entry so
+        every loose file that was just packed is hidden from deploy.
+        Existing exclusions are preserved (union, not replace).
+
+        No-op for the overwrite / Root_Folder pseudo-mods, or when the
+        profile_state path isn't wired up."""
+        if not packed_rel_keys:
+            return
+        if mod_name in (_OVERWRITE_NAME, "Root_Folder"):
+            return
+        if self._mod_files_profile_dir is None:
+            return
+        all_excluded = read_excluded_mod_files(self._mod_files_profile_dir, None)
+        merged = set(all_excluded.get(mod_name, ())) | set(packed_rel_keys)
+        all_excluded[mod_name] = sorted(merged)
+        write_excluded_mod_files(self._mod_files_profile_dir, all_excluded)
+        self._mod_files_excluded = {k: set(v) for k, v in all_excluded.items()}
+        self._log(
+            f"Pack BSA: auto-disabled {len(packed_rel_keys)} file(s) in '{mod_name}' "
+            f"(now {len(merged)} total excluded)"
+        )
 
     # ------------------------------------------------------------------
     # Ini Files tab
@@ -1367,6 +2468,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             parent = self._mf_tree.parent(parent)
 
     def _on_mf_click(self, event):
+        if getattr(self, "_mf_separator_view", False):
+            return
         iid = self._mf_tree.identify_row(event.y)
         if not iid:
             return
@@ -1379,6 +2482,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             return
 
     def _on_mf_space(self, event):
+        if getattr(self, "_mf_separator_view", False):
+            return
         sel = self._mf_tree.selection()
         if sel:
             self._mf_toggle(sel[0])
@@ -1756,8 +2861,24 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._conflict_cache = (sig, contested_keys, filemap_winner)
         return contested_keys, filemap_winner
 
+    def _mf_refresh_current_view(self):
+        """Re-render the Mod Files tab using whichever view is active —
+        either the single-mod path or the separator path."""
+        if getattr(self, "_mf_separator_view", False):
+            self.show_mod_files_for_separator(
+                getattr(self, "_mf_separator_name", "") or "",
+                getattr(self, "_mf_separator_mods", []) or [],
+            )
+        else:
+            self.show_mod_files(self._mod_files_mod_name)
+
     def show_mod_files(self, mod_name: str | None):
         """Populate the Mod Files tab for the given mod name."""
+        # Switching back from a separator view: drop the read-only flag so
+        # checkbox clicks resume working for the regular single-mod tree.
+        self._mf_separator_view = False
+        self._mf_separator_name = None
+        self._mf_separator_mods = []
         # Capture expand state (by path) + scroll position if we're rebuilding
         # the same mod, so the tree doesn't collapse / jump on every edit.
         prev_expanded: set[str] = set()
@@ -1775,6 +2896,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 prev_scroll = None
 
         self._mod_files_mod_name = mod_name
+        self._update_pack_bsa_button_state()
         # Clear tree
         self._mf_tree.delete(*self._mf_tree.get_children())
         self._mf_checked.clear()
@@ -1987,6 +3109,230 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                     except Exception:
                         pass
         prev_scroll = getattr(self, "_mf_prev_scroll", None)
+        if prev_scroll:
+            try:
+                self._mf_tree.yview_moveto(prev_scroll[0])
+            except Exception:
+                pass
+
+    def show_mod_files_for_separator(
+        self, separator_name: str, mod_names: list[str],
+    ):
+        """Populate the Mod Files tab with one top-level node per mod under
+        the given separator. Read-only — clicking the checkbox columns is
+        suppressed in this mode (see ``_mf_separator_view``)."""
+        # Capture expand state when re-rendering the same separator so the
+        # tree doesn't collapse on toggle / refresh.
+        prev_expanded: set[str] = set()
+        prev_scroll: tuple[float, float] | None = None
+        if (getattr(self, "_mf_separator_view", False)
+                and getattr(self, "_mf_separator_name", None) == separator_name):
+            for iid, path in self._mf_iid_to_path.items():
+                try:
+                    if self._mf_tree.item(iid, "open") and path:
+                        prev_expanded.add(path.lower())
+                except Exception:
+                    pass
+            try:
+                prev_scroll = self._mf_tree.yview()
+            except Exception:
+                prev_scroll = None
+
+        self._mf_separator_view = True
+        self._mf_separator_name = separator_name
+        self._mf_separator_mods = list(mod_names)
+        # Disable the per-mod state used by the single-mod editing path so
+        # any stray callbacks (e.g. _mf_save_and_rebuild) become no-ops.
+        self._mod_files_mod_name = None
+        self._update_pack_bsa_button_state()
+        self._mf_tree.delete(*self._mf_tree.get_children())
+        self._mf_checked.clear()
+        self._mf_iid_to_key.clear()
+        self._mf_iid_to_relstr.clear()
+        self._mf_folder_iids.clear()
+        self._mf_iid_to_path.clear()
+        self._mf_path_to_iid.clear()
+        self._mf_top_level_iids.clear()
+        self._mf_stripped_paths.clear()
+        self._mf_synthetic_iids.clear()
+
+        if not mod_names:
+            self._mod_files_label.configure(
+                text=f"{separator_name} — (no mods in this separator)"
+            )
+            return
+
+        self._mod_files_label.configure(
+            text=f"{separator_name} — {len(mod_names)} mod(s) (read-only)"
+        )
+        self._mf_tree_expanded = False
+        self._mf_expand_btn.configure(text="⊞ Expand All")
+
+        # Conflict cache (post-strip rel_keys → winner). Reuse the same data
+        # as the single-mod view so colouring stays consistent.
+        full_index = None
+        if self._mod_files_index_path is not None:
+            from Utils.filemap import read_mod_index
+            full_index = read_mod_index(self._mod_files_index_path)
+        contested_keys, filemap_winner = self._get_conflict_cache(full_index)
+
+        # Per-mod strip-prefix lookup so conflict tagging keys match what
+        # the filemap actually deploys.
+        strip_map: dict[str, list[str]] = {}
+        if self._mod_files_profile_dir is not None:
+            try:
+                strip_map = read_mod_strip_prefixes(
+                    self._mod_files_profile_dir, None,
+                )
+            except Exception:
+                strip_map = {}
+
+        self._mf_tree.tag_configure("dim", foreground=TEXT_DIM)
+        self._mf_tree.tag_configure("conflict_win",  foreground=_theme.conflict_higher)
+        self._mf_tree.tag_configure("conflict_lose", foreground=_theme.conflict_lower)
+        self._mf_tree.tag_configure("mf_stripped", foreground=TEXT_DIM)
+        self._mf_tree.tag_configure("mf_disabled", foreground=TEXT_DIM)
+
+        only_conflicts = bool(
+            self._mf_only_conflicts_var and self._mf_only_conflicts_var.get()
+        )
+
+        from Utils.filemap import _scan_dir
+        staging_dir: Path | None = None
+        if self._game is not None and hasattr(self._game, "get_effective_mod_staging_path"):
+            try:
+                staging_dir = Path(self._game.get_effective_mod_staging_path())
+            except Exception:
+                staging_dir = None
+        overwrite_dir: Path | None = None
+        if self._game is not None and hasattr(self._game, "get_effective_overwrite_path"):
+            try:
+                overwrite_dir = Path(self._game.get_effective_overwrite_path())
+            except Exception:
+                overwrite_dir = None
+
+        rendered_any = False
+        for mod_name in mod_names:
+            stripped_for_mod = {
+                e.lower() for e in strip_map.get(mod_name, []) if e
+            }
+
+            if mod_name == _OVERWRITE_NAME:
+                mod_dir = overwrite_dir
+            elif staging_dir is not None:
+                mod_dir = staging_dir / mod_name
+            else:
+                mod_dir = None
+
+            files: dict[str, str] = {}
+            if mod_dir is not None and mod_dir.is_dir():
+                _name, _normal, _root, _invalid = _scan_dir(
+                    mod_name, str(mod_dir),
+                )
+                files.update(_normal)
+                files.update(_root)
+
+            def _post_strip(raw_rel_key: str, _stripped=stripped_for_mod) -> str:
+                k = raw_rel_key
+                for s in sorted(_stripped, key=len, reverse=True):
+                    if k == s or k.startswith(s + "/"):
+                        k = k[len(s):].lstrip("/")
+                        break
+                return k
+
+            def _conflict_tag(rel_key: str, _owner=mod_name,
+                              _post=_post_strip) -> str | None:
+                key = _post(rel_key)
+                if key not in contested_keys:
+                    return None
+                winner = filemap_winner.get(key.lower())
+                if winner is None:
+                    return None
+                return "conflict_win" if winner == _owner else "conflict_lose"
+
+            tree_dict: dict = {}
+            for rel_key, rel_str in sorted(files.items()):
+                if only_conflicts and _conflict_tag(rel_key) is None:
+                    continue
+                parts = rel_str.replace("\\", "/").split("/")
+                node = tree_dict
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node.setdefault("__files__", []).append((parts[-1], rel_key, rel_str))
+
+            if only_conflicts and not tree_dict:
+                continue
+            if not files:
+                continue
+
+            rendered_any = True
+            mod_iid = self._mf_tree.insert(
+                "", "end",
+                text=mod_name,
+                values=("", ""),
+                open=False,
+                tags=("dim",),
+            )
+            self._mf_folder_iids.add(mod_iid)
+            self._mf_iid_to_path[mod_iid] = mod_name
+
+            def _insert_node(parent_id, name, subtree, parent_path, depth):
+                folder_path = f"{parent_path}/{name}" if parent_path else name
+                iid = self._mf_tree.insert(
+                    parent_id, "end",
+                    text=name,
+                    values=("", ""),
+                    open=False,
+                )
+                self._mf_folder_iids.add(iid)
+                self._mf_iid_to_path[iid] = folder_path
+                for child in sorted(k for k in subtree if k != "__files__"):
+                    _insert_node(iid, child, subtree[child], folder_path, depth + 1)
+                for fname, rel_key, rel_str in sorted(subtree.get("__files__", [])):
+                    tag = _conflict_tag(rel_key)
+                    tags: tuple[str, ...] = (tag,) if tag else ()
+                    leaf_iid = self._mf_tree.insert(
+                        iid, "end",
+                        text=fname,
+                        values=("", ""),
+                        tags=tags,
+                    )
+                    self._mf_iid_to_relstr[leaf_iid] = rel_str
+                    file_path = f"{folder_path}/{fname}" if folder_path else fname
+                    self._mf_iid_to_path[leaf_iid] = file_path
+
+            mod_path_prefix = mod_name
+            for top in sorted(k for k in tree_dict if k != "__files__"):
+                _insert_node(mod_iid, top, tree_dict[top], mod_path_prefix, 1)
+            for fname, rel_key, rel_str in sorted(tree_dict.get("__files__", [])):
+                tag = _conflict_tag(rel_key)
+                tags: tuple[str, ...] = (tag,) if tag else ()
+                leaf_iid = self._mf_tree.insert(
+                    mod_iid, "end",
+                    text=fname,
+                    values=("", ""),
+                    tags=tags,
+                )
+                self._mf_iid_to_relstr[leaf_iid] = rel_str
+                self._mf_iid_to_path[leaf_iid] = f"{mod_path_prefix}/{fname}"
+
+        if not rendered_any:
+            placeholder = (
+                "  (no conflicts in this separator)"
+                if only_conflicts else
+                "  (no files found in mods under this separator)"
+            )
+            self._mf_tree.insert("", "end", text=placeholder, tags=("dim",))
+            return
+
+        # Restore expand / scroll state from the previous separator render.
+        if prev_expanded:
+            for iid, path in self._mf_iid_to_path.items():
+                if path and path.lower() in prev_expanded:
+                    try:
+                        self._mf_tree.item(iid, open=True)
+                    except Exception:
+                        pass
         if prev_scroll:
             try:
                 self._mf_tree.yview_moveto(prev_scroll[0])
@@ -2287,6 +3633,10 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         """Populate the Archive tab for the given mod name (lazy: only renders
         when the Archive tab is visible; otherwise flags dirty)."""
         self._archive_mod_name = mod_name
+        # Switching to a single-mod (or no) selection clears any active
+        # separator scope so the regular all-mods fallback works.
+        self._archive_separator_name = None
+        self._archive_separator_mods = None
         if self._arc_tree is None:
             return
         try:
@@ -2299,15 +3649,45 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._archive_tab_dirty = False
         self._render_archive_tree(mod_name)
 
+    def show_mod_archives_for_separator(
+        self, separator_name: str, mod_names: list[str],
+    ):
+        """Populate the Archive tab with every BSA owned by any mod under the
+        given separator. Lazy: only renders when the Archive tab is visible."""
+        self._archive_mod_name = None
+        self._archive_separator_name = separator_name
+        self._archive_separator_mods = list(mod_names)
+        if self._arc_tree is None:
+            return
+        try:
+            current = self._tabs.get()
+        except Exception:
+            current = ""
+        if current != "Archive":
+            self._archive_tab_dirty = True
+            return
+        self._archive_tab_dirty = False
+        self._render_archive_tree(None)
+
+    def _archive_term(self) -> str:
+        """Return the human-readable name for this game's archive format —
+        'BA2' for Fallout 4 / Starfield, 'BSA' otherwise."""
+        archive_exts = getattr(self._game, "archive_extensions", None) if self._game else None
+        if archive_exts and ".ba2" in archive_exts:
+            return "BA2"
+        return "BSA"
+
     def _render_archive_tree(self, mod_name: str | None):
         """Actually populate the Archive treeview."""
         if self._arc_tree is None or self._archive_label is None:
             return
         self._arc_tree.delete(*self._arc_tree.get_children())
 
+        term = self._archive_term()
+
         bsa_path = self._bsa_index_path
         if bsa_path is None or not bsa_path.is_file():
-            self._archive_label.configure(text="(no BSA index yet — refresh to scan)")
+            self._archive_label.configure(text=f"(no {term} index yet — refresh to scan)")
             return
 
         from Utils.bsa_filemap import read_bsa_index
@@ -2354,11 +3734,32 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         if self._arc_search_var is not None:
             query = self._arc_search_var.get().casefold()
 
-        # If the selected mod has BSAs, scope the view to that mod. Otherwise
-        # (no selection, or the selected mod has no BSAs) show every BSA in
-        # the modlist alphabetically so the user can always browse archives.
-        # Conflict colouring is per-BSA-owner.
-        if my_archives:
+        sep_name = getattr(self, "_archive_separator_name", None)
+        sep_mods = getattr(self, "_archive_separator_mods", None)
+
+        # Three view modes:
+        #  1. Separator selected → show every archive owned by a child mod.
+        #  2. Single mod with archives → scope to that mod.
+        #  3. Otherwise → show all enabled mods with archives (the existing fallback).
+        # Conflict colouring is per-archive-owner in all modes.
+        if sep_name is not None and sep_mods is not None:
+            scoped = [
+                m for m in sep_mods
+                if m in bsa_index and bsa_index.get(m) and m in enabled_mods
+            ]
+            scoped.sort(key=str.casefold)
+            render_units = [(m, bsa_index[m]) for m in scoped]
+            show_owner = True
+            if render_units:
+                self._archive_label.configure(
+                    text=f"{sep_name} — {len(render_units)} mod(s) with {term}s"
+                )
+            else:
+                self._archive_label.configure(
+                    text=f"{sep_name} — no mods with {term} archives"
+                )
+                return
+        elif my_archives:
             self._archive_label.configure(text=mod_name)
             render_units = [(mod_name, my_archives)]
             show_owner = False
@@ -2373,15 +3774,15 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             if render_units:
                 if mod_name:
                     self._archive_label.configure(
-                        text=f"{mod_name} — no BSA archives (showing all {len(render_units)} mods with BSAs)"
+                        text=f"{mod_name} — no {term} archives (showing all {len(render_units)} mods with {term}s)"
                     )
                 else:
                     self._archive_label.configure(
-                        text=f"(all {len(render_units)} mods with BSAs)"
+                        text=f"(all {len(render_units)} mods with {term}s)"
                     )
             else:
                 self._archive_label.configure(
-                    text=f"{mod_name} — no BSA archives" if mod_name else "(no BSA archives)"
+                    text=f"{mod_name} — no {term} archives" if mod_name else f"(no {term} archives)"
                 )
                 return
 
@@ -3013,6 +4414,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
 
     def _on_mf_right_click(self, event):
         """Show context menu for Mod Files tree rows."""
+        if getattr(self, "_mf_separator_view", False):
+            return
         iid = self._mf_tree.identify_row(event.y)
         if not iid:
             return
