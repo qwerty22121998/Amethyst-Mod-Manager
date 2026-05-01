@@ -78,7 +78,6 @@ from gui.download_locations_overlay import DownloadLocationsOverlay
 from gui.loot_groups_overlay import LootGroupsOverlay
 from gui.loot_plugin_rules_overlay import LootPluginRulesOverlay
 from gui.plugin_cycle_overlay import PluginCycleOverlay
-from gui.ctk_components import CTkTreeview
 
 from Utils.config_paths import get_exe_args_path, get_game_config_dir, get_game_config_path
 from Utils.profile_state import (
@@ -4027,18 +4026,106 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             command=self._refresh_data_tab,
         ).pack(side="left", padx=(0, 8), pady=2)
 
-        self._data_tree = CTkTreeview(
-            tab,
-            columns=("mod",),
-            headings={"#0": "Path", "mod": "Winning Mod"},
-            column_config={
-                "#0": {"minwidth": scaled(200), "stretch": True},
-                "mod": {"minwidth": scaled(160), "stretch": True},
-            },
-            selectmode="browse",
-            show_label=False,
+        # List frame: tree | combined scrollbar+marker strip — same pattern as
+        # Ini Files tab so the orange row highlight is also visible on the strip.
+        list_frame = tk.Frame(tab, bg=BG_LIST)
+        list_frame.grid(row=1, column=0, sticky="nsew")
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+
+        from gui.ctk_components import _is_flatpak_sandbox
+        style = ttk.Style()
+        style.theme_use("default")
+        use_default_indicator = _is_flatpak_sandbox()
+        if not use_default_indicator:
+            from gui.ctk_components import ICON_PATH as _ICON_PATH, _load_icon_image as _load_iim
+            _im_open = _load_iim(_ICON_PATH.get("arrow"))
+            _im_close = _im_open.rotate(90)
+            _im_empty = PilImage.new("RGB", (15, 15), BG_DEEP)
+            _img_open_d = ImageTk.PhotoImage(_im_open, name="img_open_data", size=(15, 15))
+            _img_close_d = ImageTk.PhotoImage(_im_close, name="img_close_data", size=(15, 15))
+            _img_empty_d = ImageTk.PhotoImage(_im_empty, name="img_empty_data", size=(15, 15))
+            self._data_arrow_images = (_img_open_d, _img_close_d, _img_empty_d)
+            try:
+                style.element_create("Treeitem.dataindicator", "image", "img_close_data",
+                    ("user1", "img_open_data"), ("user2", "img_empty_data"),
+                    sticky="w", width=15, height=15)
+            except Exception:
+                pass
+        try:
+            indicator_elem = "Treeitem.indicator" if use_default_indicator else "Treeitem.dataindicator"
+            style.layout("DataTab.Treeview.Item", [
+                ("Treeitem.padding", {"sticky": "nsew", "children": [
+                    (indicator_elem, {"side": "left", "sticky": "nsew"}),
+                    ("Treeitem.image", {"side": "left", "sticky": "nsew"}),
+                    ("Treeitem.focus", {"side": "left", "sticky": "nsew", "children": [
+                        ("Treeitem.text", {"side": "left", "sticky": "nsew"}),
+                    ]}),
+                ]}),
+            ])
+        except Exception:
+            pass
+
+        _bg = BG_LIST
+        _fg = TEXT_MAIN
+        style.configure("DataTab.Treeview",
+            background=_bg, foreground=_fg,
+            fieldbackground=_bg, borderwidth=0,
+            rowheight=scaled(22), font=(_theme.FONT_FAMILY, _theme.FS10),
+            focuscolor=_bg,
         )
-        self._data_tree.grid(row=1, column=0, sticky="nsew")
+        style.map("DataTab.Treeview",
+            background=[("selected", _bg), ("focus", _bg)],
+            foreground=[("selected", ACCENT)],
+        )
+        style.configure("DataTab.Treeview.Heading",
+            background=_bg, foreground=_fg,
+            font=(_theme.FONT_FAMILY, _theme.FS10, "bold"), relief="flat",
+        )
+
+        self._data_tree = ttk.Treeview(
+            list_frame,
+            columns=("mod",),
+            style="DataTab.Treeview",
+            selectmode="browse",
+            show="tree headings",
+        )
+        self._data_tree.heading("#0", text="Path", anchor="w")
+        self._data_tree.heading("mod", text="Winning Mod", anchor="w")
+        self._data_tree.column("#0", minwidth=scaled(200), stretch=True)
+        self._data_tree.column("mod", minwidth=scaled(160), stretch=True)
+        # Existing call sites use `self._data_tree.treeview.X` (legacy from CTkTreeview);
+        # alias to self so those keep working without churn.
+        self._data_tree.treeview = self._data_tree
+
+        # Combined scrollbar + marker strip
+        self._DATA_SCROLL_W = 16
+        self._data_marker_strip = tk.Canvas(
+            list_frame, bg=BG_DEEP, bd=0, highlightthickness=0,
+            width=self._DATA_SCROLL_W, takefocus=0,
+        )
+        self._data_tree.configure(yscrollcommand=self._data_scroll_set)
+
+        self._data_tree.grid(row=0, column=0, sticky="nsew")
+        self._data_marker_strip.grid(row=0, column=1, sticky="ns")
+
+        self._data_scroll_first = 0.0
+        self._data_scroll_last = 1.0
+        self._data_thumb_drag_offset: float | None = None
+        self._data_marker_strip_after_id: str | None = None
+        self._highlighted_data_mod: str | None = None
+
+        self._data_marker_strip.bind("<Configure>",        self._on_data_marker_strip_resize)
+        self._data_marker_strip.bind("<ButtonPress-1>",    self._on_data_scrollbar_press)
+        self._data_marker_strip.bind("<B1-Motion>",        self._on_data_scrollbar_drag)
+        self._data_marker_strip.bind("<ButtonRelease-1>",  self._on_data_scrollbar_release)
+        self._data_marker_strip.bind("<Button-4>",         lambda e: self._data_tree.yview_scroll(-3, "units"))
+        self._data_marker_strip.bind("<Button-5>",         lambda e: self._data_tree.yview_scroll(3, "units"))
+        self._data_marker_strip.bind("<MouseWheel>",       self._on_data_mousewheel)
+
+        # Redraw markers when nodes expand/collapse (visible row indices change).
+        self._data_tree.bind("<<TreeviewOpen>>",  lambda e: self._draw_data_marker_strip())
+        self._data_tree.bind("<<TreeviewClose>>", lambda e: self._draw_data_marker_strip())
 
         # Search bar (bottom)
         data_search_bar = tk.Frame(tab, bg=BG_HEADER, highlightthickness=0)
@@ -4064,12 +4151,12 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         _data_search_entry.bind("<Control-a>", _data_select_all)
 
         if not LEGACY_WHEEL_REDUNDANT:
-            self._data_tree.treeview.bind("<Button-4>",
-                lambda e: self._data_tree.treeview.yview_scroll(-3, "units"))
-            self._data_tree.treeview.bind("<Button-5>",
-                lambda e: self._data_tree.treeview.yview_scroll(3, "units"))
-        self._data_tree.treeview.bind("<<TreeviewSelect>>", self._on_data_file_selected)
-        self._data_tree.treeview.bind("<Button-3>", self._on_data_right_click)
+            self._data_tree.bind("<Button-4>",
+                lambda e: self._data_tree.yview_scroll(-3, "units"))
+            self._data_tree.bind("<Button-5>",
+                lambda e: self._data_tree.yview_scroll(3, "units"))
+        self._data_tree.bind("<<TreeviewSelect>>", self._on_data_file_selected)
+        self._data_tree.bind("<Button-3>", self._on_data_right_click)
 
     def _refresh_data_tab(self):
         """Reload the Data tab tree from filemap.txt.
@@ -4369,9 +4456,20 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             # Store (fname, mod_name, rel_key_lower) so leaf nodes can be tagged
             node.setdefault("__files__", []).append((parts[-1], mod_name, rel_key_lower))
 
-        self._data_tree.tag_configure("folder",       foreground=TAG_FOLDER)
-        self._data_tree.tag_configure("file",         foreground=TEXT_MAIN)
-        self._data_tree.tag_configure("conflict_win", foreground=_theme.conflict_higher)
+        self._data_tree.tag_configure("folder",        foreground=TAG_FOLDER)
+        self._data_tree.tag_configure("file",          foreground=TEXT_MAIN)
+        self._data_tree.tag_configure("conflict_win",  foreground=_theme.conflict_higher)
+        self._data_tree.tag_configure(
+            "mod_highlight", background=_theme.plugin_mod, foreground=TEXT_MAIN,
+        )
+
+        hi_mod = self._highlighted_data_mod
+
+        def file_tags(mod: str, rel_key_lower: str) -> tuple:
+            base = "conflict_win" if rel_key_lower in contested_keys else "file"
+            if hi_mod and mod == hi_mod:
+                return (base, "mod_highlight")
+            return (base,)
 
         def insert_node(parent_id, name, subtree):
             node_id = self._data_tree.insert(
@@ -4382,18 +4480,20 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             for child in sorted(k for k in subtree if k != "__files__"):
                 insert_node(node_id, child, subtree[child])
             for fname, mod, rel_key_lower in sorted(subtree.get("__files__", [])):
-                tag = "conflict_win" if rel_key_lower in contested_keys else "file"
                 self._data_tree.insert(
                     node_id, "end",
-                    text=fname, values=(mod,), tags=(tag,),
+                    text=fname, values=(mod,),
+                    tags=file_tags(mod, rel_key_lower),
                 )
 
         for top in sorted(k for k in tree_dict if k != "__files__"):
             insert_node("", top, tree_dict[top])
         for fname, mod, rel_key_lower in sorted(tree_dict.get("__files__", [])):
-            tag = "conflict_win" if rel_key_lower in contested_keys else "file"
             self._data_tree.insert("", "end",
-                text=fname, values=(mod,), tags=(tag,))
+                text=fname, values=(mod,),
+                tags=file_tags(mod, rel_key_lower))
+
+        self._draw_data_marker_strip()
 
     def _toggle_data_tree_expand(self):
         """Expand all folders in the Data tree, or collapse them if already expanded."""
@@ -4413,6 +4513,170 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._data_expand_btn.configure(
             text="⊟ Collapse All" if self._data_tree_expanded else "⊞ Expand All"
         )
+        self._draw_data_marker_strip()
+
+    # ------------------------------------------------------------------
+    # Data tab marker strip + row highlight
+    # ------------------------------------------------------------------
+
+    def _data_visible_rows(self) -> list[tuple[str, str]]:
+        """Return (iid, mod_name) for every currently visible row in the Data tree.
+
+        A row is visible iff every ancestor is open. Folder rows return ("", ""),
+        which lets the caller skip them when painting marker ticks.
+        """
+        out: list[tuple[str, str]] = []
+        tv = self._data_tree
+
+        def walk(parent: str):
+            for iid in tv.get_children(parent):
+                vals = tv.item(iid, "values")
+                mod = vals[0] if vals else ""
+                out.append((iid, mod))
+                if tv.item(iid, "open"):
+                    walk(iid)
+
+        walk("")
+        return out
+
+    def _apply_data_row_highlight(self):
+        """Update row backgrounds (orange) for files belonging to the highlighted mod."""
+        tv = self._data_tree
+        hi = self._highlighted_data_mod
+
+        def walk(parent: str):
+            for iid in tv.get_children(parent):
+                vals = tv.item(iid, "values")
+                mod = vals[0] if vals else ""
+                if mod:  # file row
+                    cur = list(tv.item(iid, "tags") or ())
+                    has = "mod_highlight" in cur
+                    want = bool(hi and mod == hi)
+                    if want and not has:
+                        cur.append("mod_highlight")
+                        tv.item(iid, tags=tuple(cur))
+                    elif not want and has:
+                        cur.remove("mod_highlight")
+                        tv.item(iid, tags=tuple(cur))
+                walk(iid)
+
+        walk("")
+
+    def _on_data_marker_strip_resize(self, _event=None):
+        if self._data_marker_strip_after_id is not None:
+            try:
+                self.after_cancel(self._data_marker_strip_after_id)
+            except Exception:
+                pass
+        self._data_marker_strip_after_id = self.after(50, self._draw_data_marker_strip)
+
+    def _draw_data_marker_strip(self):
+        """Paint the combined scrollbar + marker strip for the Data tab.
+
+        Layers:
+          1. Trough background
+          2. Orange tick marks for files belonging to the highlighted mod
+             (using each row's index in the *currently visible* row list)
+          3. Thumb rectangle
+        """
+        self._data_marker_strip_after_id = None
+        c = self._data_marker_strip
+        c.delete("all")
+        strip_h = c.winfo_height()
+        strip_w = c.winfo_width()
+        if strip_h <= 1 or strip_w <= 1:
+            return
+
+        c.create_rectangle(0, 0, strip_w, strip_h, fill=BG_DEEP, outline="", tags="trough")
+
+        hi = self._highlighted_data_mod
+        if hi:
+            rows = self._data_visible_rows()
+            n = len(rows)
+            if n:
+                strip_max = strip_h - 4
+                inv_n = 1.0 / n
+                color = _theme.plugin_mod
+                for row_idx, (_iid, mod) in enumerate(rows):
+                    if mod != hi:
+                        continue
+                    y = int(row_idx * inv_n * strip_h)
+                    if y < 2:
+                        y = 2
+                    elif y > strip_max:
+                        y = strip_max
+                    c.create_rectangle(0, y, strip_w, y + 3, fill=color, outline="", tags="marker")
+
+        self._redraw_data_thumb()
+
+    def _redraw_data_thumb(self) -> None:
+        c = self._data_marker_strip
+        c.delete("thumb")
+        strip_h = c.winfo_height()
+        strip_w = c.winfo_width()
+        if strip_h <= 1 or strip_w <= 1:
+            return
+        first = max(0.0, min(1.0, self._data_scroll_first))
+        last = max(first, min(1.0, self._data_scroll_last))
+        if last - first >= 0.999:
+            return
+        y1 = int(first * strip_h)
+        y2 = max(y1 + 8, int(last * strip_h))
+        if y2 > strip_h:
+            y2 = strip_h
+            y1 = max(0, y2 - 8)
+        c.create_rectangle(
+            0, y1, strip_w, y2,
+            fill=_theme.BG_SEP, outline="", tags="thumb",
+        )
+
+    def _data_scroll_set(self, first: str, last: str) -> None:
+        try:
+            f = float(first); l = float(last)
+        except (TypeError, ValueError):
+            return
+        if f == self._data_scroll_first and l == self._data_scroll_last:
+            return
+        self._data_scroll_first = f
+        self._data_scroll_last = l
+        self._redraw_data_thumb()
+
+    def _on_data_scrollbar_press(self, event):
+        strip_h = self._data_marker_strip.winfo_height()
+        if strip_h <= 1:
+            return
+        first = self._data_scroll_first
+        last = self._data_scroll_last
+        thumb_top = first * strip_h
+        thumb_bot = last * strip_h
+        if thumb_top <= event.y <= thumb_bot:
+            self._data_thumb_drag_offset = (event.y - thumb_top) / strip_h
+        else:
+            self._data_thumb_drag_offset = (last - first) / 2.0
+            self._data_scroll_to_pointer(event.y)
+
+    def _on_data_scrollbar_drag(self, event):
+        if self._data_thumb_drag_offset is None:
+            return
+        self._data_scroll_to_pointer(event.y)
+
+    def _on_data_scrollbar_release(self, _event):
+        self._data_thumb_drag_offset = None
+
+    def _data_scroll_to_pointer(self, py: int) -> None:
+        strip_h = self._data_marker_strip.winfo_height()
+        if strip_h <= 1 or self._data_thumb_drag_offset is None:
+            return
+        frac = (py / strip_h) - self._data_thumb_drag_offset
+        frac = max(0.0, min(1.0, frac))
+        self._data_tree.yview_moveto(frac)
+
+    def _on_data_mousewheel(self, event):
+        delta = event.delta
+        if delta == 0:
+            return
+        step = -3 if delta > 0 else 3
+        self._data_tree.yview_scroll(step, "units")
 
     def _toggle_mf_tree_expand(self):
         """Expand all folders in the Mod Files tree, or collapse them if already expanded."""
@@ -5485,6 +5749,12 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             self._highlighted_ini_mod = mod_name
             self._apply_ini_row_highlight()
             self._draw_ini_marker_strip()
+        # Same treatment for the Data tab.
+        if getattr(self, "_highlighted_data_mod", None) != mod_name:
+            self._highlighted_data_mod = mod_name
+            if hasattr(self, "_data_tree"):
+                self._apply_data_row_highlight()
+                self._draw_data_marker_strip()
 
     def refresh_theme(self) -> None:
         """Re-apply theme-dependent tags and force a redraw after a colour change.
@@ -5494,6 +5764,12 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         """
         try:
             self._ini_files_tree.tag_configure(
+                "mod_highlight", background=_theme.plugin_mod, foreground=TEXT_MAIN,
+            )
+        except Exception:
+            pass
+        try:
+            self._data_tree.tag_configure(
                 "mod_highlight", background=_theme.plugin_mod, foreground=TEXT_MAIN,
             )
         except Exception:
@@ -5521,6 +5797,14 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             pass
         try:
             self._apply_ini_row_highlight()
+        except Exception:
+            pass
+        try:
+            self._draw_data_marker_strip()
+        except Exception:
+            pass
+        try:
+            self._apply_data_row_highlight()
         except Exception:
             pass
 
