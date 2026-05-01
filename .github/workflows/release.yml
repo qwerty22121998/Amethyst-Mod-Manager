@@ -59,40 +59,30 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # libloot for Python 3.13 — needed by the Flatpak (GNOME 49 runtime
+  # ships Python 3.13). Built on a plain Ubuntu runner with
+  # actions/setup-python because the Flathub container has no usable
+  # package manager and the Arch container ships Python 3.14.
   libloot-gnome:
     name: libloot (GNOME 49 / cp313)
-    # Skip on prereleases — flatpak isn't published for betas, so the
-    # cp313 build is unused. Saves ~80s on every beta tag.
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
-      options: --privileged
-    outputs:
-      so-name: ${{ steps.detect.outputs.so-name }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build dependencies
-        run: |
-          # Flathub container is Fedora-based; rust + cargo come from
-          # rustup-init since Fedora's `rust` package may lag behind
-          # what libloot needs. python3 / pip / git already present.
-          dnf install -y --setopt=install_weak_deps=False \
-              gcc gcc-c++ make unzip cargo rust
-          # Verify what we got
-          rustc --version
-          python3 --version
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
 
-      - name: Resolve libloot revision and Python ABI
+      - name: Resolve libloot revision
         id: detect
         run: |
           LIBLOOT_REV=$(git ls-remote https://github.com/loot/libloot.git HEAD | awk '{print substr($1,1,12)}')
           PY_TAG=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
           SO_NAME="loot.cpython-${PY_TAG#cp}-x86_64-linux-gnu.so"
-          echo "libloot-rev=$LIBLOOT_REV"  >> "$GITHUB_OUTPUT"
-          echo "py-tag=$PY_TAG"            >> "$GITHUB_OUTPUT"
-          echo "so-name=$SO_NAME"          >> "$GITHUB_OUTPUT"
+          echo "libloot-rev=$LIBLOOT_REV" >> "$GITHUB_OUTPUT"
+          echo "py-tag=$PY_TAG"           >> "$GITHUB_OUTPUT"
+          echo "so-name=$SO_NAME"         >> "$GITHUB_OUTPUT"
 
       - name: Cache built extension
         id: cache
@@ -103,6 +93,9 @@ jobs:
 
       - name: Build extension
         if: steps.cache.outputs.cache-hit != 'true'
+        # rustup is preinstalled on ubuntu-latest runners; python3.13
+        # comes from setup-python above. base-devel and unzip ship by
+        # default on the runner image.
         run: bash src/LOOT/rebuild_libloot.sh
 
       - uses: actions/upload-artifact@v4
@@ -161,7 +154,8 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────────
   # Flatpak bundle — only built for stable releases (no hyphen in tag).
-  # Pulls the cp313 libloot from libloot-gnome.
+  # Pulls the cp313 libloot from libloot-gnome, drops it into src/LOOT/
+  # so the manifest's `cp -a src/LOOT` step picks it up.
   # ────────────────────────────────────────────────────────────────────
   flatpak:
     name: Flatpak
