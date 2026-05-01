@@ -1,9 +1,9 @@
 """
 bsa_reader.py
-Read file lists from Bethesda BSA archives (table-of-contents only).
+Read file lists from Bethesda BSA / BA2 archives (table-of-contents only).
 
-Extracts the complete list of file paths stored inside a .bsa archive
-without decompressing any file data — only the TOC headers are read.
+Extracts the complete list of file paths stored inside a .bsa or .ba2
+archive without decompressing any file data — only the TOC headers are read.
 
 BSA v104 (Oblivion / Skyrim LE) header layout (36 bytes):
      4B  magic           "BSA\x00" (0x00415342 LE)
@@ -45,7 +45,19 @@ After all folder+file-record blocks, the file name block:
 BSA v103 (Morrowind) is a completely different flat format and is
 not yet implemented (returns an empty list).
 
-BA2 (Fallout 4 / Starfield, magic "BTDX") is not yet implemented.
+BA2 (Fallout 4 / Starfield, magic "BTDX") header layout (24 bytes):
+     4B  magic              "BTDX"
+     4B  version            (1 = FO4, 2/3/7/8 = newer FO4/Starfield variants)
+     4B  type_tag           "GNRL" (general) or "DX10" (textures)
+     4B  file_count
+     8B  name_table_offset  byte offset to the file-name table
+
+After the header come *file_count* file records (variable size depending
+on type_tag) — those are skipped here since we only need the names.
+
+The name table at name_table_offset is a flat list of *file_count* entries:
+     2B  name_length
+    NB   name_bytes        backslash-separated relative path, no terminator
 """
 
 from __future__ import annotations
@@ -60,9 +72,9 @@ _HEADER_SIZE = 36
 
 
 def read_bsa_file_list(bsa_path: Path | str) -> list[str]:
-    """Return all file paths inside a BSA as lowercase forward-slash strings.
+    """Return all file paths inside a BSA / BA2 as lowercase forward-slash strings.
 
-    Dispatches to the correct parser based on the header version field.
+    Dispatches to the correct parser based on the magic / version field.
     Returns an empty list on unrecognised formats or I/O errors.
     Never decompresses file data — only reads the TOC.
     """
@@ -73,7 +85,7 @@ def read_bsa_file_list(bsa_path: Path | str) -> list[str]:
             if magic == _BSA_MAGIC:
                 return _read_bsa_v104_v105(f)
             if magic == _BTDX_MAGIC:
-                return []  # BA2 not yet supported
+                return _read_ba2(f)
             return []  # unrecognised format
     except (OSError, struct.error, ValueError, OverflowError):
         return []
@@ -188,5 +200,51 @@ def _read_bsa_v104_v105(f) -> list[str]:
         name_idx = end
         if name_idx >= total_names:
             break
+
+    return result
+
+
+def _read_ba2(f) -> list[str]:
+    """Parse a BA2 (BTDX) name table and return file path list.
+
+    Skips file records entirely — only the trailing name table is needed.
+    Both GNRL (general) and DX10 (textures) BA2 variants share the same
+    name-table format, so the type_tag is not consulted here.
+    """
+    # Header bytes 4–23 (magic already consumed): version, type_tag,
+    # file_count, name_table_offset.
+    rest = f.read(20)
+    if len(rest) < 20:
+        return []
+
+    _version, _type_tag, file_count, name_table_offset = struct.unpack(
+        "<I4sIQ", rest,
+    )
+
+    if file_count == 0 or name_table_offset == 0:
+        return []
+
+    try:
+        f.seek(name_table_offset)
+    except OSError:
+        return []
+
+    result: list[str] = []
+    for _ in range(file_count):
+        ln_raw = f.read(2)
+        if len(ln_raw) < 2:
+            break
+        (ln,) = struct.unpack("<H", ln_raw)
+        if ln == 0:
+            result.append("")
+            continue
+        name_bytes = f.read(ln)
+        if len(name_bytes) < ln:
+            break
+        # Names are stored as backslash-separated raw bytes with no
+        # terminator. ASCII in practice; latin-1 is a non-allocating safe
+        # superset that also avoids decode errors on the rare non-ASCII byte.
+        name = name_bytes.decode("latin-1").replace("\\", "/").lower()
+        result.append(name)
 
     return result

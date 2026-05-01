@@ -3342,15 +3342,25 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         self._archive_tab_dirty = False
         self._render_archive_tree(None)
 
+    def _archive_term(self) -> str:
+        """Return the human-readable name for this game's archive format —
+        'BA2' for Fallout 4 / Starfield, 'BSA' otherwise."""
+        archive_exts = getattr(self._game, "archive_extensions", None) if self._game else None
+        if archive_exts and ".ba2" in archive_exts:
+            return "BA2"
+        return "BSA"
+
     def _render_archive_tree(self, mod_name: str | None):
         """Actually populate the Archive treeview."""
         if self._arc_tree is None or self._archive_label is None:
             return
         self._arc_tree.delete(*self._arc_tree.get_children())
 
+        term = self._archive_term()
+
         bsa_path = self._bsa_index_path
         if bsa_path is None or not bsa_path.is_file():
-            self._archive_label.configure(text="(no BSA index yet — refresh to scan)")
+            self._archive_label.configure(text=f"(no {term} index yet — refresh to scan)")
             return
 
         from Utils.bsa_filemap import read_bsa_index
@@ -3401,10 +3411,10 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         sep_mods = getattr(self, "_archive_separator_mods", None)
 
         # Three view modes:
-        #  1. Separator selected → show every BSA owned by a child mod.
-        #  2. Single mod with BSAs → scope to that mod.
-        #  3. Otherwise → show all enabled mods with BSAs (the existing fallback).
-        # Conflict colouring is per-BSA-owner in all modes.
+        #  1. Separator selected → show every archive owned by a child mod.
+        #  2. Single mod with archives → scope to that mod.
+        #  3. Otherwise → show all enabled mods with archives (the existing fallback).
+        # Conflict colouring is per-archive-owner in all modes.
         if sep_name is not None and sep_mods is not None:
             scoped = [
                 m for m in sep_mods
@@ -3415,11 +3425,11 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             show_owner = True
             if render_units:
                 self._archive_label.configure(
-                    text=f"{sep_name} — {len(render_units)} mod(s) with BSAs"
+                    text=f"{sep_name} — {len(render_units)} mod(s) with {term}s"
                 )
             else:
                 self._archive_label.configure(
-                    text=f"{sep_name} — no mods with BSA archives"
+                    text=f"{sep_name} — no mods with {term} archives"
                 )
                 return
         elif my_archives:
@@ -3437,15 +3447,15 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             if render_units:
                 if mod_name:
                     self._archive_label.configure(
-                        text=f"{mod_name} — no BSA archives (showing all {len(render_units)} mods with BSAs)"
+                        text=f"{mod_name} — no {term} archives (showing all {len(render_units)} mods with {term}s)"
                     )
                 else:
                     self._archive_label.configure(
-                        text=f"(all {len(render_units)} mods with BSAs)"
+                        text=f"(all {len(render_units)} mods with {term}s)"
                     )
             else:
                 self._archive_label.configure(
-                    text=f"{mod_name} — no BSA archives" if mod_name else "(no BSA archives)"
+                    text=f"{mod_name} — no {term} archives" if mod_name else f"(no {term} archives)"
                 )
                 return
 

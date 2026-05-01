@@ -218,8 +218,8 @@ class Fallout_3(BaseGame):
 
     @property
     def archive_extensions(self) -> frozenset[str]:
-        # Bethesda games use BSA archives. Fallout 4 / Starfield / Fallout 76
-        # use BA2 and override this further.
+        # Older Bethesda games use BSA archives. Fallout 4 / Fallout 4 VR /
+        # Starfield / Fallout 76 use BA2 and override this further.
         return frozenset({".bsa"})
 
     @property
@@ -879,7 +879,11 @@ class Fallout_4(Fallout_3):
     @property
     def loot_game_type(self) -> str:
         return "Fallout4"
-    
+
+    @property
+    def archive_extensions(self) -> frozenset[str]:
+        return frozenset({".ba2"})
+
     @property
     def custom_routing_rules(self) -> list:
         from Utils.deploy import CustomRule
@@ -972,6 +976,10 @@ class Fallout_4VR(Fallout_3):
     @property
     def loot_game_type(self) -> str:
         return "Fallout4VR"
+
+    @property
+    def archive_extensions(self) -> frozenset[str]:
+        return frozenset({".ba2"})
 
     @property
     def loot_masterlist_repo(self) -> str:
@@ -1330,6 +1338,10 @@ class Starfield(Fallout_3):
     @property
     def loot_game_type(self) -> str:
         return "Starfield"
+
+    @property
+    def archive_extensions(self) -> frozenset[str]:
+        return frozenset({".ba2"})
 
     @property
     def loot_masterlist_repo(self) -> str:

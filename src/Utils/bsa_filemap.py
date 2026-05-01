@@ -299,22 +299,30 @@ def _bsa_owning_plugin(
 
     Skyrim/Fallout load a BSA only if a plugin with a matching basename exists
     in the same Data folder. Matching rules:
-      * Exact: 'RaceMenu.bsa'       ↔ 'RaceMenu.esp'
-      * Suffix: 'RaceMenu - Textures.bsa' ↔ 'RaceMenu.esp'
+      * Exact:  'RaceMenu.bsa'                          ↔ 'RaceMenu.esp'
+      * Suffix: 'RaceMenu - Textures.bsa'               ↔ 'RaceMenu.esp'
+      * Suffix: 'VividFallout - AiO - BC - Main.ba2'    ↔ 'VividFallout - AiO - BC.esp'
     plugin_basenames is lowercased, without extension.
+
+    Walks ' - ' boundaries from the right so a plugin like 'A - B - C' wins
+    over a shorter false match 'A' when both exist.
     """
     if not plugin_basenames:
         return None
     name = bsa_basename.lower()
     if name in plugin_basenames:
         return name
-    # Suffix form: "<plugin> - <anything>"
-    dash = name.find(" - ")
-    if dash > 0:
+    # Suffix form: "<plugin> - <suffix-tokens>". Try the longest possible
+    # plugin stem first (rightmost ' - ') and shrink leftward.
+    end = len(name)
+    while True:
+        dash = name.rfind(" - ", 0, end)
+        if dash <= 0:
+            return None
         stem = name[:dash]
         if stem in plugin_basenames:
             return stem
-    return None
+        end = dash
 
 
 def _compute_bsa_load_order(
