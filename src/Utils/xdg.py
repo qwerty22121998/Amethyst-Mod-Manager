@@ -1,18 +1,16 @@
 """
 Utils/xdg.py
 Helpers for launching host-system programs (xdg-open etc.) safely from
-inside an AppImage or a polluted shell environment.
+a polluted shell environment.
 
-When running as an AppImage, AppRun prepends bundled library paths to
-LD_LIBRARY_PATH before launching Python.  Any subprocess that inherits
-this environment may load the wrong shared libraries and fail silently
-(e.g. Dolphin opening a folder).
+Inside an AppImage, anylinux.so (LD_PRELOAD-injected by quick-sharun) hooks
+execve and scrubs AppDir-pointing env vars from child processes — so we
+don't need to do anything special there. sharun also doesn't use
+LD_LIBRARY_PATH; it invokes the dynamic linker with --library-path.
 
-host_env() always strips LD_LIBRARY_PATH from the child environment:
-  - Inside an AppImage: restores it to the value saved by AppRun before
-    the bundled paths were prepended.
-  - Outside an AppImage: removes it entirely, protecting against polluted
-    environments set by conda/pyenv/Steam runtimes/etc.
+host_env() therefore only protects against pollution from *outside* the
+AppImage: conda/pyenv/Steam-runtime can leave LD_LIBRARY_PATH pointing at
+incompatible libraries, which would break xdg-open or Dolphin.
 """
 
 from __future__ import annotations
@@ -28,24 +26,16 @@ from Utils.app_log import app_log
 
 
 def host_env() -> dict[str, str]:
-    """Return os.environ with LD_LIBRARY_PATH safe for host processes.
+    """Return os.environ with LD_LIBRARY_PATH stripped.
 
-    Inside an AppImage: restores LD_LIBRARY_PATH to its pre-AppImage value
-    (saved by AppRun as APPIMAGE_ORIGINAL_LD_LIBRARY_PATH).
-    Outside an AppImage: strips LD_LIBRARY_PATH entirely to avoid polluted
-    environments (conda, pyenv, Steam runtime, etc.) breaking xdg-open.
+    Inside an AppImage, anylinux.so already removes AppDir-pointing env
+    vars from spawned processes, so nothing extra is needed there.
+    Outside an AppImage we strip LD_LIBRARY_PATH defensively to avoid
+    polluted environments (conda, pyenv, Steam runtime, etc.) breaking
+    xdg-open.
     """
     env = os.environ.copy()
-    original = env.get("APPIMAGE_ORIGINAL_LD_LIBRARY_PATH")
-    if original is not None:
-        # Running inside an AppImage — restore pre-AppImage library path.
-        if original:
-            env["LD_LIBRARY_PATH"] = original
-        else:
-            env.pop("LD_LIBRARY_PATH", None)
-    else:
-        # Not in an AppImage — strip unconditionally.
-        env.pop("LD_LIBRARY_PATH", None)
+    env.pop("LD_LIBRARY_PATH", None)
     return env
 
 

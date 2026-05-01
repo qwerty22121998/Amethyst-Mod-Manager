@@ -1,0 +1,131 @@
+# PKGBUILD for the Amethyst Mod Manager AppImage build.
+#
+# Not for AUR distribution — this exists so quick-sharun gets a real /usr
+# install to deploy from. It expects:
+#   * The source tree to be at $SRC_TREE (env var, set by make-appimage.sh).
+#   * Optional prebuilt libloot extension at $LIBLOOT_SO (env var) — copied
+#     into LOOT/ before packaging.
+#
+# Bundled into /usr/ alongside the app:
+#   * /usr/bin/zenity   — zenity-rs-bin (static Rust drop-in; replaces the
+#                         stock GTK4 zenity that we deliberately don't install)
+#   * /usr/bin/7zzs     — 7-Zip 26.00 standalone binary
+#   * /usr/bin/{7z,7za} — symlinks to 7zzs
+#
+# bsdtar and the Cantarell font are still staged outside this package — bsdtar
+# would conflict with the libarchive package, and a font isn't really a /usr
+# binary.
+#
+# pkgver is read from src/version.py at makepkg time.
+
+pkgname=amethyst-mod-manager
+pkgver=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' "${SRC_TREE:?SRC_TREE not set}/src/version.py" | tr -- '-' '_')
+pkgrel=1
+pkgdesc='Linux-native mod manager for a variety of games'
+arch=('x86_64')
+url='https://github.com/ChrisDKN/Amethyst-Mod-Manager'
+license=('GPL-3.0-only')
+depends=('python' 'gtk3' 'tk')
+# `zenity` is listed as a conflict because we ship our own /usr/bin/zenity.
+# If the build host happened to have the stock zenity package installed,
+# pacman -U would refuse without this. In our CI it's never installed, but
+# this makes the intent explicit and protects local builds.
+conflicts=('zenity')
+provides=('zenity')
+makedepends=('python-pip')
+options=('!strip' '!debug')
+
+source=()
+sha256sums=()
+
+_seven_zip_url='https://github.com/ip7z/7zip/releases/download/26.00/7z2600-linux-x64.tar.xz'
+
+build() {
+    # Vendor pip deps so package() can install a frozen tree.
+    rm -rf "$srcdir/_vendor"
+    mkdir -p "$srcdir/_vendor"
+    python3 -m pip install --no-cache-dir --quiet \
+        --target "$srcdir/_vendor" \
+        -r "$SRC_TREE/src/requirements-appimage.txt"
+    rm -rf "$srcdir/_vendor/bin"
+    find "$srcdir/_vendor" -type f -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+    # 7zzs (standalone 7-Zip)
+    rm -rf "$srcdir/.7z"
+    mkdir -p "$srcdir/.7z"
+    wget -q -O "$srcdir/.7z/7z.tar.xz" "$_seven_zip_url"
+    tar -xf "$srcdir/.7z/7z.tar.xz" -C "$srcdir/.7z"
+
+    # zenity-rs (static Rust drop-in for the GTK4 zenity)
+    case "$CARCH" in
+        x86_64)  _zenity_asset='zenity-rs-x86_64-linux'  ;;
+        aarch64) _zenity_asset='zenity-rs-aarch64-linux' ;;
+        *) echo "no zenity-rs build for $CARCH" >&2; return 1 ;;
+    esac
+    wget -q -O "$srcdir/zenity" \
+        "https://github.com/QaidVoid/zenity-rs/releases/latest/download/${_zenity_asset}"
+    chmod +x "$srcdir/zenity"
+}
+
+package() {
+    local app_share="$pkgdir/usr/share/$pkgname"
+    install -d "$app_share" "$pkgdir/usr/bin"
+
+    local _src="$SRC_TREE/src"
+    install -Dm644 "$_src/gui.py"        "$app_share/gui.py"
+    install -Dm644 "$_src/cli.py"        "$app_share/cli.py"
+    install -Dm644 "$_src/version.py"    "$app_share/version.py"
+    [ -f "$_src/splash_gtk.py" ] && install -Dm644 "$_src/splash_gtk.py" "$app_share/splash_gtk.py"
+    [ -f "$SRC_TREE/Changelog.txt" ] && install -Dm644 "$SRC_TREE/Changelog.txt" "$app_share/Changelog.txt"
+
+    local _dir
+    for _dir in gui Utils Games LOOT Nexus icons wizards wrappers; do
+        cp -r "$_src/$_dir" "$app_share/$_dir"
+    done
+
+    # Drop build/dev artefacts that shouldn't be in the installed tree.
+    find "$app_share" -type f -name '*.sh' -delete
+    find "$app_share" -type f -name 'requirements*.txt' -delete
+    find "$app_share" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+    find "$app_share" -type f -name '*.py' -exec chmod 0644 {} \;
+
+    # Inject the prebuilt libloot .so from CI when available.
+    if [ -n "${LIBLOOT_SO:-}" ] && [ -f "$LIBLOOT_SO" ]; then
+        install -Dm644 "$LIBLOOT_SO" "$app_share/LOOT/$(basename "$LIBLOOT_SO")"
+    fi
+    find "$app_share/LOOT" -maxdepth 1 -name 'loot.cpython-*-x86_64-linux-gnu.so' \
+        -exec strip --strip-unneeded {} + 2>/dev/null || true
+
+    cp -r "$srcdir/_vendor" "$app_share/_vendor"
+
+    # Wrapper installed as `mod-manager` to match the .desktop file's Exec=
+    # entry. quick-sharun rewrites the /usr/share path to "$APPDIR"/share on deploy.
+    cat > "$pkgdir/usr/bin/mod-manager" <<EOF
+#!/bin/sh
+APP_SHARE=/usr/share/$pkgname
+export PYTHONPATH="\$APP_SHARE/_vendor\${PYTHONPATH:+:\$PYTHONPATH}"
+export MOD_MANAGER_PROFILES_DIR="\${XDG_CONFIG_HOME:-\$HOME/.config}/AmethystModManager/Profiles"
+mkdir -p "\$MOD_MANAGER_PROFILES_DIR"
+case "\$1" in
+    deploy|restore|list-games|list-profiles|clear-credentials)
+        exec python3 "\$APP_SHARE/cli.py" "\$@" ;;
+    *)
+        exec python3 "\$APP_SHARE/gui.py" "\$@" ;;
+esac
+EOF
+    chmod 0755 "$pkgdir/usr/bin/mod-manager"
+
+    install -Dm644 "$_src/appimage/mod-manager.desktop" \
+        "$pkgdir/usr/share/applications/mod-manager.desktop"
+    install -Dm644 "$_src/appimage/mod-manager.png" \
+        "$pkgdir/usr/share/icons/hicolor/512x512/apps/mod-manager.png"
+
+    # Bundled binaries — these get bundled into the AppImage as if they were
+    # any other system binary (quick-sharun's /usr → "$APPDIR" rewrite).
+    install -Dm755 "$srcdir/.7z/7zzs"  "$pkgdir/usr/bin/7zzs"
+    ln -sf 7zzs "$pkgdir/usr/bin/7z"
+    ln -sf 7zzs "$pkgdir/usr/bin/7za"
+    install -Dm755 "$srcdir/zenity"    "$pkgdir/usr/bin/zenity"
+
+    install -Dm644 "$SRC_TREE/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
