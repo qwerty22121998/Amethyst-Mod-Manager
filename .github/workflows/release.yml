@@ -1,0 +1,235 @@
+name: Build Release Artifacts
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+# Required for the release-publish step (softprops/action-gh-release).
+permissions:
+  contents: write
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # libloot must be built once per target Python ABI:
+  #   - Arch container (AppImage): Python 3.14 → cp314 .so
+  #   - GNOME 49 runtime (Flatpak): Python 3.13 → cp313 .so
+  # Each is cached independently keyed on libloot HEAD + Python version.
+  # ────────────────────────────────────────────────────────────────────
+  libloot-arch:
+    name: libloot (Arch / cp314)
+    runs-on: ubuntu-latest
+    container: ghcr.io/pkgforge-dev/archlinux:latest
+    outputs:
+      so-name: ${{ steps.detect.outputs.so-name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          pacman -Syy --noconfirm
+          pacman -S --noconfirm \
+              python python-pip base-devel rust git unzip
+
+      - name: Resolve libloot revision and Python ABI
+        id: detect
+        run: |
+          LIBLOOT_REV=$(git ls-remote https://github.com/loot/libloot.git HEAD | awk '{print substr($1,1,12)}')
+          PY_TAG=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+          SO_NAME="loot.cpython-${PY_TAG#cp}-x86_64-linux-gnu.so"
+          echo "libloot-rev=$LIBLOOT_REV"  >> "$GITHUB_OUTPUT"
+          echo "py-tag=$PY_TAG"            >> "$GITHUB_OUTPUT"
+          echo "so-name=$SO_NAME"          >> "$GITHUB_OUTPUT"
+
+      - name: Cache built extension
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: src/LOOT/${{ steps.detect.outputs.so-name }}
+          key: libloot-${{ steps.detect.outputs.libloot-rev }}-${{ steps.detect.outputs.py-tag }}
+
+      - name: Build extension
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash src/LOOT/rebuild_libloot.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libloot-cp314
+          path: src/LOOT/loot.cpython-*-x86_64-linux-gnu.so
+          if-no-files-found: error
+          retention-days: 1
+
+  libloot-gnome:
+    name: libloot (GNOME 49 / cp313)
+    # Skip on prereleases — flatpak isn't published for betas, so the
+    # cp313 build is unused. Saves ~80s on every beta tag.
+    if: ${{ !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    outputs:
+      so-name: ${{ steps.detect.outputs.so-name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          # Flathub container is Fedora-based; rust + cargo come from
+          # rustup-init since Fedora's `rust` package may lag behind
+          # what libloot needs. python3 / pip / git already present.
+          dnf install -y --setopt=install_weak_deps=False \
+              gcc gcc-c++ make unzip cargo rust
+          # Verify what we got
+          rustc --version
+          python3 --version
+
+      - name: Resolve libloot revision and Python ABI
+        id: detect
+        run: |
+          LIBLOOT_REV=$(git ls-remote https://github.com/loot/libloot.git HEAD | awk '{print substr($1,1,12)}')
+          PY_TAG=$(python3 -c 'import sys; print(f"cp{sys.version_info.major}{sys.version_info.minor}")')
+          SO_NAME="loot.cpython-${PY_TAG#cp}-x86_64-linux-gnu.so"
+          echo "libloot-rev=$LIBLOOT_REV"  >> "$GITHUB_OUTPUT"
+          echo "py-tag=$PY_TAG"            >> "$GITHUB_OUTPUT"
+          echo "so-name=$SO_NAME"          >> "$GITHUB_OUTPUT"
+
+      - name: Cache built extension
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: src/LOOT/${{ steps.detect.outputs.so-name }}
+          key: libloot-${{ steps.detect.outputs.libloot-rev }}-${{ steps.detect.outputs.py-tag }}
+
+      - name: Build extension
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: bash src/LOOT/rebuild_libloot.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libloot-cp313
+          path: src/LOOT/loot.cpython-*-x86_64-linux-gnu.so
+          if-no-files-found: error
+          retention-days: 1
+
+  # ────────────────────────────────────────────────────────────────────
+  # AppImage build — runs for every tag (stable and prerelease).
+  # ────────────────────────────────────────────────────────────────────
+  appimage:
+    name: AppImage
+    needs: libloot-arch
+    runs-on: ubuntu-latest
+    container: ghcr.io/pkgforge-dev/archlinux:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare anylinux container
+        uses: pkgforge-dev/anylinux-setup-action@v2
+
+      - name: Install build dependencies
+        run: |
+          # python-gobject + python-cairo: GTK splash screen — without
+          # cairo the splash subprocess silently exits 1.
+          # tk: tkinter import inside the bundled Python.
+          # zenity: file-picker fallback used by portal_filechooser.py.
+          # libarchive: bsdtar + libarchive.so.13 for fast extraction.
+          pacman -Syu --noconfirm \
+              python-gobject \
+              python-cairo \
+              python-pip \
+              tk \
+              zenity \
+              libarchive \
+              wget
+
+      - name: Download libloot extension
+        uses: actions/download-artifact@v4
+        with:
+          name: libloot-cp314
+          path: src/LOOT/
+
+      - name: Build AppImage
+        env:
+          ANYLINUX_LIB: '1'
+        run: bash src/appimage/make-appimage.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AmethystModManager-AppImage
+          path: src/appimage/dist/*.AppImage
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────
+  # Flatpak bundle — only built for stable releases (no hyphen in tag).
+  # Pulls the cp313 libloot from libloot-gnome.
+  # ────────────────────────────────────────────────────────────────────
+  flatpak:
+    name: Flatpak
+    if: ${{ !contains(github.ref_name, '-') }}
+    needs: libloot-gnome
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download libloot extension
+        uses: actions/download-artifact@v4
+        with:
+          name: libloot-cp313
+          path: src/LOOT/
+
+      - name: Build Flatpak bundle
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@master
+        with:
+          bundle: AmethystModManager.flatpak
+          manifest-path: flatpak/io.github.Amethyst.ModManager.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AmethystModManager-flatpak
+          path: AmethystModManager.flatpak
+          if-no-files-found: error
+
+  # ────────────────────────────────────────────────────────────────────
+  # Publish a GitHub Release with the AppImage (always) and Flatpak
+  # bundle (stable only). Runs only on tag pushes — workflow_dispatch
+  # runs still upload artifacts to the run page but skip this job.
+  # ────────────────────────────────────────────────────────────────────
+  release:
+    name: Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [appimage]
+    # flatpak job is gated by ${{ !contains(...) }} so it doesn't run
+    # for prereleases; we can't put it in `needs` without making
+    # prereleases fail. Instead we download the flatpak artifact only
+    # if the upload succeeded — handled by softprops below via
+    # fail_on_unmatched_files: false.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: AmethystModManager-AppImage
+          path: artifacts/
+
+      # Pull the flatpak bundle if it was produced (stable releases only).
+      # continue-on-error so the step doesn't fail when no flatpak
+      # artifact was uploaded (prerelease run path).
+      - name: Download Flatpak (stable only)
+        if: ${{ !contains(github.ref_name, '-') }}
+        uses: actions/download-artifact@v4
+        with:
+          name: AmethystModManager-flatpak
+          path: artifacts/
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
