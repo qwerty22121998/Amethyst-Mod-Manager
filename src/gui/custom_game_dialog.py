@@ -729,6 +729,7 @@ class CustomGamePanel(ctk.CTkFrame):
                     match_value=mv,
                     loose_only=bool(rule_data.get("loose_only", False)),
                     flatten=bool(rule_data.get("flatten", False)),
+                    include_siblings=bool(rule_data.get("include_siblings", False)),
                 )
 
         # ---- Framework Detection ----
@@ -852,7 +853,8 @@ class CustomGamePanel(ctk.CTkFrame):
 
     def _add_routing_rule_row(self, dest: str = "", match_type: str = "extensions",
                               match_value: str = "", loose_only: bool = False,
-                              flatten: bool = False) -> None:
+                              flatten: bool = False,
+                              include_siblings: bool = False) -> None:
         """Add a routing rule row to the container."""
         container = self._routing_rules_container
         if not self._routing_rules_rows:
@@ -868,6 +870,7 @@ class CustomGamePanel(ctk.CTkFrame):
             hdr.grid_columnconfigure(4, weight=0)
             hdr.grid_columnconfigure(5, weight=0)
             hdr.grid_columnconfigure(6, weight=0)
+            hdr.grid_columnconfigure(7, weight=0)
             ctk.CTkLabel(hdr, text="Path", font=FONT_SMALL, text_color=TEXT_DIM,
                          anchor="w").grid(row=0, column=1, sticky="w", padx=(6, 0))
             ctk.CTkLabel(hdr, text="Match Value", font=FONT_SMALL, text_color=TEXT_DIM,
@@ -884,12 +887,14 @@ class CustomGamePanel(ctk.CTkFrame):
         row_frame.grid_columnconfigure(4, weight=0)
         row_frame.grid_columnconfigure(5, weight=0)
         row_frame.grid_columnconfigure(6, weight=0)
+        row_frame.grid_columnconfigure(7, weight=0)
 
-        dest_var    = tk.StringVar(value=dest)
-        type_var    = tk.StringVar(value=match_type)
-        value_var   = tk.StringVar(value=match_value)
-        loose_var   = tk.BooleanVar(value=loose_only)
-        flatten_var = tk.BooleanVar(value=flatten)
+        dest_var      = tk.StringVar(value=dest)
+        type_var      = tk.StringVar(value=match_type)
+        value_var     = tk.StringVar(value=match_value)
+        loose_var     = tk.BooleanVar(value=loose_only)
+        flatten_var   = tk.BooleanVar(value=flatten)
+        siblings_var  = tk.BooleanVar(value=include_siblings)
 
         # Up/Down reorder buttons (stacked)
         reorder = ctk.CTkFrame(row_frame, fg_color="transparent", width=22, height=30)
@@ -939,9 +944,15 @@ class CustomGamePanel(ctk.CTkFrame):
             fg_color=BG_DEEP, progress_color=ACCENT, width=40,
         ).grid(row=0, column=5, padx=(4, 2), pady=4)
 
+        ctk.CTkSwitch(
+            row_frame, text="Include Siblings", variable=siblings_var,
+            font=FONT_SMALL, text_color=TEXT_MAIN,
+            fg_color=BG_DEEP, progress_color=ACCENT, width=40,
+        ).grid(row=0, column=6, padx=(4, 2), pady=4)
+
         row_data = {"frame": row_frame, "dest": dest_var, "type": type_var,
                     "value": value_var, "loose_only": loose_var,
-                    "flatten": flatten_var}
+                    "flatten": flatten_var, "include_siblings": siblings_var}
         self._routing_rules_rows.append(row_data)
 
         up_btn.configure(command=lambda rd=row_data: self._move_routing_rule_row(rd, -1))
@@ -951,7 +962,7 @@ class CustomGamePanel(ctk.CTkFrame):
             row_frame, text="X", width=28, height=28, font=FONT_SMALL,
             fg_color=RED_BTN, hover_color=RED_HOV, text_color="white",
             command=lambda rd=row_data: self._remove_routing_rule_row(rd),
-        ).grid(row=0, column=6, padx=(2, 6), pady=4)
+        ).grid(row=0, column=7, padx=(2, 6), pady=4)
 
     def _remove_routing_rule_row(self, row_data: dict) -> None:
         """Remove a routing rule row."""
@@ -1015,6 +1026,8 @@ class CustomGamePanel(ctk.CTkFrame):
                 rule["loose_only"] = True
             if rd["flatten"].get():
                 rule["flatten"] = True
+            if rd["include_siblings"].get():
+                rule["include_siblings"] = True
             rules.append(rule)
         return rules
 

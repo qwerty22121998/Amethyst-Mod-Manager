@@ -391,6 +391,15 @@ class CustomRule:
                  below the matched folder so the file lands flat under
                  ``dest``.  Default False (preserve subfolders, the historical
                  behaviour).
+    include_siblings — when True, a single match drags the *containing
+                 folder* of the matched file along with it: every sibling
+                 file under that folder (from the same mod) is routed to
+                 ``dest`` too, preserving its path relative to the
+                 containing folder.  ``flatten`` is ignored for these
+                 matches; the containing folder's name is kept under
+                 ``dest`` so files stay grouped.  Useful for mods like
+                 ``PD2-AdvancedCrosshairs/mod.txt`` where matching
+                 ``mod.txt`` should also bring the whole mod folder along.
 
     Placement behaviour:
     - extension-only match: file placed as game_root/dest/<filename> (flat)
@@ -406,6 +415,7 @@ class CustomRule:
     loose_only: bool = False
     companion_extensions: list[str] = field(default_factory=list)
     flatten: bool = False
+    include_siblings: bool = False
 
 
 def _default_core(deploy_dir: Path) -> Path:

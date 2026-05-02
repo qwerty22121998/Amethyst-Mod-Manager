@@ -125,6 +125,7 @@ def _defn_to_custom_rules(defn: dict) -> list[CustomRule]:
         filenames = [s.strip().lower() for s in entry.get("filenames", []) if s.strip()]
         loose_only = bool(entry.get("loose_only", False))
         flatten = bool(entry.get("flatten", False))
+        include_siblings = bool(entry.get("include_siblings", False))
         companion_extensions = [
             s.strip().lower() for s in entry.get("companion_extensions", []) if s.strip()
         ]
@@ -132,7 +133,8 @@ def _defn_to_custom_rules(defn: dict) -> list[CustomRule]:
             rules.append(CustomRule(dest=dest, extensions=extensions, folders=folders,
                                     filenames=filenames, loose_only=loose_only,
                                     companion_extensions=companion_extensions,
-                                    flatten=flatten))
+                                    flatten=flatten,
+                                    include_siblings=include_siblings))
     return rules
 
 
@@ -776,6 +778,7 @@ class Ue5CustomGame(UE5Game):
                             strip=[parent_strip],
                             loose_only=cr.loose_only,
                             flatten=cr.flatten,
+                            include_siblings=cr.include_siblings,
                         ))
                         # Also generate prefix rules for common UE5 packaging
                         # prefixes above the target folder (Paks, Content,
@@ -795,6 +798,7 @@ class Ue5CustomGame(UE5Game):
                                 strip=[full_parent],
                                 loose_only=cr.loose_only,
                                 flatten=cr.flatten,
+                                include_siblings=cr.include_siblings,
                             ))
                     else:
                         # Single-segment: match the folder name anywhere in
@@ -807,6 +811,7 @@ class Ue5CustomGame(UE5Game):
                             folder_anywhere=norm_folder, filenames=fnames,
                             loose_only=cr.loose_only,
                             flatten=cr.flatten,
+                            include_siblings=cr.include_siblings,
                         ))
             elif cr.filenames:
                 rules.append(UE5Rule(
@@ -815,6 +820,7 @@ class Ue5CustomGame(UE5Game):
                     filenames=list(cr.filenames),
                     loose_only=cr.loose_only,
                     flatten=cr.flatten,
+                    include_siblings=cr.include_siblings,
                 ))
             else:
                 rules.append(UE5Rule(
@@ -822,6 +828,7 @@ class Ue5CustomGame(UE5Game):
                     extensions=list(cr.extensions),
                     loose_only=cr.loose_only,
                     flatten=cr.flatten,
+                    include_siblings=cr.include_siblings,
                 ))
 
         # Built-in UE5 defaults follow — they act as fallbacks when no

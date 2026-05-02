@@ -106,6 +106,15 @@ class UE5Rule:
     loose_only: When True, the rule only matches files that are not inside
                     any folder (i.e. files with no directory components in
                     their relative path).  Default False.
+    include_siblings:
+                    When True, a single match drags the matched file's
+                    *containing folder* along: every file under that folder
+                    (in the same mod) is routed to ``dest`` too, preserving
+                    its path relative to the containing folder. The matched
+                    file lands at ``dest/<container_name>/<filename>``;
+                    flatten is ignored for these matches. Resolution
+                    happens in ``_resolve_filemap_entries`` since per-entry
+                    resolution can't see siblings.
     """
     dest: str
     extensions: list[str] = field(default_factory=list)
@@ -116,6 +125,7 @@ class UE5Rule:
     strip: list[str] = field(default_factory=list)
     flatten: bool = False
     loose_only: bool = False
+    include_siblings: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +381,97 @@ class UE5Game(BaseGame):
                 return rule, rule.strip, False
         return None
 
+    def _match_single_ue5_rule(
+        self, rel_str: str, rule: "UE5Rule",
+    ) -> tuple[list[str], bool] | None:
+        """Run the same matching logic as ``_match_rule`` for a single rule.
+
+        Returns ``(dyn_strip, is_folder_match)`` on a hit, else None. Used by
+        ``_resolve_filemap_entries`` so include_siblings drags from earlier
+        rules can claim files before later rules' primary matches run.
+        """
+        norm = rel_str.replace("\\", "/")
+        parts = norm.split("/")
+        first_seg = parts[0].lower() if parts else ""
+        basename = parts[-1].lower() if parts else ""
+        is_loose = len(parts) == 1
+        lower_segs = [p.lower() for p in parts]
+
+        def _ext_hit(exts):
+            for e in sorted(exts, key=len, reverse=True):
+                el = e.lower()
+                if basename.endswith(el) and len(basename) > len(el):
+                    return True
+            return False
+
+        def _name_hit(names):
+            for n in names:
+                nl = n.lower()
+                if any(c in nl for c in "*?["):
+                    if fnmatch.fnmatchcase(basename, nl):
+                        return True
+                elif basename == nl:
+                    return True
+            return False
+
+        if rule.prefix and norm.lower().startswith(rule.prefix.lower() + "/"):
+            if rule.extensions and not _ext_hit(rule.extensions):
+                return None
+            return rule.strip, True
+        if rule.folder and first_seg == rule.folder.lower():
+            if rule.extensions and not _ext_hit(rule.extensions):
+                return None
+            return rule.strip, True
+        if rule.folder_anywhere:
+            target = rule.folder_anywhere.lower()
+            hit_idx = -1
+            for i, seg in enumerate(lower_segs[:-1]):
+                if seg == target:
+                    hit_idx = i
+                    break
+            if hit_idx >= 0:
+                if rule.extensions and not _ext_hit(rule.extensions):
+                    return None
+                if rule.loose_only and hit_idx != 0:
+                    return None
+                if hit_idx == 0:
+                    return rule.strip, True
+                dyn_prefix = "/".join(parts[:hit_idx])
+                return [dyn_prefix, *rule.strip], True
+        if rule.loose_only and not is_loose:
+            return None
+        if rule.filenames and _name_hit(rule.filenames):
+            return rule.strip, False
+        if rule.extensions and _ext_hit(rule.extensions):
+            return rule.strip, False
+        return None
+
+    def _sibling_container(
+        self, norm_rel: str, dyn_strip: list[str], is_folder_match: bool,
+        mod_name: str,
+    ) -> tuple[str, str] | None:
+        """Return ``(container_path, container_name)`` for a matched entry.
+
+        See ``deploy_custom_rules._sibling_container`` for full semantics.
+        Whole-mod drag is signalled by ``container_path == ""``; the caller
+        should treat every file in ``mod_name`` as a sibling and place each
+        at ``dest/<container_name>/<rel_path>``.
+        """
+        if is_folder_match:
+            for p in sorted(dyn_strip, key=len, reverse=True):
+                p_clean = p.strip("/")
+                if not p_clean:
+                    continue
+                if norm_rel.lower().startswith(p_clean.lower() + "/"):
+                    container = norm_rel[:len(p_clean)]
+                    return (container, container.rsplit("/", 1)[-1])
+            # No parent above the matched folder — drag the whole mod.
+            return ("", mod_name)
+        if "/" not in norm_rel:
+            return ("", mod_name)
+        container = norm_rel.rsplit("/", 1)[0]
+        return (container, container.rsplit("/", 1)[-1])
+
     def _apply_strip(self, rel_str: str, strips: list[str]) -> str:
         """Strip the longest matching prefix from rel_str (case-insensitive)."""
         norm = rel_str.replace("\\", "/")
@@ -394,13 +495,29 @@ class UE5Game(BaseGame):
           If the matched folder is already at the root (no parent to strip),
           the path is preserved as-is so the folder name itself is kept.
         - flatten=True + ext/filename-only match — bare filename under dest
+
+        ``include_siblings`` only affects the matched file itself here (it
+        lands at ``dest/<container_name>/<filename>``); resolving the
+        sibling drag requires the full filemap and is handled by
+        ``_resolve_filemap_entries``.
         """
         match = self._match_rule(rel_str)
         if match is not None:
             rule, dyn_strip, is_folder_match = match
             dest = rule.dest
             norm = rel_str.replace("\\", "/")
-            if rule.flatten:
+            # Per-entry resolution can't drag siblings (no view of other
+            # entries), but it can still place the matched file inside its
+            # container so single-file queries show the right destination.
+            # Whole-mod drag (container_path == "") needs mod_name to form a
+            # useful destination; without it we fall back to flatten/preserve.
+            info = self._sibling_container(norm, dyn_strip, is_folder_match, "") \
+                if rule.include_siblings else None
+            container_path = info[0] if info is not None else None
+            if info is not None and container_path:
+                container_name = info[1]
+                final_rel = container_name + "/" + norm[len(container_path) + 1:]
+            elif rule.flatten:
                 if is_folder_match:
                     # Folder/prefix/folder_anywhere match: strip parents above
                     # the matched folder, keep matched folder + contents.
@@ -417,6 +534,110 @@ class UE5Game(BaseGame):
             dest = self.ue5_default_dest
             final_rel = rel_str.replace("\\", "/")
         return dest, final_rel
+
+    def _resolve_filemap_entries(
+        self, entries: list[tuple[str, str]],
+    ) -> list[tuple[str, str, str, str]]:
+        """Resolve a whole filemap at once, applying include_siblings drag.
+
+        Returns ``[(staged_rel, mod_name, dest_rel, final_rel), ...]``.
+
+        Per-entry resolution can't see other files; ``include_siblings``
+        needs to know that file X under the matched file's containing folder
+        in the same mod should ride along. This pass first runs
+        ``_resolve_entry`` on every entry to find primaries, then for each
+        ``include_siblings`` primary it overrides the resolution of every
+        same-mod file under the same containing folder so they all land at
+        ``dest/<container_name>/<rel-from-container>``.
+        """
+        # Default placement (no rule matches): default_dest + full path.
+        default_dest = self.ue5_default_dest
+        per_entry: list[tuple[str, str, str, str]] = [
+            (sr, mn, default_dest, sr.replace("\\", "/"))
+            for sr, mn in entries
+        ]
+        claimed: set[int] = set()
+
+        # Process rules in declaration order. For each rule:
+        #   1. Claim every still-unclaimed entry that this rule matches as
+        #      a primary, placing it under rule.dest.
+        #   2. If include_siblings, drag the container of every just-claimed
+        #      primary so subsequent rules can't claim files inside it.
+        # This ordering enforces "rule order wins" — an earlier rule's drag
+        # pre-empts a later rule's primary match on the same files.
+        for rule in self.ue5_routing_rules:
+            new_primaries: list[tuple[int, list[str], bool]] = []
+            for i, (staged_rel, mod_name) in enumerate(entries):
+                if i in claimed:
+                    continue
+                hit = self._match_single_ue5_rule(staged_rel, rule)
+                if hit is None:
+                    continue
+                dyn_strip, is_folder_match = hit
+                norm = staged_rel.replace("\\", "/")
+                # Compute placement for this primary.
+                if rule.include_siblings:
+                    info = self._sibling_container(norm, dyn_strip, is_folder_match, mod_name)
+                    if info is not None:
+                        cont, cname = info
+                        if cont:
+                            final_rel = cname + "/" + norm[len(cont) + 1:]
+                        else:
+                            final_rel = cname + "/" + norm
+                        per_entry[i] = (staged_rel, mod_name, rule.dest, final_rel)
+                        claimed.add(i)
+                        new_primaries.append((i, dyn_strip, is_folder_match))
+                        continue
+                # Non-include_siblings: standard flatten / preserve placement.
+                if rule.flatten:
+                    if is_folder_match:
+                        final_rel = self._apply_strip(staged_rel, dyn_strip) if dyn_strip else norm
+                    else:
+                        final_rel = Path(norm).name
+                else:
+                    final_rel = norm
+                per_entry[i] = (staged_rel, mod_name, rule.dest, final_rel)
+                claimed.add(i)
+            # Drag siblings for include_siblings primaries.
+            if not rule.include_siblings or not new_primaries:
+                continue
+            drags: list[tuple[str, str, str, bool]] = []
+            for pidx, dyn_strip, is_folder_match in new_primaries:
+                staged_rel, mod_name = entries[pidx]
+                norm = staged_rel.replace("\\", "/")
+                info = self._sibling_container(norm, dyn_strip, is_folder_match, mod_name)
+                if info is None:
+                    continue
+                cont, cname = info
+                drags.append((cont.lower(), cname, mod_name, cont == ""))
+            drags.sort(key=lambda t: (0 if t[3] else 1, -len(t[0])))
+            seen_drags: set[tuple[str, str]] = set()
+            for cont_lower, cname, primary_mod, is_whole in drags:
+                key = (cont_lower, primary_mod)
+                if key in seen_drags:
+                    continue
+                seen_drags.add(key)
+                prefix_lower = cont_lower + "/" if cont_lower else ""
+                for i, (staged_rel, mod_name) in enumerate(entries):
+                    if i in claimed:
+                        continue
+                    if mod_name != primary_mod:
+                        continue
+                    norm = staged_rel.replace("\\", "/")
+                    norm_lower = norm.lower()
+                    if is_whole:
+                        rel_in_container = norm
+                    else:
+                        if norm_lower == cont_lower:
+                            continue
+                        if not norm_lower.startswith(prefix_lower):
+                            continue
+                        rel_in_container = norm[len(cont_lower) + 1:]
+                    final_rel = cname + "/" + rel_in_container
+                    per_entry[i] = (staged_rel, mod_name, rule.dest, final_rel)
+                    claimed.add(i)
+
+        return per_entry
 
     # -----------------------------------------------------------------------
     # UE4SS mods.txt management
@@ -787,9 +1008,18 @@ class UE5Game(BaseGame):
         # Pre-resolve every entry and dedupe by final destination path.
         # When multiple staged paths resolve to the same on-disk target
         # (typical with flatten=True), the higher-priority mod wins.
+        # Use _resolve_filemap_entries (not per-line _resolve_entry) so
+        # rules with include_siblings can drag in same-mod files under the
+        # matched file's containing folder.
+        parsed = [tuple(line.split("\t", 1)) for line in lines]
+        rule_resolved = {
+            (sr, mn): (dr, fr)
+            for sr, mn, dr, fr in self._resolve_filemap_entries(
+                [(sr, mn) for sr, mn in parsed]
+            )
+        }
         resolved_by_dest: dict[str, tuple[int, str, str, str, Path, Path, bool, str]] = {}
-        for line in lines:
-            staged_rel, mod_name = line.split("\t", 1)
+        for staged_rel, mod_name in parsed:
             base_dir = per_mod_deploy.get(mod_name, game_path)
             in_custom_dir = base_dir != game_path
             if mod_name in per_mod_raw:
@@ -798,7 +1028,7 @@ class UE5Game(BaseGame):
                 dest_dir = base_dir
                 dest_file = dest_dir / final_rel
             else:
-                dest_rel, final_rel = self._resolve_entry(staged_rel)
+                dest_rel, final_rel = rule_resolved[(staged_rel, mod_name)]
                 dest_dir = (base_dir / dest_rel) if dest_rel else base_dir
                 dest_file = dest_dir / final_rel
             key = str(dest_file)

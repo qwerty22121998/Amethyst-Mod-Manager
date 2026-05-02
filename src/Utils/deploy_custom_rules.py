@@ -30,6 +30,44 @@ _CUSTOM_RULES_LOG_NAME = "custom_rules_deployed.txt"
 _CUSTOM_RULES_BACKUP_DIR = "custom_rules_backup"
 
 
+def _sibling_container(
+    rel_str: str, strip_len: int, mod_name: str,
+) -> tuple[str, str] | None:
+    """Return (container_path, container_name) for an include_siblings primary.
+
+    The container is the folder whose contents get dragged along. Result
+    semantics:
+
+    - Folder match nested (``strip_len > 0``) — container is the parent of
+      the matched folder.  e.g. "units" on "FPS XTREME 2.0/units/foo" →
+      ("FPS XTREME 2.0", "FPS XTREME 2.0").
+    - Folder match at mod root (``strip_len == 0``) — there is no parent
+      folder *inside* the mod; "container" expands to the whole mod, and
+      the container name becomes ``mod_name`` so dragged files land under
+      ``dest/<mod_name>/...``. Returned as ``("", mod_name)``.
+    - Ext/filename match nested — container is the file's immediate parent.
+    - Ext/filename match loose at mod root — same as folder-at-root: drag
+      every file in the mod under ``dest/<mod_name>/...``. Returned as
+      ``("", mod_name)``.
+
+    A container_path of ``""`` is the sentinel for "whole mod" — the caller
+    uses ``mod_name`` to scope the drag and treats every file in the mod
+    as a sibling.
+    """
+    norm_rel = rel_str.replace("\\", "/")
+    if strip_len > 0:
+        container = norm_rel[:strip_len].rstrip("/")
+        if not container:
+            return ("", mod_name)
+        return (container, container.rsplit("/", 1)[-1])
+    if strip_len == 0:
+        return ("", mod_name)
+    if "/" not in norm_rel:
+        return ("", mod_name)
+    container = norm_rel.rsplit("/", 1)[0]
+    return (container, container.rsplit("/", 1)[-1])
+
+
 def deploy_custom_rules(
     filemap_path: Path,
     game_root: Path,
@@ -106,83 +144,77 @@ def deploy_custom_rules(
                 return True
         return False
 
-    def _match_rule(rel_lower: str) -> tuple[CustomRule, int, str] | None:
-        """Return (rule, strip_len, matched_ext) for the first match, or None.
+    def _match_single_rule(
+        rel_lower: str,
+        rule: CustomRule, folders: set[str], exts: list[str], filenames: set[str],
+    ) -> tuple[int, str] | None:
+        """Check whether ``rel_lower`` matches a *single* rule.
 
-        strip_len is the number of leading characters to strip from rel_str
-        so the folder itself (and its contents) are preserved under dest.
-        For extension/filename matches strip_len is -1 (sentinel meaning
-        "no folder anchor"); placement is then driven by rule.flatten —
-        True flattens to the bare filename, False preserves the full
-        mod-relative path under dest.
-
-        matched_ext is the extension that matched (e.g. ".dekcns.json"), or
-        an empty string for folder/filename-only matches. Used to derive the
-        correct stem for companion-file resolution.
-
-        Example with folder "logicmods":
-          "logicmods/file.pak"              → strip_len=0 (keep as-is)
-          "paks/logicmods/file.pak"         → strip_len=5 (strip "paks/")
-          "content/paks/logicmods/file.pak" → strip_len=13 (strip "content/paks/")
+        Returns ``(strip_len, matched_ext)`` on a match, or None. Same
+        semantics as the old multi-rule ``_match_rule`` but for one rule —
+        used by the rule-ordered first pass so include_siblings drags from
+        an earlier rule can pre-empt primary matches for later rules.
         """
         parts = rel_lower.split("/")
         filename = parts[-1]
         is_loose = len(parts) == 1
-        for rule, folders, exts, filenames in _rules:
-            strip_len = -1
-            folder_hit = False
-            if folders:
-                for f in folders:
-                    if "/" in f:
-                        # Multi-segment folder: find it anywhere as a
-                        # contiguous segment sequence.
-                        idx = rel_lower.find(f + "/")
-                        if idx < 0 and rel_lower.endswith(f):
-                            idx = len(rel_lower) - len(f)
-                        if idx >= 0 and (idx == 0 or rel_lower[idx - 1] == "/"):
-                            strip_len = idx
+        strip_len = -1
+        folder_hit = False
+        if folders:
+            for f in folders:
+                if "/" in f:
+                    idx = rel_lower.find(f + "/")
+                    if idx < 0 and rel_lower.endswith(f):
+                        idx = len(rel_lower) - len(f)
+                    if idx >= 0 and (idx == 0 or rel_lower[idx - 1] == "/"):
+                        strip_len = idx
+                        folder_hit = True
+                        break
+                else:
+                    for pi, seg in enumerate(parts[:-1]):
+                        if seg == f:
+                            strip_len = sum(len(parts[j]) + 1 for j in range(pi))
                             folder_hit = True
                             break
-                    else:
-                        # Single-segment: find it as any directory segment.
-                        for pi, seg in enumerate(parts[:-1]):
-                            if seg == f:
-                                # Strip everything before this segment.
-                                strip_len = sum(len(parts[j]) + 1 for j in range(pi))
-                                folder_hit = True
-                                break
-                        if folder_hit:
-                            break
-                # loose_only on folder rules: matched folder must itself be
-                # at the top level (no parent above it).
-                if folder_hit and rule.loose_only and strip_len != 0:
-                    continue
-            matched_ext = _ext_match(filename, exts) if exts else None
-            if folder_hit and (not exts or matched_ext is not None):
-                return rule, strip_len, matched_ext or ""
-            # For ext/filename-only rules, loose_only means the file itself
-            # has no directory components.
-            if rule.loose_only and not is_loose:
-                continue
-            if matched_ext is not None and not folders and not filenames:
-                return rule, -1, matched_ext
-            if filenames and _name_match(filename, filenames):
-                return rule, -1, ""
+                    if folder_hit:
+                        break
+            if folder_hit and rule.loose_only and strip_len != 0:
+                return None
+        matched_ext = _ext_match(filename, exts) if exts else None
+        if folder_hit and (not exts or matched_ext is not None):
+            return strip_len, matched_ext or ""
+        if rule.loose_only and not is_loose:
+            return None
+        if matched_ext is not None and not folders and not filenames:
+            return -1, matched_ext
+        if filenames and _name_match(filename, filenames):
+            return -1, ""
         return None
 
-    already_seen: set[str] = set()
+    def _match_rule(rel_lower: str) -> tuple[CustomRule, int, str] | None:
+        """First-match-wins multi-rule lookup. Kept for backwards-compat;
+        the main flow uses ``_match_single_rule`` rule-by-rule so earlier
+        rules' include_siblings drags can claim files before later rules
+        get to run their primary match.
+        """
+        for rule, folders, exts, filenames in _rules:
+            hit = _match_single_rule(rel_lower, rule, folders, exts, filenames)
+            if hit is not None:
+                strip_len, matched_ext = hit
+                return rule, strip_len, matched_ext
+        return None
+
     tasks: list[tuple[Path, Path]] = []   # (src, dst)
     handled_lower: set[str] = set()
-    # Retain primary matches and all entries so we can resolve companions
-    # after the first pass.
     # primary_matches: rel_lower -> (rule, strip_len, rel_str, mod_name, matched_ext)
     primary_matches: dict[str, tuple[CustomRule, int, str, str, str]] = {}
     # entries_by_parent: parent_lower -> list of (rel_str, mod_name, name_lower)
-    # We index by parent only and resolve siblings by name suffix at companion
-    # time, since a multi-dot extension means a single file has multiple valid
-    # "stems" (e.g. "foo.dekcns.json" has stems "foo" and "foo.dekcns").
     entries_by_parent: dict[str, list[tuple[str, str, str]]] = {}
-
+    # all_entries: full list of (rel_str, mod_name, rel_lower)
+    all_entries: list[tuple[str, str, str]] = []
+    # Pre-load every entry once so the per-rule loop below can iterate them
+    # repeatedly (skipping any already claimed by an earlier rule).
+    seen_lower: set[str] = set()
     with filemap_path.open(encoding="utf-8") as f:
         for line in f:
             line = line.rstrip("\n")
@@ -190,54 +222,126 @@ def deploy_custom_rules(
                 continue
             rel_str, mod_name = line.split("\t", 1)
             rel_lower = rel_str.lower()
-            if rel_lower in already_seen:
+            if rel_lower in seen_lower:
                 continue
-            already_seen.add(rel_lower)
-
-            # Index every entry by parent dir for companion resolution.
+            seen_lower.add(rel_lower)
             parent_lower, _, name_lower = rel_lower.rpartition("/")
             entries_by_parent.setdefault(parent_lower, []).append(
                 (rel_str, mod_name, name_lower)
             )
+            all_entries.append((rel_str, mod_name, rel_lower))
 
-            match = _match_rule(rel_lower)
-            if match is None:
+    def _place_primary(rel_str: str, mod_name: str, rule: CustomRule,
+                       strip_len: int, matched_ext: str) -> None:
+        """Resolve source, compute destination, and append a copy task for a
+        rule's primary match. Updates primary_matches/handled_lower/tasks.
+        """
+        rel_lower = rel_str.lower()
+        primary_matches[rel_lower] = (rule, strip_len, rel_str, mod_name, matched_ext)
+        src_str = _resolve_source(
+            mod_name, rel_str, rel_lower, overwrite_dir, staging_root,
+            _overwrite_str, _staging_str, sorted_strip, _per_mod_strip,
+            nocase_cache,
+        )
+        if src_str is None:
+            _log(f"  WARN: source not found — {rel_str} ({mod_name})")
+            handled_lower.add(rel_lower)  # claim it anyway so later rules don't re-try
+            return
+        src = Path(src_str)
+        dest_base = game_root / rule.dest if rule.dest else game_root
+        container_info = _sibling_container(rel_str, strip_len, mod_name) \
+            if rule.include_siblings else None
+        if container_info is not None:
+            norm_rel = rel_str.replace("\\", "/")
+            container_path, container_name = container_info
+            if container_path:
+                rel_in_container = norm_rel[len(container_path) + 1:]
+            else:
+                rel_in_container = norm_rel
+            dst = dest_base / container_name / rel_in_container
+        elif rule.flatten:
+            if strip_len >= 0:
+                kept = rel_str[strip_len:].lstrip("/")
+                dst = dest_base / kept if kept else dest_base
+            else:
+                dst = dest_base / src.name
+        else:
+            dst = dest_base / rel_str
+        tasks.append((src, dst))
+        handled_lower.add(rel_lower)
+
+    def _drag_container(container_lower: str, container_name: str,
+                        primary_mod: str, rule: CustomRule, is_whole_mod: bool) -> None:
+        """Drag every unclaimed same-mod file under ``container_lower`` to
+        ``dest/container_name/<rel-from-container>``.
+        """
+        prefix_lower = container_lower + "/" if container_lower else ""
+        dest_base = game_root / rule.dest if rule.dest else game_root
+        for sib_rel_str, sib_mod_name, sib_lower in all_entries:
+            if sib_lower in handled_lower:
                 continue
-            rule, strip_len, matched_ext = match
-            primary_matches[rel_lower] = (rule, strip_len, rel_str, mod_name, matched_ext)
-
+            if sib_mod_name != primary_mod:
+                continue
+            if is_whole_mod:
+                rel_in_container = sib_rel_str.replace("\\", "/")
+            else:
+                if not sib_lower.startswith(prefix_lower):
+                    continue
+                rel_in_container = sib_rel_str.replace("\\", "/")[len(container_lower) + 1:]
             src_str = _resolve_source(
-                mod_name, rel_str, rel_lower, overwrite_dir, staging_root,
+                sib_mod_name, sib_rel_str, sib_lower, overwrite_dir, staging_root,
                 _overwrite_str, _staging_str, sorted_strip, _per_mod_strip,
                 nocase_cache,
             )
             if src_str is None:
-                _log(f"  WARN: source not found — {rel_str} ({mod_name})")
+                _log(f"  WARN: source not found — {sib_rel_str} ({sib_mod_name})")
+                handled_lower.add(sib_lower)
                 continue
             src = Path(src_str)
-
-            dest_base = game_root / rule.dest if rule.dest else game_root
-            if rule.flatten:
-                if strip_len >= 0:
-                    # Folder match + flatten=True: strip the prefix above the
-                    # matched folder so the folder + contents land under dest.
-                    #   strip_len=0: LogicMods/f → dest/LogicMods/f
-                    #   strip_len=5: Paks/LogicMods/f → dest/LogicMods/f
-                    kept = rel_str[strip_len:].lstrip("/")
-                    dst = dest_base / kept if kept else dest_base
-                else:
-                    # Ext/filename-only + flatten=True: bare filename under dest.
-                    dst = dest_base / src.name
-            else:
-                # flatten=False (any match type): preserve the full
-                # mod-relative path under dest.
-                #   folders=["LogicMods"] dest="" file=Paks/LogicMods/x.pak
-                #     → Paks/LogicMods/x.pak (at game root)
-                #   exts=[".dll"] dest="win64/mods/dlls" file=folder1/x.dll
-                #     → win64/mods/dlls/folder1/x.dll
-                dst = dest_base / rel_str
+            dst = dest_base / container_name / rel_in_container
             tasks.append((src, dst))
-            handled_lower.add(rel_lower)
+            handled_lower.add(sib_lower)
+
+    # Process rules in declaration order. For each rule:
+    #   1. Find every still-unclaimed file that matches this rule and place
+    #      it as a primary.
+    #   2. If include_siblings is on, immediately drag the container of
+    #      every just-placed primary so later rules can't claim those files.
+    # This ordering is what enforces "rule order wins" — if rule 1's drag
+    # would swallow a file that rule 2 would also match, rule 1 takes it.
+    for rule, folders, exts, filenames in _rules:
+        # Step 1: claim primaries for this rule among unclaimed files.
+        new_primaries: list[tuple[str, str, int, str]] = []
+        for rel_str, mod_name, rel_lower in all_entries:
+            if rel_lower in handled_lower:
+                continue
+            hit = _match_single_rule(rel_lower, rule, folders, exts, filenames)
+            if hit is None:
+                continue
+            strip_len, matched_ext = hit
+            _place_primary(rel_str, mod_name, rule, strip_len, matched_ext)
+            new_primaries.append((rel_str, mod_name, strip_len, matched_ext))
+        # Step 2: drag siblings for include_siblings primaries (per-mod).
+        # Whole-mod drags subsume nested ones, so process them first.
+        if not rule.include_siblings or not new_primaries:
+            continue
+        drags: list[tuple[str, str, str, bool]] = []  # (cont_lower, cont_name, mod_name, whole)
+        for rel_str, mod_name, strip_len, _matched_ext in new_primaries:
+            info = _sibling_container(rel_str, strip_len, mod_name)
+            if info is None:
+                continue
+            container_path, container_name = info
+            drags.append((container_path.lower(), container_name, mod_name,
+                          container_path == ""))
+        # Whole-mod first, then longest container first.
+        drags.sort(key=lambda t: (0 if t[3] else 1, -len(t[0])))
+        seen_drags: set[tuple[str, str]] = set()  # (container_lower, mod_name)
+        for cont_lower, cont_name, mod_name, is_whole_mod in drags:
+            key = (cont_lower, mod_name)
+            if key in seen_drags:
+                continue
+            seen_drags.add(key)
+            _drag_container(cont_lower, cont_name, mod_name, rule, is_whole_mod)
 
     # Second pass: companion files ride along with their primary match.
     # Companions are matched longest-first too so a ".dekcns.json" companion
