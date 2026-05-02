@@ -386,6 +386,37 @@ class _PackOptionsDialog(tk.Frame):
             ).grid(row=row, column=0, sticky="ew", padx=(40, 16), pady=(0, 14))
             row += 1
 
+        # Skip-winners checkbox.  Loose files that *win* a conflict
+        # would lose if packed (BSAs lose to loose files of subsequent
+        # mods), so the user has the option to leave winners loose.
+        # Files that already lose, or have no conflict, pack normally.
+        self._skip_winners_var = tk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            card,
+            text="Keep winning conflict files loose",
+            variable=self._skip_winners_var,
+            font=(_theme.FONT_FAMILY, _theme.FS11),
+            text_color=TEXT_MAIN,
+            fg_color=ACCENT, hover_color=ACCENT_HOV,
+            border_color=BORDER, checkmark_color="white",
+            checkbox_width=self._CHECKBOX_W,
+            checkbox_height=self._CHECKBOX_H,
+        ).grid(row=row, column=0, sticky="w", padx=16, pady=(2, 4))
+        row += 1
+        tk.Label(
+            card,
+            text=(
+                "Files this mod currently wins as loose are left out of "
+                "the archive so deploy still picks them.  Files this mod "
+                "already loses, or that have no conflict, are packed "
+                "normally."
+            ),
+            font=(_theme.FONT_FAMILY, _theme.FS9),
+            fg=TEXT_DIM, bg=BG_PANEL,
+            anchor="w", justify="left", wraplength=380,
+        ).grid(row=row, column=0, sticky="ew", padx=(40, 16), pady=(0, 14))
+        row += 1
+
         # Button row.
         btn_row = tk.Frame(card, bg=BG_PANEL)
         btn_row.grid(row=row, column=0, sticky="ew", padx=12, pady=(4, 14))
@@ -417,6 +448,7 @@ class _PackOptionsDialog(tk.Frame):
         self.result = {
             "delete_loose": bool(self._delete_var.get()),
             "split_textures": bool(self._split_textures_var.get()),
+            "skip_winners": bool(self._skip_winners_var.get()),
         }
         self._done_var.set(True)
 
@@ -1170,6 +1202,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             return
         delete_loose: bool = opts["delete_loose"]
         split_textures: bool = opts.get("split_textures", False)
+        skip_winners: bool = opts.get("skip_winners", False)
         # For BSA, only allocate the textures sibling path if the user
         # ticked the "Separate textures archive" checkbox.
         if kind == "bsa" and split_textures:
@@ -1197,7 +1230,24 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
         # Files the user has disabled in the Mod Files tab — skip them
         # in the pack so they aren't archived, and aren't re-enabled
         # implicitly when we auto-disable everything that was packed.
-        excluded_now = frozenset(self._mod_files_excluded.get(mod_name, set()))
+        excluded_set: set[str] = set(self._mod_files_excluded.get(mod_name, set()))
+
+        # If the user opted to keep their winning conflict files loose,
+        # add every rel_key this mod currently *wins a real conflict on*
+        # to the exclusion set.  A "real" winner needs both:
+        #   * filemap_winner[rk] == this mod (this mod's copy deploys)
+        #   * rk is in contested_keys (more than one mod ships that path)
+        # Otherwise filemap_winner contains every uncontested file too,
+        # which would exclude almost the whole mod.
+        if skip_winners:
+            contested_keys, filemap_winner = self._get_conflict_cache(None)
+            winners = {
+                rk for rk, owner in filemap_winner.items()
+                if owner == mod_name and rk in contested_keys
+            }
+            excluded_set |= winners
+
+        excluded_now = frozenset(excluded_set)
 
         popup = CTkProgressPopup(
             self.winfo_toplevel(),
@@ -4275,9 +4325,12 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                             priority_map[e.name] = rank
                     except Exception:
                         pass
+            # Use _resolve_filemap_entries so include_siblings drags same-mod
+            # files under a matched container along to the rule's dest.
             winners: dict[str, tuple[int, str, str]] = {}
-            for rel_path, mod_name in entries:
-                dest, final_rel = game._resolve_entry(rel_path)
+            for rel_path, mod_name, dest, final_rel in game._resolve_filemap_entries(
+                list(entries)
+            ):
                 full_path = dest + "/" + final_rel if dest else final_rel
                 rank = priority_map.get(mod_name, 1 << 30)
                 existing = winners.get(full_path)
@@ -4319,63 +4372,48 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                     return True
             return False
 
-        def _match(rel_lower: str):
-            """Return (rule, strip_len, matched_ext) or (None, -1, "").
-
-            Mirrors deploy_custom_rules._match_rule: folders are matched
-            as any path segment (not just the first), and strip_len is the
-            number of leading characters to remove so the folder itself is
-            preserved under dest. matched_ext is the extension that matched
-            (used to derive companion stems for multi-dot extensions).
+        def _match_one(rel_lower, rule, folders, exts, filenames):
+            """Match a single rule against rel_lower. Returns
+            ``(strip_len, matched_ext)`` on a hit or None. Same semantics as
+            ``deploy_custom_rules._match_single_rule``.
             """
             parts = rel_lower.split("/")
             filename = parts[-1]
             is_loose = len(parts) == 1
-            for rule, folders, exts, filenames in _rules:
-                strip_len = -1
-                folder_hit = False
-                if folders:
-                    for f in folders:
-                        if "/" in f:
-                            idx = rel_lower.find(f + "/")
-                            if idx < 0 and rel_lower.endswith(f):
-                                idx = len(rel_lower) - len(f)
-                            if idx >= 0 and (idx == 0 or rel_lower[idx - 1] == "/"):
-                                strip_len = idx
+            strip_len = -1
+            folder_hit = False
+            if folders:
+                for f in folders:
+                    if "/" in f:
+                        idx = rel_lower.find(f + "/")
+                        if idx < 0 and rel_lower.endswith(f):
+                            idx = len(rel_lower) - len(f)
+                        if idx >= 0 and (idx == 0 or rel_lower[idx - 1] == "/"):
+                            strip_len = idx
+                            folder_hit = True
+                            break
+                    else:
+                        for pi, seg in enumerate(parts[:-1]):
+                            if seg == f:
+                                strip_len = sum(len(parts[j]) + 1 for j in range(pi))
                                 folder_hit = True
                                 break
-                        else:
-                            for pi, seg in enumerate(parts[:-1]):
-                                if seg == f:
-                                    strip_len = sum(len(parts[j]) + 1 for j in range(pi))
-                                    folder_hit = True
-                                    break
-                            if folder_hit:
-                                break
-                    # loose_only on folder rules: matched folder must itself
-                    # be at the top level (no parent above it).
-                    if folder_hit and rule.loose_only and strip_len != 0:
-                        continue
-                matched_ext = _ext_match(filename, exts) if exts else None
-                if folder_hit and (not exts or matched_ext is not None):
-                    return rule, strip_len, matched_ext or ""
-                # For ext/filename-only rules, loose_only means the file
-                # itself has no directory components.
-                if rule.loose_only and not is_loose:
-                    continue
-                if matched_ext is not None and not folders and not filenames:
-                    return rule, -1, matched_ext
-                if filenames and _name_match(filename, filenames):
-                    return rule, -1, ""
-            return None, -1, ""
+                        if folder_hit:
+                            break
+                if folder_hit and rule.loose_only and strip_len != 0:
+                    return None
+            matched_ext = _ext_match(filename, exts) if exts else None
+            if folder_hit and (not exts or matched_ext is not None):
+                return strip_len, matched_ext or ""
+            if rule.loose_only and not is_loose:
+                return None
+            if matched_ext is not None and not folders and not filenames:
+                return -1, matched_ext
+            if filenames and _name_match(filename, filenames):
+                return -1, ""
+            return None
 
-        # First pass: record each entry's primary rule match so companions
-        # can ride along on the second pass.  Index entries by parent dir
-        # so we can find siblings cheaply (multi-dot extensions mean a
-        # single file can have multiple valid stems, so name-suffix matching
-        # is done per-companion at resolution time).
-        # primary_rules maps index -> (rule, strip_len, matched_ext);
-        # entries_by_parent maps parent_lower -> list of (index, name_lower).
+        # Build the per-file index used by the companion pass.
         primary_rules: dict[int, tuple] = {}
         entries_by_parent: dict[str, list[tuple[int, str]]] = {}
         normalised: list[str] = []
@@ -4383,11 +4421,69 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             rel_norm = rel_path.replace("\\", "/")
             normalised.append(rel_norm)
             rel_lower = rel_norm.lower()
-            parent_lower, _, name_lower = rel_lower.rpartition("/")
-            entries_by_parent.setdefault(parent_lower, []).append((idx, name_lower))
-            rule, strip_len, matched_ext = _match(rel_lower)
-            if rule is not None:
+            parent_lower, _, _name_lower = rel_lower.rpartition("/")
+            entries_by_parent.setdefault(parent_lower, []).append((idx, _name_lower))
+
+        # Process rules in declaration order so an earlier include_siblings
+        # rule claims its container before a later rule can match a file
+        # inside it. Mirrors deploy_custom_rules' rule-ordered first pass.
+        sibling_overrides: dict[int, str] = {}
+        from Utils.deploy_custom_rules import _sibling_container
+        claimed: set[int] = set()
+        for rule, folders, exts, filenames in _rules:
+            new_primary_idxs: list[int] = []
+            for idx, (rel_path, mod_name) in enumerate(entries):
+                if idx in claimed:
+                    continue
+                rel_lower = normalised[idx].lower()
+                hit = _match_one(rel_lower, rule, folders, exts, filenames)
+                if hit is None:
+                    continue
+                strip_len, matched_ext = hit
                 primary_rules[idx] = (rule, strip_len, matched_ext)
+                claimed.add(idx)
+                new_primary_idxs.append(idx)
+            if not getattr(rule, "include_siblings", False) or not new_primary_idxs:
+                continue
+            # Build drag specs for this rule's primaries, then claim siblings.
+            drags: list[tuple[str, str, str, bool]] = []
+            for pidx in new_primary_idxs:
+                _r, sl, _me = primary_rules[pidx]
+                rn = normalised[pidx]; pmod = entries[pidx][1]
+                info = _sibling_container(rn, sl, pmod)
+                if info is None:
+                    continue
+                cont, cname = info
+                is_whole = cont == ""
+                drags.append((cont.lower(), cname, pmod, is_whole))
+                # Override the primary itself.
+                if is_whole:
+                    sibling_overrides[pidx] = cname + "/" + rn
+                else:
+                    sibling_overrides[pidx] = cname + "/" + rn[len(cont) + 1:]
+            drags.sort(key=lambda t: (0 if t[3] else 1, -len(t[0])))
+            seen_drags: set[tuple[str, str]] = set()
+            for cont_lower, cname, pmod, is_whole in drags:
+                key = (cont_lower, pmod)
+                if key in seen_drags:
+                    continue
+                seen_drags.add(key)
+                prefix_lower = cont_lower + "/" if cont_lower else ""
+                for sib_idx, (rel_path, sib_mod) in enumerate(entries):
+                    if sib_idx in claimed:
+                        continue
+                    if sib_mod != pmod:
+                        continue
+                    sn = normalised[sib_idx]; slow = sn.lower()
+                    if is_whole:
+                        ric = sn
+                    else:
+                        if not slow.startswith(prefix_lower):
+                            continue
+                        ric = sn[len(cont_lower) + 1:]
+                    sibling_overrides[sib_idx] = cname + "/" + ric
+                    primary_rules[sib_idx] = (rule, -2, "")
+                    claimed.add(sib_idx)
 
         # Second pass: mark companions (same folder, same stem, companion ext)
         # with their primary's rule.
@@ -4425,7 +4521,12 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
             if match is not None:
                 rule, strip_len, _matched_ext = match
                 dest = rule.dest
-                if rule.flatten:
+                override = sibling_overrides.get(idx)
+                if override is not None:
+                    # include_siblings: matched file or dragged sibling lands
+                    # at dest/<container_name>/<rel-from-container>.
+                    full_path = dest + "/" + override if dest else override
+                elif rule.flatten:
                     if strip_len >= 0:
                         # Folder match + flatten=True: strip prefix above
                         # the folder, keep folder + contents under dest.
