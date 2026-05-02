@@ -1057,6 +1057,16 @@ class PluginPanelExeLauncherMixin:
                 env.setdefault("SteamAppId", steam_id)
                 env.setdefault("SteamGameId", steam_id)
 
+        if proton_override_name and getattr(game, "synthesis_registry_name", None):
+            from Utils.bethesda_registry import maybe_register_for_game
+            maybe_register_for_game(
+                prefix_dir=compat_data,
+                proton_script=proton_script,
+                env=env,
+                game=game,
+                log_fn=self._log,
+            )
+
         # Re-apply profile-specific output substitution at launch time so the
         # correct path is used even if the profile changed after the exe was
         # selected in the dropdown.

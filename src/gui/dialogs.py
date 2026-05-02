@@ -2962,6 +2962,17 @@ class ExeConfigPanel(ctk.CTkFrame):
         result = _get_tool_prefix_env(self._exe_path, selected)
         if result is None:
             self._log(f"Prefix tools: could not find Proton '{selected}'.")
+            return None
+        proton_script, prefix_dir, env = result
+        if getattr(self._game, "synthesis_registry_name", None):
+            from Utils.bethesda_registry import maybe_register_for_game
+            maybe_register_for_game(
+                prefix_dir=prefix_dir,
+                proton_script=proton_script,
+                env=env,
+                game=self._game,
+                log_fn=self._log,
+            )
         return result
 
     def _run_exe_in_prefix(self):
