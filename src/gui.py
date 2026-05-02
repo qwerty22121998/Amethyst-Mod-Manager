@@ -11,10 +11,31 @@ import threading
 import tkinter as tk
 import tkinter.messagebox
 from pathlib import Path
+
+# Drop dead /tmp/.mount_* entries from sys.path before any third-party import.
+# Older AppImage builds exported PYTHONPATH globally, so a shell launched from
+# the GUI inherits a path pointing at a mount that disappears the moment the
+# AppImage exits. Loading PIL from such a path yields the cryptic
+# "ImportError: cannot import name '_imaging' from 'PIL'".
+sys.path[:] = [p for p in sys.path if not (p.startswith("/tmp/.mount_") and not Path(p).is_dir())]
+
+# When running inside the current AppImage, add its bundled _vendor dir so
+# we can find Pillow / other deps. The launcher used to do this via PYTHONPATH,
+# which leaked into child shells.
+if os.environ.get("APPDIR"):
+    _vendor = Path(os.environ["APPDIR"]) / "share" / "amethyst-mod-manager" / "_vendor"
+    if _vendor.is_dir() and str(_vendor) not in sys.path:
+        sys.path.insert(0, str(_vendor))
+
 from Utils.xdg import open_url
 
 # Set MOD_MANAGER_GAMES so game discovery finds Games/ even when cwd or launcher differs.
 # Try script dir and its parent (gui.py in src/ -> src/Games; python -m gui -> gui/ so use parent/Games).
+# Drop a stale value pointing at /tmp/.mount_* — that's leftover from a prior
+# AppImage launch whose mount is gone, and would break game discovery here.
+_mmg = os.environ.get("MOD_MANAGER_GAMES", "")
+if _mmg.startswith("/tmp/.mount_") and not Path(_mmg).is_dir():
+    os.environ.pop("MOD_MANAGER_GAMES", None)
 if not os.environ.get("MOD_MANAGER_GAMES"):
     for _origin in (getattr(sys.modules.get("__main__"), "__file__", None), __file__, sys.argv[0] if sys.argv else None):
         if not _origin:

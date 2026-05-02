@@ -228,8 +228,11 @@ else
     # below rewrites it to "$APPDIR"/share (sharun's flattened runtime layout).
     cat > "$APPDIR/bin/mod-manager" <<'EOF'
 #!/bin/sh
+# Don't export PYTHONPATH here — it would inherit into any child shell the
+# user spawns from the app, shadowing their system Pillow with our vendored
+# copy long after the AppImage's /tmp mount has disappeared. gui.py / cli.py
+# add _vendor to sys.path themselves when $APPDIR is set.
 APP_SHARE=/usr/share/amethyst-mod-manager
-export PYTHONPATH="$APP_SHARE/_vendor${PYTHONPATH:+:$PYTHONPATH}"
 export MOD_MANAGER_PROFILES_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/AmethystModManager/Profiles"
 mkdir -p "$MOD_MANAGER_PROFILES_DIR"
 case "$1" in
