@@ -493,6 +493,63 @@ def _unwrap_single_folder(extract_dir: str) -> str:
     return extract_dir
 
 
+def _find_fomod_archive(extract_dir: str) -> str | None:
+    """Return the path to a `.fomod` file inside *extract_dir* if the archive
+    is just a wrapper around one (optionally peeling a single top-level
+    folder).  A `.fomod` is itself a renamed 7z/zip — Nexus packages older
+    Fallout/Oblivion mods this way and they need a second extraction pass
+    before FOMOD detection can find `fomod/ModuleConfig.xml`."""
+    root = Path(_unwrap_single_folder(extract_dir))
+    fomods = [p for p in root.iterdir() if p.is_file() and p.suffix.lower() == ".fomod"]
+    if len(fomods) == 1:
+        siblings = [p for p in root.iterdir() if p != fomods[0]]
+        if all(s.is_file() and s.suffix.lower() in (".txt", ".md", ".rtf", ".jpg", ".png", ".pdf") for s in siblings):
+            return str(fomods[0])
+    return None
+
+
+def _extract_fomod_archive(fomod_path: str, dest_dir: str, log_fn) -> bool:
+    """Extract a `.fomod` (7z or zip in disguise) into *dest_dir*.  Tries
+    native 7z, then bsdtar, then py7zr, then zipfile — same fallback chain
+    used for regular .7z archives."""
+    import subprocess
+    _7z_bin = shutil.which("7zzs") or shutil.which("7zz") or shutil.which("7z") or shutil.which("7za")
+    if _7z_bin:
+        r = subprocess.run(
+            [_7z_bin, "x", fomod_path, f"-o{dest_dir}", "-y", "-mmt=on"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        if r.returncode == 0:
+            log_fn("Extracted .fomod with 7z.")
+            return True
+        log_fn(f"7z failed on .fomod ({r.stderr.strip()}), trying bsdtar…")
+    if shutil.which("bsdtar"):
+        r = subprocess.run(
+            ["bsdtar", "-xf", fomod_path, "-C", dest_dir],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+        if r.returncode == 0 and any(os.scandir(dest_dir)):
+            log_fn("Extracted .fomod with bsdtar.")
+            return True
+        log_fn(f"bsdtar failed on .fomod ({r.stderr.strip()}), trying py7zr…")
+    try:
+        with _py7zr_lock:
+            with py7zr.SevenZipFile(fomod_path, "r") as z:
+                z.extractall(dest_dir)
+        log_fn("Extracted .fomod with py7zr.")
+        return True
+    except Exception as e:
+        log_fn(f"py7zr failed on .fomod ({e}), trying zipfile…")
+    try:
+        with zipfile.ZipFile(fomod_path, "r") as z:
+            z.extractall(dest_dir)
+        log_fn("Extracted .fomod with zipfile.")
+        return True
+    except Exception as e:
+        log_fn(f"zipfile failed on .fomod ({e}).")
+    return False
+
+
 def detect_bundle(
     extract_dir: str,
 ) -> "tuple[str, list[tuple[str, str]]] | None":
@@ -1301,6 +1358,26 @@ def install_mod_from_archive(archive_path: str, parent_window, log_fn,
             log_fn(f"Unsupported archive format: {os.path.basename(archive_path)}")
             log_fn("Supported formats: .zip, .7z, .rar, .tar.gz")
             return None
+
+        # If the archive only contained a `.fomod` file (a renamed 7z/zip used
+        # by older Fallout/Oblivion FOMOD packages), extract it again and use
+        # the inner contents as the new working tree.  Without this pass,
+        # detect_fomod() finds nothing and the install silently produces an
+        # empty mod.
+        _fomod_archive = _find_fomod_archive(extract_dir)
+        if _fomod_archive:
+            log_fn(f"Archive contains a .fomod wrapper — extracting {os.path.basename(_fomod_archive)}…")
+            _inner_dir = tempfile.mkdtemp(
+                prefix="modmgr_fomod_",
+                dir=os.path.dirname(extract_dir) or None,
+            )
+            if _extract_fomod_archive(_fomod_archive, _inner_dir, log_fn):
+                _outer_dir = extract_dir
+                extract_dir = _inner_dir
+                shutil.rmtree(_outer_dir, ignore_errors=True)
+            else:
+                shutil.rmtree(_inner_dir, ignore_errors=True)
+                raise RuntimeError(f"Failed to extract inner .fomod archive: {os.path.basename(_fomod_archive)}")
 
         is_fomod_install = False
         fomod_result = detect_fomod(extract_dir)
