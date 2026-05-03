@@ -275,8 +275,8 @@ class SkyrimSE(Fallout_3):
     _MYGAMES_SUBPATH_GOG = Path("Skyrim Special Edition GOG")
     _ARCHIVE_INI_FILENAME = "Skyrim.ini"
 
-    # ShaderCache must be a real copy in Data/ — hard links prevent the game
-    # from writing to it.  We round-trip it through the overwrite folder.
+    # Round-tripped through overwrite/ across deploy/restore so runtime
+    # shader compilation persists across re-deploys.
     _SHADER_CACHE = "ShaderCache"
 
     @property
@@ -331,53 +331,6 @@ class SkyrimSE(Fallout_3):
         shutil.rmtree(src)
         log_fn(f"  Saved ShaderCache → overwrite/{self._SHADER_CACHE}/")
 
-    def _consolidate_mod_shadercaches(self, staging: Path, overwrite_dir: Path,
-                                      log_fn) -> None:
-        """Move ShaderCache folders from mod staging dirs into overwrite/.
-
-        For each enabled mod that contains a ShaderCache folder:
-          - Files not already present in overwrite/ShaderCache/ are copied there.
-          - Files already present in overwrite/ShaderCache/ are left as-is
-            (overwrite wins).
-          - The mod's ShaderCache folder is then deleted.
-        """
-        if not staging.is_dir():
-            return
-        dst_root = overwrite_dir / self._SHADER_CACHE
-        moved_any = False
-        for mod_dir in staging.iterdir():
-            if not mod_dir.is_dir():
-                continue
-            src = mod_dir / self._SHADER_CACHE
-            if not src.is_dir():
-                continue
-            dst_root.mkdir(parents=True, exist_ok=True)
-            for f in src.rglob("*"):
-                if f.is_file():
-                    rel = f.relative_to(src)
-                    target = dst_root / rel
-                    if not target.exists():
-                        target.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(f, target)
-            shutil.rmtree(src)
-            log_fn(f"  Moved {mod_dir.name}/ShaderCache → overwrite/{self._SHADER_CACHE}/")
-            moved_any = True
-        if not moved_any:
-            log_fn("  No mod ShaderCache folders found.")
-
-    def _deploy_shadercache_from_overwrite(self, data_dir: Path,
-                                           overwrite_dir: Path, log_fn) -> None:
-        """Full-copy ShaderCache from overwrite/ into Data/ (never hard-linked)."""
-        src = overwrite_dir / self._SHADER_CACHE
-        if not src.is_dir():
-            return
-        dst = data_dir / self._SHADER_CACHE
-        # Remove any hard-linked version deploy_filemap may have placed first.
-        if dst.exists() or dst.is_symlink():
-            shutil.rmtree(dst, ignore_errors=True)
-        shutil.copytree(src, dst)
-        log_fn(f"  Copied ShaderCache from overwrite/ → Data/ (full copy).")
-
     def deploy(self, log_fn=None, mode: LinkMode = LinkMode.HARDLINK,
                profile: str = "default", progress_fn=None) -> None:
         """Deploy staged mods into the game's Data directory.
@@ -387,7 +340,6 @@ class SkyrimSE(Fallout_3):
           2. Move Data/ → Data_Core/
           3. Transfer mod files listed in filemap.txt into Data/
           4. Fill gaps with vanilla files from Data_Core/
-          5. Replace hard-linked ShaderCache with a full copy from overwrite/
         (Root Folder deployment is handled by the GUI after this returns.)
         """
         _log = log_fn or (lambda _: None)
@@ -410,9 +362,6 @@ class SkyrimSE(Fallout_3):
 
         _log("Step 1: Saving ShaderCache to overwrite/ ...")
         self._shadercache_to_overwrite(data_dir, overwrite_dir, _log)
-
-        _log("Step 1b: Consolidating mod ShaderCache folders into overwrite/ ...")
-        self._consolidate_mod_shadercaches(staging, overwrite_dir, _log)
 
         _log("Step 2: Moving Data/ → Data_Core/ ...")
         moved = move_to_core(data_dir, log_fn=_log)
@@ -456,16 +405,13 @@ class SkyrimSE(Fallout_3):
         linked_core = deploy_core(data_dir, placed, mode=mode, log_fn=_log)
         _log(f"  Transferred {linked_core} vanilla file(s).")
 
-        _log("Step 5: Deploying ShaderCache as full copy ...")
-        self._deploy_shadercache_from_overwrite(data_dir, overwrite_dir, _log)
-
-        _log("Step 6: Symlinking plugins.txt into Proton prefix ...")
+        _log("Step 5: Symlinking plugins.txt into Proton prefix ...")
         self._symlink_plugins_txt(profile, _log)
 
-        _log("Step 7: Symlinking profile INI files ...")
+        _log("Step 6: Symlinking profile INI files ...")
         self._symlink_profile_ini_files(profile, _log)
 
-        _log("Step 8: Applying archive invalidation ...")
+        _log("Step 7: Applying archive invalidation ...")
         self.apply_archive_invalidation(_log)
 
         _log(
@@ -484,10 +430,6 @@ class SkyrimSE(Fallout_3):
         data_dir      = self._game_path / "Data"
         staging       = self.get_effective_mod_staging_path()
         overwrite_dir = self.get_effective_overwrite_path()
-
-        # Move ShaderCache back to overwrite/ before wiping Data/.
-        _log("Restore: saving ShaderCache to overwrite/ ...")
-        self._shadercache_to_overwrite(data_dir, overwrite_dir, _log)
 
         _log("Restore: removing plugins.txt symlink ...")
         self._remove_plugins_txt_symlink(_log)
