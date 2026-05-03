@@ -1,0 +1,78 @@
+{
+  "name": "Payday 2",
+  "game_id": "Payday_2",
+  "exe_name": "payday2_win32_release.exe",
+  "deploy_type": "root",
+  "mod_data_path": "",
+  "steam_id": "218620",
+  "nexus_game_domain": "payday2",
+  "image_url": "https://cdn2.steamgriddb.com/icon/3d3793bded236eab8fe183ddbea5ca84/32/256x256.png",
+  "min_app_version": "1.3",
+  "mod_folder_strip_prefixes": [
+    "mods",
+    "assets",
+    "maps"
+  ],
+  "conflict_ignore_filenames": [
+    "*read*.txt",
+    "*license*"
+  ],
+  "mod_folder_strip_prefixes_post": [],
+  "mod_install_prefix": "",
+  "mod_required_top_level_folders": [],
+  "mod_auto_strip_until_required": true,
+  "mod_required_file_types": [],
+  "mod_install_as_is_if_no_match": true,
+  "restore_before_deploy": true,
+  "normalize_folder_case": true,
+  "filemap_casing": "upper",
+  "wine_dll_overrides": {
+    "wsock32": "native,builtin"
+  },
+  "custom_routing_rules": [
+    {
+      "dest": "",
+      "filenames": [
+        "wsock32.dll"
+      ],
+      "flatten": true
+    },
+    {
+      "dest": "",
+      "filenames": [
+        "iphlpapi.dll"
+      ]
+    },
+    {
+      "dest": "maps",
+      "folders": [
+        "levels"
+      ],
+      "include_siblings": true
+    },
+    {
+      "dest": "mods",
+      "filenames": [
+        "mod.txt"
+      ],
+      "include_siblings": true
+    },
+    {
+      "dest": "mods",
+      "folders": [
+        "saves"
+      ]
+    },
+    {
+      "dest": "assets/mod_overrides",
+      "filenames": [
+        "*"
+      ]
+    }
+  ],
+  "custom_frameworks": {
+    "SuperBLT": "wsock32.dll"
+  },
+  "version": 1,
+  "editable": false
+}

@@ -452,25 +452,14 @@ class UE5Game(BaseGame):
     ) -> tuple[str, str] | None:
         """Return ``(container_path, container_name)`` for a matched entry.
 
-        See ``deploy_custom_rules._sibling_container`` for full semantics.
-        Whole-mod drag is signalled by ``container_path == ""``; the caller
-        should treat every file in ``mod_name`` as a sibling and place each
-        at ``dest/<container_name>/<rel_path>``.
+        Container = topmost folder containing the matched file. See
+        ``deploy_custom_rules._sibling_container`` for the rationale.
         """
-        if is_folder_match:
-            for p in sorted(dyn_strip, key=len, reverse=True):
-                p_clean = p.strip("/")
-                if not p_clean:
-                    continue
-                if norm_rel.lower().startswith(p_clean.lower() + "/"):
-                    container = norm_rel[:len(p_clean)]
-                    return (container, container.rsplit("/", 1)[-1])
-            # No parent above the matched folder — drag the whole mod.
-            return ("", mod_name)
+        del dyn_strip, is_folder_match, mod_name  # unused
         if "/" not in norm_rel:
-            return ("", mod_name)
-        container = norm_rel.rsplit("/", 1)[0]
-        return (container, container.rsplit("/", 1)[-1])
+            return None
+        container = norm_rel.split("/", 1)[0]
+        return (container, container)
 
     def _apply_strip(self, rel_str: str, strips: list[str]) -> str:
         """Strip the longest matching prefix from rel_str (case-insensitive)."""
@@ -581,9 +570,10 @@ class UE5Game(BaseGame):
                     if info is not None:
                         cont, cname = info
                         if cont:
-                            final_rel = cname + "/" + norm[len(cont) + 1:]
+                            tail = norm[len(cont) + 1:]
                         else:
-                            final_rel = cname + "/" + norm
+                            tail = norm
+                        final_rel = (cname + "/" + tail) if cname else tail
                         per_entry[i] = (staged_rel, mod_name, rule.dest, final_rel)
                         claimed.add(i)
                         new_primaries.append((i, dyn_strip, is_folder_match))
@@ -633,7 +623,7 @@ class UE5Game(BaseGame):
                         if not norm_lower.startswith(prefix_lower):
                             continue
                         rel_in_container = norm[len(cont_lower) + 1:]
-                    final_rel = cname + "/" + rel_in_container
+                    final_rel = (cname + "/" + rel_in_container) if cname else rel_in_container
                     per_entry[i] = (staged_rel, mod_name, rule.dest, final_rel)
                     claimed.add(i)
 

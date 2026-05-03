@@ -1,0 +1,28 @@
+{
+  "name": "Kingdom Hearts 3",
+  "game_id": "Kingdom_Hearts_3",
+  "exe_name": "KINGDOM HEARTS III/Binaries/Win64/KINGDOM HEARTS III.exe",
+  "deploy_type": "standard",
+  "mod_data_path": "KINGDOM HEARTS III/Content/Paks/~mods",
+  "steam_id": "2552450",
+  "nexus_game_domain": "kingdomhearts3",
+  "image_url": "https://cdn2.steamgriddb.com/icon_thumb/8b2b3227d4041565691957bba030b4c1.png",
+  "mod_folder_strip_prefixes": [],
+  "conflict_ignore_filenames": [
+    "*.txt"
+  ],
+  "mod_folder_strip_prefixes_post": [],
+  "mod_install_prefix": "",
+  "mod_required_top_level_folders": [],
+  "mod_auto_strip_until_required": false,
+  "mod_required_file_types": [],
+  "mod_install_as_is_if_no_match": false,
+  "restore_before_deploy": true,
+  "normalize_folder_case": true,
+  "filemap_casing": "upper",
+  "wine_dll_overrides": {},
+  "custom_routing_rules": [],
+  "custom_frameworks": {},
+  "editable": false,
+  "version": 1,
+}

@@ -3819,6 +3819,122 @@ class DisablePluginsPanel(ctk.CTkFrame):
 # Download Custom Handler panel — overlay to download JSON handlers from GitHub
 # ---------------------------------------------------------------------------
 
+_CUSTOM_HANDLERS_SUBFOLDER_TEMPLATE = (
+    "https://api.github.com/repos/ChrisDKN/Amethyst-Mod-Manager/contents/"
+    "Custom%20Handlers/{folder}?ref=main"
+)
+
+
+def _list_compatible_handlers(gh_fetch_text):
+    """Return handler entries from the repo that the running app can use.
+
+    Walks the root ``Custom Handlers/`` folder plus every ``X.Y/`` version
+    subfolder whose major.minor is <= the running app's major.minor. Also
+    drops any individual handler whose ``min_app_version`` field exceeds
+    the running app's major.minor.
+
+    Returns ``None`` on network failure, or a list of GitHub content entries
+    (each having ``name``, ``download_url``, and a ``_min_app_version`` hint).
+    """
+    import json as _json
+    import re as _re
+    from version import __version__
+    from gui.version_check import _meets_min_app_version, _major_minor
+
+    try:
+        listing = gh_fetch_text(_CUSTOM_HANDLERS_API_URL, timeout=15)
+        if listing is None:
+            return None
+        root_data = _json.loads(listing)
+    except Exception:
+        return None
+
+    have_mm = _major_minor(__version__)
+
+    handlers: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(entry: dict, default_min: str = "") -> None:
+        name = entry.get("name", "")
+        if not name.endswith(".json") or name in seen:
+            return
+        if default_min and "_min_app_version" not in entry:
+            entry["_min_app_version"] = default_min
+        seen.add(name)
+        handlers.append(entry)
+
+    # Collect compatible version subfolders, sorted highest first so a
+    # newer-version copy of the same filename shadows the root copy.
+    version_dirs: list[tuple[tuple[int, int], dict]] = []
+    root_files: list[dict] = []
+    for entry in root_data:
+        if not isinstance(entry, dict):
+            continue
+        kind = entry.get("type", "")
+        name = entry.get("name", "")
+        if kind == "file" and name.endswith(".json"):
+            root_files.append(entry)
+        elif kind == "dir" and _re.fullmatch(r"\d+\.\d+", name):
+            folder_mm = _major_minor(name)
+            if folder_mm is None or have_mm is None or folder_mm > have_mm:
+                continue
+            version_dirs.append((folder_mm, entry))
+
+    version_dirs.sort(key=lambda t: t[0], reverse=True)
+    for _, dir_entry in version_dirs:
+        folder_name = dir_entry.get("name", "")
+        try:
+            sub_listing = gh_fetch_text(
+                _CUSTOM_HANDLERS_SUBFOLDER_TEMPLATE.format(folder=folder_name),
+                timeout=15,
+            )
+            if sub_listing is None:
+                continue
+            sub_data = _json.loads(sub_listing)
+        except Exception:
+            continue
+        for sub_entry in sub_data:
+            if isinstance(sub_entry, dict) and sub_entry.get("type") == "file":
+                _add(sub_entry, default_min=folder_name)
+
+    for entry in root_files:
+        _add(entry)
+
+    # Per-file min_app_version gate (in case a file in the root folder is
+    # gated, or to harden against a misplaced file in a version subfolder).
+    compatible: list[dict] = []
+    for h in handlers:
+        download_url = h.get("download_url")
+        if not download_url:
+            continue
+        try:
+            raw = gh_fetch_text(
+                download_url, accept="*/*", timeout=10, min_interval=1800,
+            )
+            if raw is None:
+                # Couldn't fetch — fall back to the folder hint if present.
+                if _meets_min_app_version(h.get("_min_app_version", ""), __version__):
+                    compatible.append(h)
+                continue
+            try:
+                parsed = _json.loads(raw)
+            except Exception:
+                continue
+            min_ver = ""
+            if isinstance(parsed, dict):
+                min_ver = str(parsed.get("min_app_version", "")).strip()
+                if isinstance(parsed.get("name"), str):
+                    h["_display_name"] = parsed["name"]
+            if not min_ver:
+                min_ver = h.get("_min_app_version", "")
+            h["_min_app_version"] = min_ver
+            if _meets_min_app_version(min_ver, __version__):
+                compatible.append(h)
+        except Exception:
+            continue
+    return compatible
+
+
 class DownloadCustomHandlerPanel(ctk.CTkFrame):
     """
     Overlay on the plugin panel listing custom game handlers from GitHub.
@@ -3884,37 +4000,15 @@ class DownloadCustomHandlerPanel(ctk.CTkFrame):
 
     def _fetch_handlers(self):
         """Fetch the list of JSON files from GitHub API and extract game names."""
-        import json as _json
         from Utils.gh_cache import fetch_text as _gh_fetch_text
         try:
-            listing = _gh_fetch_text(
-                _CUSTOM_HANDLERS_API_URL,
-                timeout=15,
-            )
-            if listing is None:
+            handlers = _list_compatible_handlers(_gh_fetch_text)
+            if handlers is None:
                 self.after(0, lambda: self._on_fetch_error("Unable to reach GitHub"))
                 return
-            data = _json.loads(listing)
-            handlers = [e for e in data if isinstance(e, dict) and e.get("name", "").endswith(".json")]
-            # Fetch each file to get the "name" field from inside the JSON
             for h in handlers:
-                display_name = h.get("name", "").removesuffix(".json").replace("_", " ")
-                download_url = h.get("download_url")
-                if download_url:
-                    try:
-                        raw = _gh_fetch_text(
-                            download_url,
-                            accept="*/*",
-                            timeout=10,
-                            min_interval=1800,
-                        )
-                        if raw is not None:
-                            parsed = _json.loads(raw)
-                            if isinstance(parsed, dict) and parsed.get("name"):
-                                display_name = parsed["name"]
-                    except Exception:
-                        pass
-                h["_display_name"] = display_name
+                if "_display_name" not in h:
+                    h["_display_name"] = h.get("name", "").removesuffix(".json").replace("_", " ")
             self.after(0, lambda: self._on_handlers_loaded(handlers))
         except Exception as e:
             self.after(0, lambda: self._on_fetch_error(str(e)))

@@ -13,7 +13,8 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   # libloot must be built once per target Python ABI:
   #   - Arch container (AppImage): Python 3.14 → cp314 .so
-  #   - GNOME 49 runtime (Flatpak): Python 3.13 → cp313 .so
+  #   - GNOME 50 runtime (Flatpak): Python 3.13 → cp313 .so
+  #     (freedesktop-sdk 25.08, which GNOME 50 inherits, ships Python 3.13)
   # Each is cached independently keyed on libloot HEAD + Python version.
   # ────────────────────────────────────────────────────────────────────
   libloot-arch:
@@ -59,12 +60,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # libloot for Python 3.13 — needed by the Flatpak (GNOME 49 runtime
+  # libloot for Python 3.13 — needed by the Flatpak (GNOME 50 runtime
   # ships Python 3.13). Built on a plain Ubuntu runner with
   # actions/setup-python because the Flathub container has no usable
   # package manager and the Arch container ships Python 3.14.
   libloot-gnome:
-    name: libloot (GNOME 49 / cp313)
+    name: libloot (GNOME 50 / cp313)
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     steps:
@@ -187,7 +188,7 @@ jobs:
     needs: libloot-gnome
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-49
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
     steps:
       - uses: actions/checkout@v4

@@ -1461,10 +1461,10 @@ class Enderal(Fallout_3):
     @property
     def nexus_game_domain(self) -> str:
         return "enderal"
-    
+
     @property
     def loot_game_type(self) -> str:
-        return "enderal"
+        return "Skyrim"
 
     @property
     def loot_masterlist_repo(self) -> str:
@@ -1517,10 +1517,10 @@ class EnderalSE(Fallout_3):
     @property
     def nexus_game_domain(self) -> str:
         return "enderalspecialedition"
-    
+
     @property
     def loot_game_type(self) -> str:
-        return "enderal"
+        return "SkyrimSE"
 
     @property
     def loot_masterlist_repo(self) -> str:

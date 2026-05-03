@@ -5,6 +5,11 @@
 - Added an option to the script extenders/Bepinex wizards to intall them as mods,
 - Fomod image previews (when clicking the image) now scales to the entire panel for better visibility
 - Saved Fomod options are now highlighted in green
+- Added support for .fomod archives
+- Fixed mods in collection that had both the same mod name and logical file name, causing only 1 to install and the rest to be overwritten
+- The Baldurs Gate 3 modsettings writer now uses a collection pak load order if present.
+- Removed shader cache related deploy/restore steps for Skyrim SE as these are no longer needed
+- Updated flatpak to gnome runtime 50
 
 - v1.2.14
 - Fixed staged folders not being found when deploying with cyberpunk

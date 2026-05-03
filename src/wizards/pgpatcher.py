@@ -4,12 +4,12 @@ Wizard for running PGPatcher with Skyrim Special Edition.
 
 Workflow
 --------
-1. Prompt the user to download PGPatcher from Nexus Mods (manual download only).
-2. Auto-detect and extract the archive to Profiles/<game>/Applications/PGPatcher/.
-3. Install d3dcompiler_47 and .NET 8 into the game prefix (skipped if already done).
-4. Apply PGPatcher's config (bootstrap cfg/settings.json via exe_args_builder).
-5. Prompt the user to delete any previous PGPatcher output, then deploy the modlist.
-6. Run PGPatcher.exe via Proton.
+1. Auto-download the latest PGPatcher release from GitHub and extract to
+   Profiles/<game>/Applications/PGPatcher/.
+2. Install d3dcompiler_47 and .NET 8 into the game prefix (skipped if already done).
+3. Apply PGPatcher's config (bootstrap cfg/settings.json via exe_args_builder).
+4. Prompt the user to delete any previous PGPatcher output, then deploy the modlist.
+5. Run PGPatcher.exe via Proton.
 """
 
 from __future__ import annotations
@@ -17,14 +17,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import threading
+import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import customtkinter as ctk
-
-from Utils.xdg import open_url
-from Utils.portal_filechooser import pick_file
 
 if TYPE_CHECKING:
     from Games.base_game import BaseGame
@@ -33,10 +32,10 @@ from gui.theme import (
     ACCENT, ACCENT_HOV, BG_DEEP, BG_HEADER, BG_PANEL,
     TEXT_ON_ACCENT,
     TEXT_DIM, TEXT_MAIN,
-    FONT_NORMAL, FONT_BOLD, FONT_SMALL,
+    FONT_NORMAL, FONT_BOLD,
 )
 
-_NEXUS_URL      = "https://www.nexusmods.com/skyrimspecialedition/mods/120946"
+_GITHUB_API     = "https://api.github.com/repos/hakasapl/PGPatcher/releases/latest"
 _PATCHER_EXE    = "PGPatcher.exe"
 _PATCHER_DIR    = "PGPatcher"
 _DEPS_FILE      = "amethyst_deps.json"
@@ -89,26 +88,8 @@ def _is_dep_installed(prefix_path: Path, key: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Archive detection
+# Archive helpers
 # ---------------------------------------------------------------------------
-
-def _find_patcher_archive(downloads_dir: Path) -> Path | None:
-    if not downloads_dir.is_dir():
-        return None
-    candidates = [
-        p for p in downloads_dir.iterdir()
-        if p.is_file()
-        and p.suffix.lower() in {".zip", ".7z", ".rar"}
-        and "pgpatcher" in p.name.lower()
-    ]
-    if not candidates:
-        return None
-    return max(candidates, key=lambda p: p.stat().st_mtime)
-
-
-def _get_downloads_dir() -> Path:
-    return Path.home() / "Downloads"
-
 
 def _flatten_subdirs(dest: Path) -> None:
     """Repeatedly collapse single-subdirectory wrappers inside *dest* until
@@ -157,7 +138,6 @@ class PGPatcherWizard(ctk.CTkFrame):
         self._on_close_cb = on_close or (lambda: None)
         self._game        = game
         self._log         = log_fn or (lambda msg: None)
-        self._archive_path: Path | None = None
 
         title_bar = ctk.CTkFrame(self, fg_color=BG_HEADER, corner_radius=0, height=40)
         title_bar.pack(fill="x")
@@ -250,11 +230,10 @@ class PGPatcherWizard(ctk.CTkFrame):
         return proton_script, env, prefix_path
 
     # ------------------------------------------------------------------
-    # Step 1 — Download PGPatcher (skipped if already extracted)
+    # Step 1 — Auto-download PGPatcher from GitHub (skipped if already extracted)
     # ------------------------------------------------------------------
 
     def _show_step_download(self):
-        # Skip if already extracted
         if _patcher_exe_path(self._game) is not None:
             self._show_step_deps()
             return
@@ -266,157 +245,57 @@ class PGPatcherWizard(ctk.CTkFrame):
             font=FONT_BOLD, text_color=TEXT_MAIN,
         ).pack(pady=(0, 12))
 
-        ctk.CTkLabel(
-            self._body,
-            text=(
-                "Click the button below to open the PGPatcher page on Nexus Mods.\n\n"
-                "Download the archive manually (do NOT use the Mod Manager\n"
-                "download button) then click Next."
-            ),
-            font=FONT_NORMAL, text_color=TEXT_DIM, justify="center",
-        ).pack(pady=(0, 16))
-
-        ctk.CTkButton(
-            self._body, text="Open Download Page", width=220, height=36,
-            font=FONT_BOLD,
-            fg_color="#da8e35", hover_color="#e5a04a", text_color="white",
-            command=lambda: open_url(_NEXUS_URL),
-        ).pack(pady=(0, 20))
-
-        ctk.CTkButton(
-            self._body, text="Next \u2192", width=120, height=36,
-            font=FONT_BOLD,
-            fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_ON_ACCENT,
-            command=self._show_step_locate,
-        ).pack(side="bottom")
-
-    # ------------------------------------------------------------------
-    # Step 2 — Locate archive and extract
-    # ------------------------------------------------------------------
-
-    def _show_step_locate(self):
-        self._clear_body()
-
-        ctk.CTkLabel(
-            self._body, text="Step 2: Locate the Archive",
-            font=FONT_BOLD, text_color=TEXT_MAIN,
-        ).pack(pady=(0, 12))
-
-        self._locate_status = ctk.CTkLabel(
-            self._body, text="Searching Downloads folder\u2026",
+        self._dl_status = ctk.CTkLabel(
+            self._body, text="Fetching latest release from GitHub\u2026",
             font=FONT_NORMAL, text_color=TEXT_DIM, justify="center", wraplength=460,
         )
-        self._locate_status.pack(pady=(0, 12))
+        self._dl_status.pack(pady=(0, 12))
 
-        btn_frame = ctk.CTkFrame(self._body, fg_color="transparent")
-        btn_frame.pack(side="bottom", pady=(8, 0))
+        threading.Thread(target=self._do_auto_download, daemon=True).start()
 
-        ctk.CTkButton(
-            btn_frame, text="Try Again", width=100, height=36,
-            font=FONT_BOLD,
-            fg_color=BG_HEADER, hover_color="#3d3d3d", text_color=TEXT_MAIN,
-            command=self._scan_downloads,
-        ).pack(side="right", padx=(8, 0))
+    def _do_auto_download(self):
+        from wizards.script_extender import _fetch_latest_github_asset, _extract_archive
 
-        ctk.CTkButton(
-            btn_frame, text="Browse\u2026", width=100, height=36,
-            font=FONT_BOLD,
-            fg_color=BG_HEADER, hover_color="#3d3d3d", text_color=TEXT_MAIN,
-            command=self._browse_archive,
-        ).pack(side="right")
-
-        self._scan_downloads()
-
-    def _scan_downloads(self):
-        found = _find_patcher_archive(_get_downloads_dir())
-        if found:
-            self._archive_path = found
-            self._locate_status.configure(
-                text=f"Found: {found.name}", text_color="#6bc76b",
-            )
-            self.after(300, self._show_step_extract)
-        else:
-            self._archive_path = None
-            self._locate_status.configure(
-                text=(
-                    "PGPatcher archive not found in Downloads.\n"
-                    "Make sure you downloaded it, then press Try Again,\n"
-                    "or use Browse to select it manually."
-                ),
-                text_color="#e06c6c",
-            )
-
-    def _browse_archive(self):
-        def _on_picked(path: Path | None) -> None:
-            if path and path.is_file():
-                self._archive_path = path
-                self._locate_status.configure(
-                    text=f"Selected: {path.name}", text_color="#6bc76b",
-                )
-                self.after(300, self._show_step_extract)
-
-        pick_file(
-            "Select the PGPatcher archive",
-            lambda p: self.after(0, lambda: _on_picked(p)),
-        )
-
-    # ------------------------------------------------------------------
-    # Step 3 — Extract archive
-    # ------------------------------------------------------------------
-
-    def _show_step_extract(self):
-        self._clear_body()
-
-        ctk.CTkLabel(
-            self._body, text="Step 3: Extract PGPatcher",
-            font=FONT_BOLD, text_color=TEXT_MAIN,
-        ).pack(pady=(0, 12))
-
-        self._extract_status = ctk.CTkLabel(
-            self._body, text="Extracting\u2026",
-            font=FONT_NORMAL, text_color=TEXT_DIM, justify="center", wraplength=460,
-        )
-        self._extract_status.pack(pady=(0, 16))
-
-        threading.Thread(target=self._do_extract, daemon=True).start()
-
-    def _do_extract(self):
         try:
-            from wizards.script_extender import _extract_archive
+            self._set_label("_dl_status", "Fetching latest release from GitHub\u2026")
+            tag, dl_url = _fetch_latest_github_asset(_GITHUB_API, ["pgpatcher"])
 
-            archive = self._archive_path
-            if archive is None or not archive.is_file():
-                raise RuntimeError("Archive not found.")
+            self._set_label("_dl_status", f"Downloading {tag}\u2026")
+            self._log(f"PGPatcher Wizard: downloading {tag} from {dl_url}")
+
+            suffix = Path(dl_url).suffix or ".zip"
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                tmp_path = Path(tmp.name)
+
+            urllib.request.urlretrieve(dl_url, tmp_path)
 
             dest = _get_applications_dir(self._game)
             dest.mkdir(parents=True, exist_ok=True)
 
-            self._set_label("_extract_status", f"Extracting {archive.name}\u2026")
-            self._log(f"PGPatcher Wizard: extracting {archive.name} \u2192 {dest}")
+            self._set_label("_dl_status", "Extracting\u2026")
+            self._log("PGPatcher Wizard: download complete, extracting\u2026")
 
-            paths = _extract_archive(archive, dest)
+            paths = _extract_archive(tmp_path, dest)
+            tmp_path.unlink(missing_ok=True)
+
             file_count = len([p for p in paths if p.is_file()])
-            self._log(f"PGPatcher Wizard: extracted {file_count} file(s).")
-
             _flatten_subdirs(dest)
 
             exe = dest / _PATCHER_EXE
             if not exe.is_file():
-                raise RuntimeError(
-                    f"{_PATCHER_EXE} not found after extraction.\n"
-                    f"Check that the archive contains {_PATCHER_EXE} at its root."
-                )
+                raise RuntimeError(f"{_PATCHER_EXE} not found after extraction.")
 
+            self._log(f"PGPatcher Wizard: extracted {file_count} file(s).")
             self._set_label(
-                "_extract_status",
-                f"Extracted {file_count} file(s).",
+                "_dl_status",
+                f"Downloaded and extracted {tag}.",
                 color="#6bc76b",
             )
-            self.after(0, self._show_step_deps)
+            self.after(500, self._show_step_deps)
 
         except Exception as exc:
-            self._set_label("_extract_status", f"Error: {exc}", color="#e06c6c")
-            self._log(f"PGPatcher Wizard: extract error: {exc}")
+            self._set_label("_dl_status", f"Error: {exc}", color="#e06c6c")
+            self._log(f"PGPatcher Wizard: download error: {exc}")
 
     # ------------------------------------------------------------------
     # Step 4 — Install d3dcompiler_47 and .NET 8

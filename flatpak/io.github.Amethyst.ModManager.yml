@@ -1,6 +1,6 @@
 app-id: io.github.Amethyst.ModManager
 runtime: org.gnome.Platform
-runtime-version: "49"
+runtime-version: "50"
 sdk: org.gnome.Sdk
 
 # 32-bit support for running Proton's bundled `wine` binary (ELF i386) during

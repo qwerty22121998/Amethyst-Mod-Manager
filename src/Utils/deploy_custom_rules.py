@@ -35,37 +35,25 @@ def _sibling_container(
 ) -> tuple[str, str] | None:
     """Return (container_path, container_name) for an include_siblings primary.
 
-    The container is the folder whose contents get dragged along. Result
-    semantics:
+    Include Siblings drags the **topmost folder containing the matched file**:
+    every same-mod file under that top-level folder rides along, preserving
+    the full rel_path under ``dest``. This way a mod with multiple top-level
+    folders (each potentially routed by a different rule) only drags the one
+    folder containing the matched file, not the whole mod.
 
-    - Folder match nested (``strip_len > 0``) — container is the parent of
-      the matched folder.  e.g. "units" on "FPS XTREME 2.0/units/foo" →
-      ("FPS XTREME 2.0", "FPS XTREME 2.0").
-    - Folder match at mod root (``strip_len == 0``) — there is no parent
-      folder *inside* the mod; "container" expands to the whole mod, and
-      the container name becomes ``mod_name`` so dragged files land under
-      ``dest/<mod_name>/...``. Returned as ``("", mod_name)``.
-    - Ext/filename match nested — container is the file's immediate parent.
-    - Ext/filename match loose at mod root — same as folder-at-root: drag
-      every file in the mod under ``dest/<mod_name>/...``. Returned as
-      ``("", mod_name)``.
+    For "VanillaHUD Plus/lua/vanillahud/utils/x.lua" matching ``utils``,
+    the container is "VanillaHUD Plus" — every file under that folder rides
+    along to ``dest/VanillaHUD Plus/...``.
 
-    A container_path of ``""`` is the sentinel for "whole mod" — the caller
-    uses ``mod_name`` to scope the drag and treats every file in the mod
-    as a sibling.
+    For a file at the mod root (no folder above it), there's nothing to drag
+    — returns None.
     """
+    del strip_len, mod_name  # unused — container is always the topmost folder
     norm_rel = rel_str.replace("\\", "/")
-    if strip_len > 0:
-        container = norm_rel[:strip_len].rstrip("/")
-        if not container:
-            return ("", mod_name)
-        return (container, container.rsplit("/", 1)[-1])
-    if strip_len == 0:
-        return ("", mod_name)
     if "/" not in norm_rel:
-        return ("", mod_name)
-    container = norm_rel.rsplit("/", 1)[0]
-    return (container, container.rsplit("/", 1)[-1])
+        return None
+    container = norm_rel.split("/", 1)[0]
+    return (container, container)
 
 
 def deploy_custom_rules(

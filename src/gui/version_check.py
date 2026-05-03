@@ -139,3 +139,37 @@ def _is_newer_version(current: str, latest: str) -> bool:
         return _parse_version(latest) > _parse_version(current)
     except (ValueError, TypeError):
         return False
+
+
+def _major_minor(s: str) -> tuple[int, int] | None:
+    """Parse a version string and return (major, minor). Beta/pre-release suffix is ignored.
+
+    '1.3'           -> (1, 3)
+    '1.3.0'         -> (1, 3)
+    '1.3.0-beta.3'  -> (1, 3)
+    """
+    if not s:
+        return None
+    try:
+        core = s.strip().lstrip("v").split("-", 1)[0]
+        parts = core.split(".")
+        if len(parts) < 2:
+            return None
+        return (int(parts[0]), int(parts[1]))
+    except (ValueError, AttributeError):
+        return None
+
+
+def _meets_min_app_version(min_ver: str, app_ver: str) -> bool:
+    """Return True if app_ver satisfies a major.minor floor of min_ver.
+
+    Beta builds satisfy the floor for their major.minor (e.g. 1.3.0-beta.2
+    satisfies "1.3"). An empty/missing min_ver always returns True.
+    """
+    if not min_ver:
+        return True
+    floor = _major_minor(min_ver)
+    have = _major_minor(app_ver)
+    if floor is None or have is None:
+        return True  # malformed → don't block
+    return have >= floor

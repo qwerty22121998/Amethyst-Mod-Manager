@@ -4457,10 +4457,8 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                 is_whole = cont == ""
                 drags.append((cont.lower(), cname, pmod, is_whole))
                 # Override the primary itself.
-                if is_whole:
-                    sibling_overrides[pidx] = cname + "/" + rn
-                else:
-                    sibling_overrides[pidx] = cname + "/" + rn[len(cont) + 1:]
+                tail = rn if is_whole else rn[len(cont) + 1:]
+                sibling_overrides[pidx] = (cname + "/" + tail) if cname else tail
             drags.sort(key=lambda t: (0 if t[3] else 1, -len(t[0])))
             seen_drags: set[tuple[str, str]] = set()
             for cont_lower, cname, pmod, is_whole in drags:
@@ -4481,7 +4479,7 @@ class PluginPanel(PluginPanelExeLauncherMixin, PluginPanelLOOTMixin,
                         if not slow.startswith(prefix_lower):
                             continue
                         ric = sn[len(cont_lower) + 1:]
-                    sibling_overrides[sib_idx] = cname + "/" + ric
+                    sibling_overrides[sib_idx] = (cname + "/" + ric) if cname else ric
                     primary_rules[sib_idx] = (rule, -2, "")
                     claimed.add(sib_idx)
 
