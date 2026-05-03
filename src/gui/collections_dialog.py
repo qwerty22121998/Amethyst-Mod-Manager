@@ -4311,7 +4311,10 @@ class CollectionDetailDialog(tk.Frame):
         # the correct Nexus page; fall back to the collection's domain.
         _fallback_domain = getattr(self._game, "nexus_game_domain", None) or self._game_domain
         game_domain = (getattr(mod, "domain_name", "") or "").strip() or _fallback_domain
-        nexus_url = f"https://www.nexusmods.com/{game_domain}/mods/{mod.mod_id}?tab=files&file_id={mod.file_id}"
+        # Same reason: prefer collection.json's source.modId for cross-domain entries.
+        _fid_to_mid = getattr(self, "_manual_file_id_to_mod_id", None) or {}
+        _eff_mod_id = _fid_to_mid.get(mod.file_id, 0) or mod.mod_id
+        nexus_url = f"https://www.nexusmods.com/{game_domain}/mods/{_eff_mod_id}?tab=files&file_id={mod.file_id}"
 
         self._manual_mod_name_lbl.configure(text=mod.mod_name or f"Mod {mod.mod_id}")
         size_str = _fmt_size(getattr(mod, "size_bytes", 0) or 0)
@@ -4342,9 +4345,11 @@ class CollectionDetailDialog(tk.Frame):
         if upcoming_mods:
             def _open_next(_mods=batch):
                 _fallback = getattr(self._game, "nexus_game_domain", None) or self._game_domain
+                _f2m = getattr(self, "_manual_file_id_to_mod_id", None) or {}
                 for _m in _mods:
                     _gd = (getattr(_m, "domain_name", "") or "").strip() or _fallback
-                    _u = f"https://www.nexusmods.com/{_gd}/mods/{_m.mod_id}?tab=files&file_id={_m.file_id}"
+                    _mid = _f2m.get(_m.file_id, 0) or _m.mod_id
+                    _u = f"https://www.nexusmods.com/{_gd}/mods/{_mid}?tab=files&file_id={_m.file_id}"
                     open_url(_u, log_fn=self._log)
             count = len(batch)
             self._manual_open_next_btn.configure(
@@ -4457,6 +4462,9 @@ class CollectionDetailDialog(tk.Frame):
         schema_file_id_to_logical: dict[int, str] = {}
         schema_file_id_to_mod_id: dict[int, int] = {}
         schema_file_id_to_install_type: dict[int, str] = {}
+        schema_file_id_to_size: dict[int, int] = {}
+        schema_file_id_to_md5: dict[int, str] = {}
+        schema_file_id_to_domain: dict[int, str] = {}
         fomod_by_file_id: dict[int, dict] = {}
 
         _raw_logical: dict[int, str] = {}
@@ -4490,6 +4498,15 @@ class CollectionDetailDialog(tk.Frame):
                 mid = src.get("modId")
                 if mid:
                     schema_file_id_to_mod_id[fid] = int(mid)
+                _sz = src.get("fileSize")
+                if _sz:
+                    schema_file_id_to_size[fid] = int(_sz)
+                _md5_v = (src.get("md5") or "").strip().lower()
+                if _md5_v:
+                    schema_file_id_to_md5[fid] = _md5_v
+                _dom = (sm.get("domainName") or "").strip()
+                if _dom:
+                    schema_file_id_to_domain[fid] = _dom
                 _det_type = ((sm.get("details") or {}).get("type") or "").strip()
                 if _det_type:
                     schema_file_id_to_install_type[fid] = _det_type
@@ -4512,6 +4529,11 @@ class CollectionDetailDialog(tk.Frame):
             schema_pos_to_name,
             schema_file_id_to_pos,
         )
+
+        # Expose the file_id→mod_id map to the overlay so its "Open Download
+        # Page" link uses the source-domain mod_id (matters for collections
+        # that reference cross-domain mods, e.g. Enderal SE → Skyrim SE).
+        self._manual_file_id_to_mod_id = dict(schema_file_id_to_mod_id)
 
         # ------------------------------------------------------------------
         # Step 2: Classify already-installed mods (same as _run_install)
@@ -4650,6 +4672,13 @@ class CollectionDetailDialog(tk.Frame):
         def _wait_for_file(mod) -> "Path | None":
             """Poll downloads folders until the mod archive appears, or user skips/selects."""
             scan_dirs = _get_scan_dirs()
+            # Prefer the collection.json source values — for cross-domain
+            # entries (e.g. a Skyrim SE mod referenced by an Enderal SE
+            # collection) the GraphQL fetch on the Enderal domain may
+            # omit fileSize/md5/modId for the file's true source domain.
+            _eff_mod_id = schema_file_id_to_mod_id.get(mod.file_id, 0) or mod.mod_id
+            _exp_size = schema_file_id_to_size.get(mod.file_id, 0) or (getattr(mod, "size_bytes", 0) or 0)
+            _exp_md5 = schema_file_id_to_md5.get(mod.file_id, "") or (getattr(mod, "md5", "") or "").strip().lower()
             while not self._manual_cancel_event.is_set():
                 # Check user actions (select file / skip)
                 try:
@@ -4668,10 +4697,10 @@ class CollectionDetailDialog(tk.Frame):
                     found, is_complete = _find_cached_archive(
                         folder,
                         mod.file_name or mod.mod_name or "",
-                        getattr(mod, "size_bytes", 0) or 0,
-                        mod.mod_id,
+                        _exp_size,
+                        _eff_mod_id,
                         mod.file_id,
-                        expected_md5=getattr(mod, "md5", "") or "",
+                        expected_md5=_exp_md5,
                     )
                     if found and is_complete:
                         return found
@@ -4783,7 +4812,8 @@ class CollectionDetailDialog(tk.Frame):
                     _next_mod = _next_mods[0]
                     _fallback = getattr(self._game, "nexus_game_domain", None) or self._game_domain
                     _gd = (getattr(_next_mod, "domain_name", "") or "").strip() or _fallback
-                    _auto_url = f"https://www.nexusmods.com/{_gd}/mods/{_next_mod.mod_id}?tab=files&file_id={_next_mod.file_id}"
+                    _next_mid = schema_file_id_to_mod_id.get(_next_mod.file_id, 0) or _next_mod.mod_id
+                    _auto_url = f"https://www.nexusmods.com/{_gd}/mods/{_next_mid}?tab=files&file_id={_next_mod.file_id}"
                     try:
                         open_url(_auto_url, log_fn=self._log)
                     except Exception:
