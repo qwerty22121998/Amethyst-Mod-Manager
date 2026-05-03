@@ -1,28 +1,33 @@
 """
 pak_reader.py
-Read metadata from Baldur's Gate 3 .pak files (Larian LSPK v18 format).
+Read metadata from Baldur's Gate 3 .pak files (Larian LSPK v15/v16/v18).
 
 Extracts the meta.lsx XML from inside a .pak archive without needing
 lslib or any external tools — only the ``lz4`` Python package is required.
 
-LSPK v18 header layout (40 bytes):
-    4B  signature   ("LSPK" = 0x4B50534C)
-    4B  version     (18 for current BG3)
+LSPK v18 header (40 bytes):
+    4B  signature ("LSPK")
+    4B  version (18)
     8B  file_list_offset
     4B  file_list_size
     1B  flags
     1B  priority
    16B  md5
     2B  num_parts
+v18 entry (272 bytes):
+  256B name | 4B offset_lo | 2B offset_hi | 1B part | 1B flags | 4B size_disk | 4B unc_size
 
-File entry layout (272 bytes each):
-  256B  name (null-terminated UTF-8)
-    4B  offset_low   (uint32)
-    2B  offset_high  (uint16)  → full offset = offset_low | (offset_high << 32)
-    1B  archive_part
-    1B  flags        (lower nibble: 0=None, 1=Zlib, 2=LZ4, 3=LZ4HC)
-    4B  size_on_disk
-    4B  uncompressed_size
+LSPK v15/v16 header (40 bytes):
+    4B  signature ("LSPK")
+    4B  version (15 or 16)
+    8B  file_list_offset
+    4B  file_list_size
+    2B  num_parts (v16 only; reserved on v15)
+    1B  flags
+    1B  priority
+   16B  md5  (v16 only; v15 ends at byte 24)
+v15/v16 entry (296 bytes):
+  256B name | 8B offset | 8B size_disk | 8B unc_size | 4B part | 4B flags | 4B crc | 4B unused
 """
 
 from __future__ import annotations
@@ -46,6 +51,7 @@ _ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"  # 0xFD2FB528 little-endian
 _LSPK_SIGNATURE = 0x4B50534C  # "LSPK" little-endian
 _HEADER_SIZE = 40
 _ENTRY_SIZE = 272
+_ENTRY_SIZE_V15 = 296
 
 
 def _require_lz4() -> None:
@@ -120,74 +126,118 @@ def _decompress(data: bytes, flags: int, uncompressed_size: int) -> bytes:
     raise ValueError(f"Unknown LSPK compression method: {method}")
 
 
+def _decode_meta_content(content: bytes) -> str:
+    # Some PAKs wrap meta.lsx in an extra zlib layer (zlib magic 0x78 ??).
+    if len(content) >= 2 and content[0] == 0x78 and content[1] in (
+        0x01, 0x5E, 0x9C, 0xDA
+    ):
+        try:
+            content = zlib.decompress(content)
+        except zlib.error:
+            pass
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError:
+        return content.decode("latin-1")
+
+
+def _extract_meta_v18(f, pak_path: Path) -> str | None:
+    f.seek(0)
+    header = f.read(_HEADER_SIZE)
+    sig, version, file_list_offset, file_list_size, flags, priority = (
+        struct.unpack_from("<IIQIBB", header, 0)
+    )
+
+    f.seek(file_list_offset)
+    num_files = struct.unpack("<I", f.read(4))[0]
+    compressed_size = struct.unpack("<I", f.read(4))[0]
+    compressed_data = f.read(compressed_size)
+
+    file_list = _lz4_decompress_resilient(
+        compressed_data, num_files * _ENTRY_SIZE
+    )
+
+    for i in range(num_files):
+        base = i * _ENTRY_SIZE
+        name_bytes = file_list[base : base + 256]
+        nul = name_bytes.find(b"\x00")
+        name = name_bytes[:nul].decode("utf-8") if nul >= 0 else name_bytes.decode("utf-8")
+        if not name.endswith("meta.lsx"):
+            continue
+
+        offset_low = struct.unpack_from("<I", file_list, base + 256)[0]
+        offset_high = struct.unpack_from("<H", file_list, base + 260)[0]
+        file_offset = offset_low | (offset_high << 32)
+        entry_flags = file_list[base + 263]
+        size_on_disk = struct.unpack_from("<I", file_list, base + 264)[0]
+        unc_size = struct.unpack_from("<I", file_list, base + 268)[0]
+
+        f.seek(file_offset)
+        raw = f.read(size_on_disk)
+        content = _decompress(raw, entry_flags, unc_size)
+        return _decode_meta_content(content)
+
+    return None
+
+
+def _extract_meta_v15(f, pak_path: Path) -> str | None:
+    # v15/v16 share the same entry layout (296 B); the file-list lives at
+    # the offset given in the header at bytes 8..15.
+    f.seek(8)
+    file_list_offset = struct.unpack("<Q", f.read(8))[0]
+
+    f.seek(file_list_offset)
+    num_files = struct.unpack("<I", f.read(4))[0]
+    compressed_size = struct.unpack("<I", f.read(4))[0]
+    compressed_data = f.read(compressed_size)
+
+    file_list = _lz4_decompress_resilient(
+        compressed_data, num_files * _ENTRY_SIZE_V15
+    )
+
+    for i in range(num_files):
+        base = i * _ENTRY_SIZE_V15
+        name_bytes = file_list[base : base + 256]
+        nul = name_bytes.find(b"\x00")
+        name = name_bytes[:nul].decode("utf-8") if nul >= 0 else name_bytes.decode("utf-8")
+        if not name.endswith("meta.lsx"):
+            continue
+
+        file_offset  = struct.unpack_from("<Q", file_list, base + 256)[0]
+        size_on_disk = struct.unpack_from("<Q", file_list, base + 264)[0]
+        unc_size     = struct.unpack_from("<Q", file_list, base + 272)[0]
+        # archive_part = struct.unpack_from("<I", file_list, base + 280)[0]
+        entry_flags  = struct.unpack_from("<I", file_list, base + 284)[0] & 0xFF
+
+        f.seek(file_offset)
+        raw = f.read(size_on_disk)
+        content = _decompress(raw, entry_flags, unc_size)
+        return _decode_meta_content(content)
+
+    return None
+
+
 def extract_meta_lsx(pak_path: Path | str) -> str | None:
     """Open a BG3 .pak and return the contents of meta.lsx as a string.
 
-    Returns None if the archive does not contain a meta.lsx file.
-    Raises on format errors or missing dependencies.
+    Supports LSPK v15, v16, and v18.  Returns None if the archive does not
+    contain a meta.lsx file.  Raises on format errors or missing dependencies.
     """
     _require_lz4()
     pak_path = Path(pak_path)
 
     with pak_path.open("rb") as f:
-        # -- Header ----------------------------------------------------------
-        header = f.read(_HEADER_SIZE)
-        if len(header) < _HEADER_SIZE:
+        sig_bytes = f.read(8)
+        if len(sig_bytes) < 8:
             raise ValueError(f"File too small to be an LSPK archive: {pak_path}")
-
-        sig, version, file_list_offset, file_list_size, flags, priority = (
-            struct.unpack_from("<IIQIBB", header, 0)
-        )
+        sig, version = struct.unpack("<II", sig_bytes)
         if sig != _LSPK_SIGNATURE:
             raise ValueError(
                 f"Not an LSPK file (bad signature 0x{sig:08X}): {pak_path}"
             )
 
-        # -- File list --------------------------------------------------------
-        f.seek(file_list_offset)
-        num_files = struct.unpack("<I", f.read(4))[0]
-        compressed_size = struct.unpack("<I", f.read(4))[0]
-        compressed_data = f.read(compressed_size)
-
-        uncompressed_size = num_files * _ENTRY_SIZE
-        file_list = _lz4_decompress_resilient(compressed_data, uncompressed_size)
-
-        # -- Scan entries for meta.lsx ----------------------------------------
-        for i in range(num_files):
-            base = i * _ENTRY_SIZE
-            name_bytes = file_list[base : base + 256]
-            nul = name_bytes.find(b"\x00")
-            name = name_bytes[:nul].decode("utf-8") if nul >= 0 else name_bytes.decode("utf-8")
-
-            if not name.endswith("meta.lsx"):
-                continue
-
-            offset_low = struct.unpack_from("<I", file_list, base + 256)[0]
-            offset_high = struct.unpack_from("<H", file_list, base + 260)[0]
-            file_offset = offset_low | (offset_high << 32)
-            # archive_part = file_list[base + 262]
-            entry_flags = file_list[base + 263]
-            size_on_disk = struct.unpack_from("<I", file_list, base + 264)[0]
-            unc_size = struct.unpack_from("<I", file_list, base + 268)[0]
-
-            f.seek(file_offset)
-            raw = f.read(size_on_disk)
-            content = _decompress(raw, entry_flags, unc_size)
-
-            # Some PAK files store meta.lsx wrapped in an additional zlib
-            # layer (magic bytes 0x78 0x9C / 0x78 0x01 / 0x78 0xDA).
-            if len(content) >= 2 and content[0] == 0x78 and content[1] in (
-                0x01, 0x5E, 0x9C, 0xDA
-            ):
-                try:
-                    content = zlib.decompress(content)
-                except zlib.error:
-                    pass  # not actually zlib; decode as-is
-
-            try:
-                return content.decode("utf-8")
-            except UnicodeDecodeError:
-                # Last resort: latin-1 is lossless for arbitrary bytes.
-                return content.decode("latin-1")
-
-    return None
+        if version >= 18:
+            return _extract_meta_v18(f, pak_path)
+        if version in (15, 16):
+            return _extract_meta_v15(f, pak_path)
+        raise ValueError(f"Unsupported LSPK version {version}: {pak_path}")

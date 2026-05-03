@@ -354,11 +354,14 @@ def resolve_load_order(
       For each mod in the user's order, recursively insert its dependencies
       first, then insert the mod itself.  A visited set prevents duplicates.
     """
-    # Build a lookup: source_mod name → BG3ModInfo
-    by_source: dict[str, BG3ModInfo] = {}
+    # Build a lookup: source_mod name → list of BG3ModInfo.
+    # A single staging folder can contain many .pak files (e.g. load-order
+    # divider packs with 30+ paks), each with its own UUID/meta.lsx — they
+    # all need to be emitted into modsettings.lsx.
+    by_source: dict[str, list[BG3ModInfo]] = {}
     for info in mod_infos.values():
         if info.source_mod:
-            by_source[info.source_mod] = info
+            by_source.setdefault(info.source_mod, []).append(info)
 
     added: set[str] = set()
     result: list[BG3ModInfo] = []
@@ -376,8 +379,7 @@ def resolve_load_order(
 
     # Walk mods in the user's listed order (modlist.txt order)
     for entry in enabled_mods:
-        info = by_source.get(entry.name)
-        if info is not None:
+        for info in by_source.get(entry.name, ()):
             _insert(info)
 
     return result
