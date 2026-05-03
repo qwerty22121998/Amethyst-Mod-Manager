@@ -2092,7 +2092,7 @@ class App(ctk.CTk):
     def _sync_custom_handlers(self):
         """Background-download every custom handler from GitHub, overwriting stale copies."""
         import json as _json
-        from gui.dialogs import _CUSTOM_HANDLERS_API_URL
+        from gui.dialogs import _CUSTOM_HANDLERS_API_URL, _list_compatible_handlers
         from Utils.config_paths import get_custom_games_dir as _gcgd
         from Utils.gh_cache import fetch_text as _gh_fetch_text
         from Utils.ui_config import load_dev_mode
@@ -2102,17 +2102,9 @@ class App(ctk.CTk):
 
         def _do():
             try:
-                listing = _gh_fetch_text(
-                    _CUSTOM_HANDLERS_API_URL,
-                    timeout=15,
-                )
-                if listing is None:
+                handlers = _list_compatible_handlers(_gh_fetch_text)
+                if handlers is None:
                     return
-                data = _json.loads(listing)
-                handlers = [
-                    e for e in data
-                    if isinstance(e, dict) and e.get("name", "").endswith(".json")
-                ]
                 changed = False
                 for h in handlers:
                     filename = h.get("name", "")
