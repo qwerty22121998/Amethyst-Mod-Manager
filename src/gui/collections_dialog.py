@@ -248,6 +248,184 @@ def _topo_sort_collection(schema_mods: list[dict], mod_rules: list[dict]) -> dic
     return {fid: pos for pos, fid in enumerate(sorted_fids)}
 
 
+def _resolve_collection_priorities(collection_schema: dict) -> dict[int, int]:
+    """Return file_id → priority position (0 = highest priority, top of modlist.txt).
+
+    Prefers the manifest's `loadOrder` array when present (FBLO games like
+    BG3 ship the curator's exact ordered list — `loadOrder[0]` is the first
+    mod to load, which is bottom of modlist.txt / position N-1 in this
+    manager). When `loadOrder` is present, `modRules` before/after constraints
+    are layered on top as a stable post-pass: rules already satisfied by the
+    LO are no-ops; only conflicting rules cause reordering, with the LO order
+    used as the tie-breaker. Falls back to pure topo-sorting `mods` +
+    `modRules` for collections that don't ship a load order block.
+    """
+    schema_mods = collection_schema.get("mods", [])
+    mod_rules = collection_schema.get("modRules", [])
+
+    lo = collection_schema.get("loadOrder")
+    if not (isinstance(lo, list) and lo and any(e.get("fileId") for e in lo)):
+        return _topo_sort_collection(schema_mods, mod_rules)
+
+    # Reverse: loadOrder[0] = first to load = lowest priority = bottom of modlist
+    ordered_fids: list[int] = []
+    seen: set[int] = set()
+    for entry in reversed(lo):
+        fid = entry.get("fileId")
+        if fid is None:
+            continue
+        fid = int(fid)
+        if fid in seen:
+            continue
+        seen.add(fid)
+        ordered_fids.append(fid)
+
+    # Append any mods-array entries missing from loadOrder (FOMOD-only mods
+    # with no .pak) at the bottom, preserving mods-array order.
+    for m in schema_mods:
+        fid = (m.get("source") or {}).get("fileId")
+        if fid is None:
+            continue
+        fid = int(fid)
+        if fid not in seen:
+            seen.add(fid)
+            ordered_fids.append(fid)
+
+    # Build name → fileId resolver for rule references (rules use logicalFileName)
+    logical_to_fid: dict[str, int] = {}
+    for m in schema_mods:
+        src = m.get("source") or {}
+        fid = src.get("fileId")
+        if fid is None:
+            continue
+        fid = int(fid)
+        for n in (
+            (src.get("logicalFilename") or "").strip(),
+            (m.get("name") or "").strip(),
+        ):
+            if n and n not in logical_to_fid:
+                logical_to_fid[n] = fid
+
+    # Layer modRules on top via Kahn's topological sort, using the LO order
+    # as the tie-breaker. Rules already satisfied by LO are free; conflicting
+    # rules cause minimal swaps. Cycles are skipped (rules ignored).
+    base_pos: dict[int, int] = {fid: pos for pos, fid in enumerate(ordered_fids)}
+    higher_than: dict[int, set[int]] = {f: set() for f in ordered_fids}
+    in_degree: dict[int, int] = {f: 0 for f in ordered_fids}
+
+    for rule in mod_rules:
+        rtype = rule.get("type")
+        if rtype not in ("before", "after"):
+            continue
+        ref_name = (rule.get("reference") or {}).get("logicalFileName", "")
+        src_name = (rule.get("source") or {}).get("logicalFileName", "")
+        ref_fid = logical_to_fid.get(ref_name)
+        src_fid = logical_to_fid.get(src_name)
+        if ref_fid is None or src_fid is None or ref_fid == src_fid:
+            continue
+        if ref_fid not in base_pos or src_fid not in base_pos:
+            continue
+
+        # "source after reference"  → source loads later → source is higher priority
+        # "source before reference" → source loads earlier → reference is higher priority
+        if rtype == "after":
+            winner, loser = src_fid, ref_fid
+        else:
+            winner, loser = ref_fid, src_fid
+
+        if loser not in higher_than[winner]:
+            higher_than[winner].add(loser)
+            in_degree[loser] += 1
+
+    # Stable topo sort using a min-heap keyed by base LO position. Whenever
+    # multiple nodes are eligible, the one closest to its base-LO slot wins —
+    # so rules already satisfied by the LO are no-ops, and only conflicting
+    # rules cause the minimum reordering needed to satisfy them.
+    import heapq
+    heap: list[tuple[int, int]] = [
+        (base_pos[f], f) for f in ordered_fids if in_degree[f] == 0
+    ]
+    heapq.heapify(heap)
+    sorted_fids: list[int] = []
+    remaining = set(ordered_fids)
+
+    while heap:
+        _, fid = heapq.heappop(heap)
+        if fid not in remaining:
+            continue
+        remaining.discard(fid)
+        sorted_fids.append(fid)
+        for dep in higher_than[fid]:
+            in_degree[dep] -= 1
+            if in_degree[dep] == 0:
+                heapq.heappush(heap, (base_pos[dep], dep))
+
+    # Cycle members: append in base order
+    for fid in ordered_fids:
+        if fid in remaining:
+            sorted_fids.append(fid)
+
+    return {fid: pos for pos, fid in enumerate(sorted_fids)}
+
+
+def _build_collision_suffix_map(
+    schema_mods: list[dict],
+    schema_file_id_to_logical: dict[int, str],
+    schema_pos_to_name: dict[int, str],
+    schema_file_id_to_pos: dict[int, int],
+) -> dict[int, str]:
+    """Return file_id → suffix to append when multiple collection entries
+    from different mod pages would otherwise install into the same folder.
+
+    Collisions happen when curators include several small "patch"-style mods
+    that share a generic name (e.g. four "EOTB Patch" entries from different
+    authors). Without disambiguation each install overwrites the previous —
+    only the last one survives. Appending " (mod_id)" keeps each in its own
+    folder while remaining recognisable to the user.
+
+    Returns "" for non-colliding entries; the suffix string for colliders.
+    """
+    # Group fileIds by their effective base preferred name (lowercased).
+    base_to_fids: dict[str, list[int]] = {}
+    fid_to_base: dict[int, str] = {}
+    fid_to_mod_id: dict[int, int] = {}
+    for sm in schema_mods:
+        src = sm.get("source") or {}
+        fid = src.get("fileId")
+        if fid is None:
+            continue
+        fid = int(fid)
+        logical = schema_file_id_to_logical.get(fid, "") or ""
+        schema_name = schema_pos_to_name.get(
+            schema_file_id_to_pos.get(fid, -1), "") or ""
+        base = (logical or schema_name or sm.get("name") or "").strip()
+        if not base:
+            continue
+        fid_to_base[fid] = base
+        mid = src.get("modId")
+        if mid:
+            fid_to_mod_id[fid] = int(mid)
+        base_to_fids.setdefault(base.lower(), []).append(fid)
+
+    result: dict[int, str] = {}
+    for fid, base in fid_to_base.items():
+        siblings = base_to_fids.get(base.lower(), [])
+        if len(siblings) <= 1:
+            result[fid] = ""
+            continue
+        # Only disambiguate when siblings come from different mod pages.
+        # Two entries from the same mod_id (e.g. main+optional file) shouldn't
+        # collide because they go through the already-installed-by-fid path.
+        sibling_mod_ids = {fid_to_mod_id.get(s) for s in siblings}
+        sibling_mod_ids.discard(None)
+        if len(sibling_mod_ids) <= 1:
+            result[fid] = ""
+            continue
+        mod_id = fid_to_mod_id.get(fid)
+        result[fid] = f" ({mod_id})" if mod_id else ""
+    return result
+
+
 def _fmt_size(n_bytes: int) -> str:
     """Human-readable file size."""
     if n_bytes <= 0:
@@ -2290,11 +2468,12 @@ class CollectionDetailDialog(tk.Frame):
             except Exception as _exc:
                 self._log(f"Collection install: could not save manifest: {_exc}")
 
-        # Build a mapping from file_id → priority position (0 = highest priority)
-        # respecting modRules before/after constraints via topological sort.
+        # Build a mapping from file_id → priority position (0 = highest priority).
+        # Prefers the manifest's `loadOrder` array when present (FBLO games like
+        # BG3); falls back to topo-sorting `mods` + `modRules`.
         schema_mods: list[dict] = collection_schema.get("mods", [])
         mod_rules: list[dict] = collection_schema.get("modRules", [])
-        schema_file_id_to_pos: dict[int, int] = _topo_sort_collection(schema_mods, mod_rules)
+        schema_file_id_to_pos: dict[int, int] = _resolve_collection_priorities(collection_schema)
         schema_pos_to_name: dict[int, str] = {}  # collection.json logical name
         schema_file_id_to_logical: dict[int, str] = {}  # file_id → logicalFilename
         schema_file_id_to_mod_id: dict[int, int] = {}   # file_id → mod_id from collection.json
@@ -2356,6 +2535,17 @@ class CollectionDetailDialog(tk.Frame):
             return schema_file_id_to_pos.get(m.file_id, len(schema_mods))
 
         ordered_mods = sorted(mods, key=_sort_key)
+
+        # Disambiguate collection entries that would install into the same
+        # folder name (e.g. four "EOTB Patch" entries from different authors).
+        # Without this, each install overwrites the previous and only the
+        # last survives in the staging dir.
+        schema_file_id_to_suffix: dict[int, str] = _build_collision_suffix_map(
+            schema_mods,
+            schema_file_id_to_logical,
+            schema_pos_to_name,
+            schema_file_id_to_pos,
+        )
 
         # ------------------------------------------------------------------
         # Step 2: Install each mod, tracking the folder names in order
@@ -2827,6 +3017,8 @@ class CollectionDetailDialog(tk.Frame):
             _schema_name = schema_pos_to_name.get(
                 schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
             _preferred = _logical or _schema_name or mod.mod_name or ""
+            # Append a per-mod-id suffix when multiple entries collide.
+            _preferred += schema_file_id_to_suffix.get(mod.file_id, "")
 
             # Estimate uncompressed size and acquire memory budget before extracting.
             # This gates concurrency by real memory pressure rather than a fixed limit.
@@ -3110,6 +3302,7 @@ class CollectionDetailDialog(tk.Frame):
                     _def_schema_name = schema_pos_to_name.get(
                         schema_file_id_to_pos.get(_def_mod.file_id, -1), "") or ""
                     _def_preferred = _def_logical or _def_schema_name or _def_mod.mod_name or ""
+                    _def_preferred += schema_file_id_to_suffix.get(_def_mod.file_id, "")
                     try:
                         _def_folder = install_mod_from_archive(
                             _def_archive, self, self._log, self._game,
@@ -4259,7 +4452,7 @@ class CollectionDetailDialog(tk.Frame):
 
         schema_mods: list[dict] = collection_schema.get("mods", [])
         mod_rules: list[dict] = collection_schema.get("modRules", [])
-        schema_file_id_to_pos = _topo_sort_collection(schema_mods, mod_rules)
+        schema_file_id_to_pos = _resolve_collection_priorities(collection_schema)
         schema_pos_to_name: dict[int, str] = {}
         schema_file_id_to_logical: dict[int, str] = {}
         schema_file_id_to_mod_id: dict[int, int] = {}
@@ -4310,6 +4503,15 @@ class CollectionDetailDialog(tk.Frame):
             return schema_file_id_to_pos.get(m.file_id, len(schema_mods))
 
         ordered_mods = sorted(mods, key=_sort_key)
+
+        # Disambiguate collection entries that would install into the same
+        # folder name (see _build_collision_suffix_map docstring).
+        schema_file_id_to_suffix: dict[int, str] = _build_collision_suffix_map(
+            schema_mods,
+            schema_file_id_to_logical,
+            schema_pos_to_name,
+            schema_file_id_to_pos,
+        )
 
         # ------------------------------------------------------------------
         # Step 2: Classify already-installed mods (same as _run_install)
@@ -4536,6 +4738,7 @@ class CollectionDetailDialog(tk.Frame):
             _schema_name = schema_pos_to_name.get(
                 schema_file_id_to_pos.get(mod.file_id, -1), "") or ""
             _preferred = _logical or _schema_name or mod.mod_name or ""
+            _preferred += schema_file_id_to_suffix.get(mod.file_id, "")
 
             _manual_fomod_flag = {"value": False}
             def _manual_capture_fomod(is_fomod: bool = False):
@@ -5531,10 +5734,9 @@ class CollectionDetailDialog(tk.Frame):
                 except Exception as _exc:
                     self._log(f"Could not save manifest: {_exc}")
 
-            # Build file_id → priority position map respecting modRules
-            fid_to_pos: dict = _topo_sort_collection(
-                cj.get("mods", []), cj.get("modRules", [])
-            )
+            # Build file_id → priority position map. Prefers the manifest's
+            # `loadOrder` array (FBLO games like BG3); falls back to modRules.
+            fid_to_pos: dict = _resolve_collection_priorities(cj)
 
             # Build name-based fallback: logical_name → file_id (for mods missing meta.ini)
             _name_to_fid: dict[str, int] = {}
