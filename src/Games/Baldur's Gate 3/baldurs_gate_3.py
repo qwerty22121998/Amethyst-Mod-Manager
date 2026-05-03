@@ -356,10 +356,26 @@ class BaldursGate3(BaseGame):
         _log("Step 4: Generating modsettings.lsx ...")
         modsettings = larian_root / _MODSETTINGS_REL
         game_data = self._game_path / "Data" if self._game_path else None
+        # If this profile was created from a collection, the manifest's
+        # loadOrder array drives the pak ordering. Curators interleave paks
+        # from different mods (e.g. load-order divider packs whose 30+ entries
+        # span the full LO), which the default folder-walk order destroys.
+        manifest_lo = None
+        collection_json = profile_dir / "collection.json"
+        if collection_json.is_file():
+            try:
+                cj = json.loads(collection_json.read_text(encoding="utf-8"))
+                lo = cj.get("loadOrder")
+                if isinstance(lo, list) and lo:
+                    manifest_lo = lo
+                    _log(f"  Using collection manifest load order ({len(lo)} entries).")
+            except (OSError, json.JSONDecodeError) as exc:
+                _log(f"  Warning: could not read collection.json: {exc}")
         mod_count = write_modsettings(modsettings, modlist, staging,
                                       log_fn=_log,
                                       game_data_path=game_data,
-                                      patch_version=self._patch_version)
+                                      patch_version=self._patch_version,
+                                      manifest_load_order=manifest_lo)
 
         _log(
             f"Deploy complete. "

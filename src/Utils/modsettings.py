@@ -507,6 +507,90 @@ def _build_modsettings_xml_p6(ordered_mods: list[BG3ModInfo]) -> str:
     return "".join(parts)
 
 
+def _apply_manifest_pak_order(
+    enabled: list[ModEntry],
+    mod_infos: dict[str, BG3ModInfo],
+    manifest_load_order: list[dict],
+    log_fn,
+) -> list[BG3ModInfo]:
+    """Order paks by the collection manifest's loadOrder array.
+
+    A single mod folder can ship multiple paks that the collection author
+    intends to be interleaved with paks from other mods (e.g. load-order
+    divider packs whose 30+ entries are spread throughout the LO). Walking
+    by mod folder and emitting all paks per folder destroys this intent.
+
+    Strategy: build pak-filename → BG3ModInfo from on-disk scan, then walk
+    ``manifest_load_order`` in order. Manifest entries point at pak files via
+    their ``id`` field. Paks present on disk but missing from the manifest
+    (user-added patches, mods installed outside the collection) are appended
+    at the end — that maps to "top of modlist.txt" = highest priority for
+    overrides, which matches how this manager treats user-added content.
+
+    Returns BG3ModInfo entries in lowest-priority-first order (ready for
+    modsettings.lsx, where later entries override earlier ones).
+    """
+    _log = _safe_log(log_fn)
+
+    # mod_infos is keyed by uuid. Build a casefold lookup once.
+    uuid_to_info_cf: dict[str, BG3ModInfo] = {
+        u.lower(): info for u, info in mod_infos.items()
+    }
+
+    # Walk manifest in order, matching by data.uuid. Only emit if the uuid
+    # corresponds to an actually-installed pak.
+    ordered: list[BG3ModInfo] = []
+    seen_uuids: set[str] = set()
+    for manifest_entry in manifest_load_order:
+        data = manifest_entry.get("data") or {}
+        uuid = (data.get("uuid") or "").strip().lower()
+        if not uuid:
+            continue
+        info = uuid_to_info_cf.get(uuid)
+        if info is None:
+            continue
+        if info.uuid in seen_uuids:
+            continue
+        seen_uuids.add(info.uuid)
+        ordered.append(info)
+
+    # Append any installed paks not covered by the manifest.
+    # Walk in modlist order (already lowest-priority-first) so user-added
+    # mods land in the same relative order they appear in modlist.txt.
+    by_source: dict[str, list[BG3ModInfo]] = {}
+    for info in mod_infos.values():
+        if info.source_mod:
+            by_source.setdefault(info.source_mod, []).append(info)
+    for entry in enabled:
+        for info in by_source.get(entry.name, ()):
+            if info.uuid in seen_uuids:
+                continue
+            seen_uuids.add(info.uuid)
+            ordered.append(info)
+
+    # Dependency sweep: the manifest already orders deps before dependents
+    # (curators verify their collections boot), but user-added trailing
+    # paks may reference deps that were emitted later by the manifest.
+    # Walk the result and pull each pak's missing deps to immediately
+    # before the pak itself, preserving the manifest's pak-level interleave.
+    final: list[BG3ModInfo] = []
+    placed: set[str] = set()
+
+    def _emit_with_deps(info: BG3ModInfo) -> None:
+        if info.uuid in placed:
+            return
+        for dep_uuid in info.dependencies:
+            dep = mod_infos.get(dep_uuid) or uuid_to_info_cf.get(dep_uuid.lower())
+            if dep is not None and dep.uuid not in placed:
+                _emit_with_deps(dep)
+        placed.add(info.uuid)
+        final.append(info)
+
+    for info in ordered:
+        _emit_with_deps(info)
+    return final
+
+
 def write_modsettings(
     modsettings_path: Path,
     modlist_path: Path,
@@ -514,6 +598,7 @@ def write_modsettings(
     log_fn=None,
     game_data_path: Path | None = None,
     patch_version: int = 8,
+    manifest_load_order: list[dict] | None = None,
 ) -> int:
     """End-to-end: scan paks, resolve order, write modsettings.lsx.
 
@@ -526,6 +611,12 @@ def write_modsettings(
       - 8: GustavX campaign, Mods node only, Version64 + PublishHandle
       - 7: Gustav campaign, Mods node only, Version64 + PublishHandle
       - 6: Gustav campaign, ModOrder + Mods nodes, 32-bit Version
+
+    *manifest_load_order* — optional list of entries from a collection
+    manifest's ``loadOrder`` array. When provided, paks are emitted in the
+    manifest's exact order (curators interleave paks from different mods —
+    e.g. load-order divider packs — which the default folder-walk order
+    destroys). Paks installed but not in the manifest are appended.
 
     Returns the number of mod entries written (excluding the campaign entry).
     """
@@ -548,8 +639,12 @@ def write_modsettings(
         modsettings_path.write_text(xml, encoding="utf-8")
         return 0
 
-    _log("Resolving load order with dependency sorting ...")
-    ordered = resolve_load_order(enabled, mod_infos)
+    if manifest_load_order:
+        _log(f"Resolving load order from collection manifest ({len(manifest_load_order)} entries) ...")
+        ordered = _apply_manifest_pak_order(enabled, mod_infos, manifest_load_order, _log)
+    else:
+        _log("Resolving load order with dependency sorting ...")
+        ordered = resolve_load_order(enabled, mod_infos)
     _log(f"  Load order: {', '.join(m.name for m in ordered)}")
 
     # Build the set of UUIDs that are known to exist (installed mods +
