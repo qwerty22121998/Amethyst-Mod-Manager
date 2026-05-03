@@ -2,8 +2,10 @@
 # Build Amethyst Mod Manager as a Flatpak
 #
 # Prerequisites:
-#   - Flatpak installed; flatpak-builder is installed automatically when missing (needs sudo)
-#   - GNOME runtime: flatpak install flathub org.gnome.Platform//49 org.gnome.Sdk//49
+#   - Flatpak installed. flatpak-builder is provided by the org.flatpak.Builder
+#     flatpak (installed automatically when missing — no sudo or rootfs writes).
+#     Useful on SteamOS where the rootfs is read-only.
+#   - GNOME runtime: flatpak install flathub org.gnome.Platform//50 org.gnome.Sdk//50
 #   - 32-bit compat extensions (auto-installed by --install-deps-from=flathub):
 #       org.freedesktop.Platform.Compat.i386//25.08
 #       org.freedesktop.Platform.GL32//1.4
@@ -17,30 +19,24 @@
 #
 set -euo pipefail
 
-ensure_flatpak_builder() {
-  if command -v flatpak-builder >/dev/null 2>&1; then
+FB_FLATPAK_ID="org.flatpak.Builder"
+
+# Returns the command to invoke flatpak-builder, preferring the flathub
+# `org.flatpak.Builder` flatpak so we never touch the system package manager.
+# Installs the flatpak on first use if missing.
+resolve_flatpak_builder() {
+  if flatpak info --user "$FB_FLATPAK_ID" >/dev/null 2>&1 \
+     || flatpak info --system "$FB_FLATPAK_ID" >/dev/null 2>&1; then
+    echo "flatpak run $FB_FLATPAK_ID"
     return 0
   fi
-  echo "flatpak-builder not found; installing via system package manager (sudo required)..."
-  if command -v pacman >/dev/null 2>&1; then
-    sudo pacman -S --needed --noconfirm flatpak-builder
-  elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -qq
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y flatpak-builder
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y flatpak-builder
-  elif command -v zypper >/dev/null 2>&1; then
-    sudo zypper install -y flatpak-builder
-  elif command -v apk >/dev/null 2>&1; then
-    sudo apk add flatpak-builder
-  else
-    echo "Could not detect a package manager. Install flatpak-builder manually, then re-run this script." >&2
-    exit 1
+  if command -v flatpak-builder >/dev/null 2>&1; then
+    echo "flatpak-builder"
+    return 0
   fi
-  if ! command -v flatpak-builder >/dev/null 2>&1; then
-    echo "flatpak-builder is still not available after install. Check the output above." >&2
-    exit 1
-  fi
+  echo "flatpak-builder not found; installing $FB_FLATPAK_ID from Flathub (--user, no sudo)..." >&2
+  flatpak install --user -y --noninteractive flathub "$FB_FLATPAK_ID" >&2
+  echo "flatpak run $FB_FLATPAK_ID"
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -63,9 +59,9 @@ echo "  Manifest: $MANIFEST"
 echo "  Project:  $PROJECT_DIR"
 echo ""
 
-ensure_flatpak_builder
+FB_CMD="$(resolve_flatpak_builder)"
 
-flatpak-builder \
+$FB_CMD \
   --verbose \
   --user \
   --install-deps-from=flathub \
