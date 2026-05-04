@@ -1734,6 +1734,28 @@ class App(ctk.CTk):
     def hide_proton_panel(self):
         self._hide_plugin_overlay("_proton_panel")
 
+    # -- Install Progress overlay --------------------------------------------
+
+    def show_install_progress(self, title, worker, log_fn=None):
+        """Mount an overlay that runs *worker(log_fn)* in a thread and streams
+        the output. Stacks on top of any existing plugin-panel overlay so the
+        user is returned to it once they close the progress panel."""
+        self._ensure_plugin_panel_visible()
+        from gui.install_progress_panel import InstallProgressPanel
+        self._show_plugin_overlay(
+            "_install_progress",
+            lambda: InstallProgressPanel(
+                self._plugin_panel_container,
+                title=title,
+                worker=worker,
+                log_fn=log_fn,
+                on_close=lambda: self._hide_plugin_overlay("_install_progress"),
+            ),
+        )
+
+    def hide_install_progress(self):
+        self._hide_plugin_overlay("_install_progress")
+
     # -- Wine DLL Overrides panel --------------------------------------------
 
     def show_wine_dll_panel(self, game, log_fn):

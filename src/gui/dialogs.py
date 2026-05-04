@@ -1094,6 +1094,24 @@ class ProtonToolsPanel(ctk.CTkFrame):
         self._on_done(self)
         toplevel.after(50, fn)
 
+    def _open_install_progress(self, title, worker):
+        """Mount the InstallProgressPanel overlay on top of this panel and
+        run *worker(log_fn) -> bool* in a background thread. The proton-tools
+        panel stays mounted underneath, so closing the progress overlay
+        returns the user to it."""
+        app = self.winfo_toplevel()
+        show = getattr(app, "show_install_progress", None)
+        log = self._log
+        prefixed_log = lambda msg: log(f"Proton Tools: {msg}")
+        if show is None:
+            self._close_and_run(
+                lambda: threading.Thread(
+                    target=lambda: worker(prefixed_log), daemon=True,
+                ).start()
+            )
+            return
+        show(title, worker, log_fn=prefixed_log)
+
     def _run_winecfg(self):
         proton_script, env = self._get_proton_env()
         if proton_script is None:
@@ -1153,7 +1171,14 @@ class ProtonToolsPanel(ctk.CTkFrame):
         self._close_and_run(_launch)
 
     def _run_protontricks(self):
-        from Utils.protontricks import winetricks_installed, install_winetricks, _bundled_winetricks, _get_proton_bin
+        from Utils.protontricks import (
+            _bundled_winetricks,
+            _get_proton_bin,
+            cabextract_installed,
+            install_cabextract,
+            install_winetricks,
+            winetricks_installed,
+        )
         steam_id = getattr(self._game, "steam_id", "") or ""
         prefix_path = getattr(self._game, "_prefix_path", None)
         log = self._log
@@ -1166,21 +1191,26 @@ class ProtonToolsPanel(ctk.CTkFrame):
         ).returncode == 0:
             cmd = ["flatpak", "run", "com.github.Matoking.protontricks", steam_id, "--gui"]
         elif prefix_path and prefix_path.is_dir():
-            # Fall back to winetricks GUI against the known prefix
             def _launch_winetricks():
                 if not winetricks_installed():
                     log("Proton Tools: winetricks not found — downloading …")
                     if not install_winetricks(log_fn=lambda m: log(f"Proton Tools: {m}")):
                         return
-                import os
+                if not cabextract_installed():
+                    log("Proton Tools: cabextract not found — downloading a portable copy …")
+                    if not install_cabextract(log_fn=lambda m: log(f"Proton Tools: {m}")):
+                        return
+                wt = _bundled_winetricks()
                 env = os.environ.copy()
                 env["WINEPREFIX"] = str(prefix_path)
+                path_prefix = str(wt.parent)
                 proton_bin = _get_proton_bin()
                 if proton_bin:
-                    env["PATH"] = proton_bin + os.pathsep + env.get("PATH", "")
+                    path_prefix = proton_bin + os.pathsep + path_prefix
+                env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
                 log("Proton Tools: launching winetricks GUI …")
                 try:
-                    subprocess.Popen([str(_bundled_winetricks()), "--gui"],
+                    subprocess.Popen([str(wt), "--gui"],
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
                 except Exception as e:
                     log(f"Proton Tools error: {e}")
@@ -1229,44 +1259,53 @@ class ProtonToolsPanel(ctk.CTkFrame):
         if proton_script is None:
             return
         cache_path = get_vcredist_cache_path()
-        log = self._log
+        prefix_path = getattr(self._game, "_prefix_path", None)
         vcredist_url = "https://aka.ms/vc14/vc_redist.x64.exe"
 
-        def _download_and_run():
+        def _worker(plog):
             import urllib.request
+            from Utils.protontricks import VCREDIST_DEP_KEY, mark_dep_installed
             try:
                 if not cache_path.is_file():
-                    log("Proton Tools: downloading VC++ Redistributable …")
+                    plog("Downloading VC++ Redistributable …")
                     urllib.request.urlretrieve(vcredist_url, cache_path)
-                    log("Proton Tools: download complete.")
+                    plog("Download complete.")
                 else:
-                    log("Proton Tools: using cached VC++ Redistributable installer.")
-                log("Proton Tools: launching VC++ Redistributable installer in game prefix …")
-                subprocess.Popen(["python3", str(proton_script), "run", str(cache_path)],
-                                 env=env, cwd=cache_path.parent,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    plog("Using cached VC++ Redistributable installer.")
+                plog("Installing VC++ Redistributable in game prefix (silent) — please wait …")
+                proc = subprocess.run(
+                    ["python3", str(proton_script), "run",
+                     str(cache_path), "/install", "/quiet", "/norestart"],
+                    env=env, cwd=cache_path.parent,
+                )
+                # 0 = success, 1638 = already installed, 3010 = reboot required, 1641 = reboot initiated
+                ok_codes = {0, 1638, 3010, 1641}
+                if proc.returncode in ok_codes:
+                    plog(f"VC++ Redistributable installed (exit {proc.returncode}).")
+                    if prefix_path and Path(prefix_path).is_dir():
+                        mark_dep_installed(Path(prefix_path), VCREDIST_DEP_KEY)
+                    return True
+                plog(f"Installer exited with code {proc.returncode}.")
+                return False
             except Exception as e:
-                log(f"Proton Tools error (VC++ Redistributable): {e}")
+                plog(f"Error: {e}")
+                return False
 
-        def _launch():
-            threading.Thread(target=_download_and_run, daemon=True).start()
-
-        self._close_and_run(_launch)
+        self._open_install_progress("Installing VC++ Redistributable", _worker)
 
     def _run_install_d3dcompiler_47(self):
         from Utils.protontricks import install_d3dcompiler_47
         steam_id = getattr(self._game, "steam_id", "") or ""
         prefix_path = getattr(self._game, "_prefix_path", None)
-        log = self._log
 
-        def _launch():
-            install_d3dcompiler_47(
+        def _worker(plog):
+            return bool(install_d3dcompiler_47(
                 steam_id,
-                log_fn=lambda msg: log(f"Proton Tools: {msg}"),
+                log_fn=plog,
                 prefix_path=prefix_path,
-            )
+            ))
 
-        self._close_and_run(lambda: threading.Thread(target=_launch, daemon=True).start())
+        self._open_install_progress("Installing d3dcompiler_47", _worker)
 
     def _run_install_dotnet(self):
         proton_script, env = self._get_proton_env()
@@ -1275,6 +1314,7 @@ class ProtonToolsPanel(ctk.CTkFrame):
 
         log = self._log
         container = self.master
+        prefix_path = getattr(self._game, "_prefix_path", None)
 
         def _on_version_picked(version):
             if version is None:
@@ -1295,27 +1335,36 @@ class ProtonToolsPanel(ctk.CTkFrame):
                 log(f"Proton Tools: no download URL known for .NET {version}.")
                 return
 
-            def _download_and_run():
+            def _worker(plog):
                 import urllib.request
+                from Utils.protontricks import dotnet_dep_key, mark_dep_installed
                 try:
                     if not cache_path.is_file():
-                        log(f"Proton Tools: downloading .NET {version} runtime …")
+                        plog(f"Downloading .NET {version} runtime …")
                         urllib.request.urlretrieve(dl_url, cache_path)
-                        log("Proton Tools: download complete.")
+                        plog("Download complete.")
                     else:
-                        log(f"Proton Tools: using cached .NET {version} installer.")
-                    log(f"Proton Tools: launching .NET {version} installer in game prefix …")
-                    subprocess.Popen(
-                        ["python3", str(proton_script), "run", str(cache_path)],
-                        env=env,
-                        cwd=cache_path.parent,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        plog(f"Using cached .NET {version} installer.")
+                    plog(f"Installing .NET {version} in game prefix (silent) — may take a few minutes …")
+                    proc = subprocess.run(
+                        ["python3", str(proton_script), "run",
+                         str(cache_path), "/quiet", "/norestart"],
+                        env=env, cwd=cache_path.parent,
                     )
+                    # 0 = success, 102 = already installed/no-op, 1638 = newer present, 3010 = reboot required
+                    ok_codes = {0, 102, 1638, 3010}
+                    if proc.returncode in ok_codes:
+                        plog(f".NET {version} installed (exit {proc.returncode}).")
+                        if prefix_path and Path(prefix_path).is_dir():
+                            mark_dep_installed(Path(prefix_path), dotnet_dep_key(version))
+                        return True
+                    plog(f"Installer exited with code {proc.returncode}.")
+                    return False
                 except Exception as e:
-                    log(f"Proton Tools error (.NET {version}): {e}")
+                    plog(f"Error: {e}")
+                    return False
 
-            self._close_and_run(lambda: threading.Thread(target=_download_and_run, daemon=True).start())
+            self._open_install_progress(f"Installing .NET {version}", _worker)
 
         panel = _DotNetVersionPanel(container, on_pick=_on_version_picked)
         panel.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -3025,7 +3074,7 @@ class ExeConfigPanel(ctk.CTkFrame):
             else:
                 cmd += ["--gui"]
         else:
-            self._log("Prefix tools: protontricks not found.")
+            self._launch_winetricks_gui_in_prefix(prefix_dir / "pfx")
             return
 
         env["STEAM_COMPAT_DATA_PATH"] = str(prefix_dir)
@@ -3034,6 +3083,49 @@ class ExeConfigPanel(ctk.CTkFrame):
         try:
             subprocess.Popen(
                 cmd, env=env,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            self._log(f"Prefix tools error: {e}")
+
+    def _launch_winetricks_gui_in_prefix(self, wineprefix: Path):
+        from Utils.protontricks import (
+            _bundled_winetricks,
+            _get_proton_bin,
+            cabextract_installed,
+            install_cabextract,
+            install_winetricks,
+            winetricks_installed,
+        )
+
+        if not wineprefix.is_dir():
+            self._log(
+                "Prefix tools: protontricks not found and no Wine prefix is "
+                "available — cannot launch winetricks."
+            )
+            return
+        if not winetricks_installed():
+            self._log("Prefix tools: winetricks not found — downloading …")
+            if not install_winetricks(log_fn=lambda m: self._log(f"Prefix tools: {m}")):
+                return
+        if not cabextract_installed():
+            self._log("Prefix tools: cabextract not found — downloading a portable copy …")
+            if not install_cabextract(log_fn=lambda m: self._log(f"Prefix tools: {m}")):
+                return
+
+        wt = _bundled_winetricks()
+        env = os.environ.copy()
+        env["WINEPREFIX"] = str(wineprefix)
+        path_prefix = str(wt.parent)
+        proton_bin = _get_proton_bin()
+        if proton_bin:
+            path_prefix = proton_bin + os.pathsep + path_prefix
+        env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
+
+        self._log(f"Prefix tools: launching winetricks GUI against {wineprefix.parent.name} …")
+        try:
+            subprocess.Popen(
+                [str(wt), "--gui"], env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         except Exception as e:

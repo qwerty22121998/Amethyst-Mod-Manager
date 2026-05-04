@@ -40,12 +40,13 @@ from gui.theme import (
     TEXT_DIM, TEXT_MAIN,
     FONT_NORMAL, FONT_BOLD,
 )
+from Utils.protontricks import dotnet_dep_key as _dotnet_dep_key
 
 _EXE_NAME = "Pandora Behaviour Engine+.exe"
 
 _NET10_URL      = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/10.0.0/windowsdesktop-runtime-10.0.0-win-x64.exe"
 _NET10_FILENAME = "windowsdesktop-runtime-10.0.0-win-x64.exe"
-_NET10_DEP_KEY  = "dotnet10_windowsdesktop"
+_NET10_DEP_KEY  = _dotnet_dep_key("10")
 
 
 def find_pandora_exe(game: "BaseGame") -> Path | None:
@@ -336,7 +337,10 @@ class PandoraWizard(ctk.CTkFrame):
     def _do_install_deps(self):
         import urllib.request
         from Utils.config_paths import get_dotnet_cache_dir
-        from wizards.pgpatcher import _is_dep_installed, _mark_dep_installed
+        from Utils.protontricks import (
+            is_dep_installed as _is_dep_installed,
+            mark_dep_installed as _mark_dep_installed,
+        )
 
         proton_script, env, prefix_path = self._get_proton_env()
 

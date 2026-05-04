@@ -38,10 +38,15 @@ from gui.theme import (
     FONT_NORMAL, FONT_BOLD, FONT_SMALL,
 )
 
+from Utils.protontricks import (
+    dotnet_dep_key as _dotnet_dep_key,
+    is_dep_installed as _is_dep_installed,
+    mark_dep_installed as _mark_dep_installed,
+)
+
 _NEXUS_URL    = "https://www.nexusmods.com/witcher3/mods/8405?tab=files&file_id=59566"
 _MERGER_EXE   = "WitcherScriptMerger.exe"
 _MERGER_DIR   = "ScriptMerger"
-_DEPS_FILE    = "amethyst_deps.json"
 _NET8_URL     = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/8.0.25/windowsdesktop-runtime-8.0.25-win-x64.exe"
 _NET8_FILENAME = "windowsdesktop-runtime-8.0.25-win-x64.exe"
 
@@ -57,35 +62,15 @@ def _merger_exe_path(game: "BaseGame") -> Path | None:
     return p if p.is_file() else None
 
 
-_NET8_DEP_KEY = "dotnet8_windowsdesktop"
+_NET8_DEP_KEY = _dotnet_dep_key("8")
 
 
 def _is_net8_installed(prefix_path: Path) -> bool:
-    """Return True if .NET 8 is recorded as installed in the prefix."""
-    deps_file = prefix_path.parent / _DEPS_FILE
-    if not deps_file.is_file():
-        return False
-    try:
-        data = json.loads(deps_file.read_text(encoding="utf-8"))
-        return _NET8_DEP_KEY in data.get("installed", [])
-    except Exception:
-        return False
+    return _is_dep_installed(prefix_path, _NET8_DEP_KEY)
 
 
 def _mark_net8_installed(prefix_path: Path) -> None:
-    """Record .NET 8 as installed in the prefix's deps file."""
-    deps_file = prefix_path.parent / _DEPS_FILE
-    try:
-        data: dict = {}
-        if deps_file.is_file():
-            data = json.loads(deps_file.read_text(encoding="utf-8"))
-        installed: list = data.get("installed", [])
-        if _NET8_DEP_KEY not in installed:
-            installed.append(_NET8_DEP_KEY)
-        data["installed"] = installed
-        deps_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass
+    _mark_dep_installed(prefix_path, _NET8_DEP_KEY)
 
 
 def _find_merger_archive(downloads_dir: Path) -> Path | None:

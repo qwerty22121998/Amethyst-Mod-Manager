@@ -7,6 +7,7 @@ and winetricks via the bundled copy in the manager's tools folder.
 from __future__ import annotations
 
 import io
+import json
 import os
 import shutil
 import stat
@@ -20,6 +21,50 @@ from Utils.app_log import safe_log as _safe_log
 
 _WINETRICKS_URL = "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks"
 _CABEXTRACT_URL = "https://archlinux.org/packages/extra/x86_64/cabextract/download/"
+
+_DEPS_FILE = "amethyst_deps.json"
+
+D3D_DEP_KEY = "d3dcompiler_47"
+VCREDIST_DEP_KEY = "vcredist_x64"
+
+
+def dotnet_dep_key(version: str) -> str:
+    """Marker key for a .NET WindowsDesktop runtime version (e.g. '8' → 'dotnet8_windowsdesktop')."""
+    return f"dotnet{version}_windowsdesktop"
+
+
+def _deps_file(prefix_path: Path) -> Path:
+    return prefix_path.parent / _DEPS_FILE
+
+
+def read_installed_deps(prefix_path: Path) -> list[str]:
+    """Return the list of components recorded as installed in *prefix_path*."""
+    try:
+        return json.loads(_deps_file(prefix_path).read_text(encoding="utf-8")).get("installed", [])
+    except (OSError, ValueError):
+        return []
+
+
+def is_dep_installed(prefix_path: Path, key: str) -> bool:
+    return key in read_installed_deps(prefix_path)
+
+
+def mark_dep_installed(prefix_path: Path, key: str) -> None:
+    f = _deps_file(prefix_path)
+    try:
+        data: dict = {}
+        if f.is_file():
+            data = json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    installed: list = data.get("installed", [])
+    if key not in installed:
+        installed.append(key)
+    data["installed"] = installed
+    try:
+        f.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _get_tools_dir() -> Path:
@@ -182,6 +227,32 @@ def _install_via_winetricks(
         return False
 
 
+def _install_via_protontricks(
+    steam_id: str,
+    component: str,
+    log_fn: Callable[[str], None],
+) -> bool:
+    """Install *component* via system protontricks against *steam_id*."""
+    cmd = _get_protontricks_cmd(steam_id)
+    if cmd is None:
+        return False
+    cmd = cmd + [component]
+    log_fn(f"Installing {component} via protontricks (this may take a minute) …")
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            log_fn(f"{component} installed successfully.")
+            return True
+        log_fn(f"{component} install failed: {result.stderr or result.stdout or 'unknown error'}")
+        return False
+    except subprocess.TimeoutExpired:
+        log_fn(f"{component} install timed out after 5 minutes.")
+        return False
+    except Exception as exc:
+        log_fn(f"{component} error: {exc}")
+        return False
+
+
 def install_d3dcompiler_47(
     steam_id: str,
     log_fn: Callable[[str], None] | None = None,
@@ -189,40 +260,30 @@ def install_d3dcompiler_47(
 ) -> bool:
     """Install d3dcompiler_47 into the game's Proton prefix.
 
-    Prefers winetricks directly against *prefix_path* when available (avoids
-    protontricks needing to resolve the Steam library from the app ID).
-    Falls back to protontricks via *steam_id*.
-
-    Returns True on success, False on failure.
+    Uses system protontricks when available; falls back to bundled
+    winetricks against *prefix_path* otherwise. Records success in the
+    prefix's amethyst_deps.json so other wizards can skip the step.
     """
     _log = _safe_log(log_fn)
+    prefix = Path(prefix_path) if prefix_path else None
 
-    if prefix_path and Path(prefix_path).is_dir():
-        return _install_via_winetricks(Path(prefix_path), "d3dcompiler_47", _log)
+    def _mark():
+        if prefix and prefix.is_dir():
+            mark_dep_installed(prefix, D3D_DEP_KEY)
 
-    if steam_id:
-        cmd = _get_protontricks_cmd(steam_id)
-        if cmd is None:
-            _log("d3dcompiler_47: protontricks is not installed. Install it to use this feature.")
-            return False
-        cmd = cmd + ["d3dcompiler_47"]
-        _log("Installing d3dcompiler_47 into game prefix (this may take a minute) …")
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-            if result.returncode == 0:
-                _log("d3dcompiler_47 installed successfully.")
-                return True
-            else:
-                _log(f"d3dcompiler_47 install failed: {result.stderr or result.stdout or 'unknown error'}")
-                return False
-        except subprocess.TimeoutExpired:
-            _log("d3dcompiler_47 install timed out after 5 minutes.")
-            return False
-        except Exception as exc:
-            _log(f"d3dcompiler_47 error: {exc}")
-            return False
+    if steam_id and _get_protontricks_cmd(steam_id) is not None:
+        if _install_via_protontricks(steam_id, "d3dcompiler_47", _log):
+            _mark()
+            return True
+        _log("Falling back to bundled winetricks …")
 
-    _log("d3dcompiler_47: no prefix path or Steam ID available — cannot install.")
+    if prefix and prefix.is_dir():
+        if _install_via_winetricks(prefix, "d3dcompiler_47", _log):
+            _mark()
+            return True
+        return False
+
+    _log("d3dcompiler_47: no prefix path or working protontricks available — cannot install.")
     return False
 
 

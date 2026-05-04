@@ -35,14 +35,19 @@ from gui.theme import (
     FONT_NORMAL, FONT_BOLD,
 )
 
+from Utils.protontricks import (
+    D3D_DEP_KEY as _D3D_DEP_KEY,
+    dotnet_dep_key,
+    is_dep_installed as _is_dep_installed,
+    mark_dep_installed as _mark_dep_installed,
+)
+
 _GITHUB_API     = "https://api.github.com/repos/hakasapl/PGPatcher/releases/latest"
 _PATCHER_EXE    = "PGPatcher.exe"
 _PATCHER_DIR    = "PGPatcher"
-_DEPS_FILE      = "amethyst_deps.json"
 _NET8_URL       = "https://builds.dotnet.microsoft.com/dotnet/WindowsDesktop/8.0.25/windowsdesktop-runtime-8.0.25-win-x64.exe"
 _NET8_FILENAME  = "windowsdesktop-runtime-8.0.25-win-x64.exe"
-_NET8_DEP_KEY   = "dotnet8_windowsdesktop"
-_D3D_DEP_KEY    = "d3dcompiler_47"
+_NET8_DEP_KEY   = dotnet_dep_key("8")
 
 
 def _get_applications_dir(game: "BaseGame") -> Path:
@@ -52,39 +57,6 @@ def _get_applications_dir(game: "BaseGame") -> Path:
 def _patcher_exe_path(game: "BaseGame") -> Path | None:
     p = _get_applications_dir(game) / _PATCHER_EXE
     return p if p.is_file() else None
-
-
-# ---------------------------------------------------------------------------
-# Deps tracking helpers
-# ---------------------------------------------------------------------------
-
-def _read_deps(prefix_path: Path) -> list:
-    deps_file = prefix_path.parent / _DEPS_FILE
-    if not deps_file.is_file():
-        return []
-    try:
-        return json.loads(deps_file.read_text(encoding="utf-8")).get("installed", [])
-    except Exception:
-        return []
-
-
-def _mark_dep_installed(prefix_path: Path, key: str) -> None:
-    deps_file = prefix_path.parent / _DEPS_FILE
-    try:
-        data: dict = {}
-        if deps_file.is_file():
-            data = json.loads(deps_file.read_text(encoding="utf-8"))
-        installed: list = data.get("installed", [])
-        if key not in installed:
-            installed.append(key)
-        data["installed"] = installed
-        deps_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    except Exception:
-        pass
-
-
-def _is_dep_installed(prefix_path: Path, key: str) -> bool:
-    return key in _read_deps(prefix_path)
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +323,6 @@ class PGPatcherWizard(ctk.CTkFrame):
                 prefix_path=prefix_path,
             )
             if ok:
-                _mark_dep_installed(prefix_path, _D3D_DEP_KEY)
                 self._set_label("_d3d_status", "d3dcompiler_47 installed.", color="#6bc76b")
             else:
                 self._set_label("_d3d_status", "d3dcompiler_47 install failed — continuing anyway.", color="#e0a83c")

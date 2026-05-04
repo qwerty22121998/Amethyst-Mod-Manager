@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING
 
 import customtkinter as ctk
 
-from Utils.protontricks import install_d3dcompiler_47, protontricks_available
+from Utils.protontricks import D3D_DEP_KEY, install_d3dcompiler_47, is_dep_installed
 from Utils.deploy import apply_wine_dll_overrides
 
 if TYPE_CHECKING:
@@ -457,27 +457,30 @@ class ReShadeWizard(ctk.CTkFrame):
         ).pack(pady=(0, 12))
 
         steam_id = str(getattr(self._game, "steam_id", "") or "")
+        prefix_path = getattr(self._game, "_prefix_path", None)
+        has_prefix = bool(prefix_path) and Path(prefix_path).is_dir()
         has_steam_id = bool(steam_id)
-        has_protontricks = protontricks_available()
+        can_install = has_prefix or has_steam_id
+        already_installed = has_prefix and is_dep_installed(Path(prefix_path), D3D_DEP_KEY)
 
-        if not has_steam_id:
+        if already_installed:
             info = (
-                "This game has no Steam ID configured — d3dcompiler_47 cannot be\n"
-                "installed automatically. Install it manually via protontricks\n"
-                "or winecfg before running the game with ReShade."
+                "d3dcompiler_47 is already installed in this prefix.\n"
+                "You can skip this step."
             )
-            color = TEXT_WARN
-        elif not has_protontricks:
+            color = TEXT_OK
+        elif not can_install:
             info = (
-                "protontricks is not installed.\n\n"
-                "Install it via the Discover store or Flathub, then re-open\n"
-                "this wizard — or install d3dcompiler_47 manually via winecfg."
+                "No Proton prefix or Steam ID is configured for this game —\n"
+                "d3dcompiler_47 cannot be installed automatically. Install it\n"
+                "manually via winecfg before running the game with ReShade."
             )
             color = TEXT_WARN
         else:
             info = (
-                f"protontricks will install d3dcompiler_47 into the Proton\n"
-                f"prefix for this game (App ID: {steam_id}).\n\n"
+                "d3dcompiler_47 will be installed into the Proton prefix for\n"
+                "this game (via protontricks if available, otherwise bundled\n"
+                "winetricks).\n\n"
                 "This may take up to a minute."
             )
             color = TEXT_DIM
@@ -503,12 +506,19 @@ class ReShadeWizard(ctk.CTkFrame):
         )
         skip_btn.pack(side="left", padx=(0, 8))
 
-        self._d3d_install_btn = ctk.CTkButton(
-            btn_row, text="Install d3dcompiler_47", width=200, height=36,
-            font=FONT_BOLD, fg_color=ACCENT, hover_color=ACCENT_HOV, text_color=TEXT_ON_ACCENT,
-            command=self._do_install_d3dcompiler,
-            state="normal" if (has_steam_id and has_protontricks) else "disabled",
-        )
+        if already_installed:
+            self._d3d_install_btn = ctk.CTkButton(
+                btn_row, text="Next →", width=200, height=36,
+                font=FONT_BOLD, fg_color="#2d7a2d", hover_color="#3a9e3a",
+                text_color=TEXT_ON_ACCENT, command=self._show_step_install,
+            )
+        else:
+            self._d3d_install_btn = ctk.CTkButton(
+                btn_row, text="Install d3dcompiler_47", width=200, height=36,
+                font=FONT_BOLD, fg_color=ACCENT, hover_color=ACCENT_HOV,
+                text_color=TEXT_ON_ACCENT, command=self._do_install_d3dcompiler,
+                state="normal" if can_install else "disabled",
+            )
         self._d3d_install_btn.pack(side="left")
 
     def _do_install_d3dcompiler(self):
