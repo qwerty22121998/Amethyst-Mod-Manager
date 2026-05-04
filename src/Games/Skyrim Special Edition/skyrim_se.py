@@ -275,10 +275,6 @@ class SkyrimSE(Fallout_3):
     _MYGAMES_SUBPATH_GOG = Path("Skyrim Special Edition GOG")
     _ARCHIVE_INI_FILENAME = "Skyrim.ini"
 
-    # Round-tripped through overwrite/ across deploy/restore so runtime
-    # shader compilation persists across re-deploys.
-    _SHADER_CACHE = "ShaderCache"
-
     @property
     def _script_extender_exe(self) -> str:
         return "skse64_loader.exe"
@@ -314,32 +310,14 @@ class SkyrimSE(Fallout_3):
         backup.rename(launcher)
         _log("  Restored SkyrimSELauncher.exe from .bak.")
 
-    def _shadercache_to_overwrite(self, data_dir: Path, overwrite_dir: Path,
-                                  log_fn) -> None:
-        """Copy ShaderCache from Data/ into overwrite/, then delete the Data/ copy."""
-        src = data_dir / self._SHADER_CACHE
-        if not src.is_dir():
-            return
-        dst = overwrite_dir / self._SHADER_CACHE
-        dst.mkdir(parents=True, exist_ok=True)
-        for f in src.rglob("*"):
-            if f.is_file():
-                rel = f.relative_to(src)
-                target = dst / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(f, target)
-        shutil.rmtree(src)
-        log_fn(f"  Saved ShaderCache → overwrite/{self._SHADER_CACHE}/")
-
     def deploy(self, log_fn=None, mode: LinkMode = LinkMode.HARDLINK,
                profile: str = "default", progress_fn=None) -> None:
         """Deploy staged mods into the game's Data directory.
 
         Workflow:
-          1. Copy Data/ShaderCache → overwrite/ShaderCache (if present)
-          2. Move Data/ → Data_Core/
-          3. Transfer mod files listed in filemap.txt into Data/
-          4. Fill gaps with vanilla files from Data_Core/
+          1. Move Data/ → Data_Core/
+          2. Transfer mod files listed in filemap.txt into Data/
+          3. Fill gaps with vanilla files from Data_Core/
         (Root Folder deployment is handled by the GUI after this returns.)
         """
         _log = log_fn or (lambda _: None)
@@ -350,7 +328,6 @@ class SkyrimSE(Fallout_3):
         data_dir      = self._game_path / "Data"
         filemap       = self.get_effective_filemap_path()
         staging       = self.get_effective_mod_staging_path()
-        overwrite_dir = self.get_effective_overwrite_path()
 
         if not data_dir.is_dir():
             raise RuntimeError(f"Data directory not found: {data_dir}")
@@ -360,10 +337,7 @@ class SkyrimSE(Fallout_3):
                 "Run 'Build Filemap' before deploying."
             )
 
-        _log("Step 1: Saving ShaderCache to overwrite/ ...")
-        self._shadercache_to_overwrite(data_dir, overwrite_dir, _log)
-
-        _log("Step 2: Moving Data/ → Data_Core/ ...")
+        _log("Step 1: Moving Data/ → Data_Core/ ...")
         moved = move_to_core(data_dir, log_fn=_log)
         _log(f"  Moved {moved} file(s) to Data_Core/.")
 
@@ -373,7 +347,7 @@ class SkyrimSE(Fallout_3):
         custom_rules = self.custom_routing_rules
         custom_exclude: set[str] = set()
         if custom_rules:
-            _log("Step 2b: Routing files via custom rules ...")
+            _log("Step 1b: Routing files via custom rules ...")
             custom_exclude = deploy_custom_rules(
                 filemap, self._game_path, staging,
                 rules=custom_rules,
@@ -384,7 +358,7 @@ class SkyrimSE(Fallout_3):
                 progress_fn=progress_fn,
             )
 
-        _log(f"Step 3: Transferring mod files into Data/ ({mode.name}) ...")
+        _log(f"Step 2: Transferring mod files into Data/ ({mode.name}) ...")
         _sep_deploy = load_separator_deploy_paths(profile_dir)
         _sep_entries = read_modlist(profile_dir / "modlist.txt") if _sep_deploy else []
         per_mod_deploy = expand_separator_deploy_paths(_sep_deploy, _sep_entries) or None
@@ -401,17 +375,17 @@ class SkyrimSE(Fallout_3):
                                             core_dir=data_dir.parent / (data_dir.name + "_Core"))
         _log(f"  Transferred {linked_mod} mod file(s).")
 
-        _log("Step 4: Filling gaps with vanilla files from Data_Core/ ...")
+        _log("Step 3: Filling gaps with vanilla files from Data_Core/ ...")
         linked_core = deploy_core(data_dir, placed, mode=mode, log_fn=_log)
         _log(f"  Transferred {linked_core} vanilla file(s).")
 
-        _log("Step 5: Symlinking plugins.txt into Proton prefix ...")
+        _log("Step 4: Symlinking plugins.txt into Proton prefix ...")
         self._symlink_plugins_txt(profile, _log)
 
-        _log("Step 6: Symlinking profile INI files ...")
+        _log("Step 5: Symlinking profile INI files ...")
         self._symlink_profile_ini_files(profile, _log)
 
-        _log("Step 7: Applying archive invalidation ...")
+        _log("Step 6: Applying archive invalidation ...")
         self.apply_archive_invalidation(_log)
 
         _log(
