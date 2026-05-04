@@ -6,10 +6,12 @@ and winetricks via the bundled copy in the manager's tools folder.
 
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import stat
 import subprocess
+import tarfile
 import urllib.request
 from pathlib import Path
 from typing import Callable
@@ -17,6 +19,7 @@ from typing import Callable
 from Utils.app_log import safe_log as _safe_log
 
 _WINETRICKS_URL = "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks"
+_CABEXTRACT_URL = "https://archlinux.org/packages/extra/x86_64/cabextract/download/"
 
 
 def _get_tools_dir() -> Path:
@@ -30,9 +33,56 @@ def _bundled_winetricks() -> Path:
     return _get_tools_dir() / "winetricks"
 
 
+def _bundled_cabextract() -> Path:
+    return _get_tools_dir() / "cabextract"
+
+
 def winetricks_installed() -> bool:
     """Return True if winetricks is present in the manager's tools folder."""
     return _bundled_winetricks().is_file()
+
+
+def cabextract_installed() -> bool:
+    """Return True if cabextract is available (system PATH or bundled)."""
+    return shutil.which("cabextract") is not None or _bundled_cabextract().is_file()
+
+
+def install_cabextract(log_fn: Callable[[str], None] | None = None) -> bool:
+    """Download a portable cabextract binary into the manager's tools folder."""
+    _log = _safe_log(log_fn)
+    dest = _bundled_cabextract()
+    _log("Downloading cabextract …")
+    try:
+        import zstandard
+    except ImportError as exc:
+        _log(f"cabextract install needs the 'zstandard' Python module: {exc}")
+        return False
+    try:
+        req = urllib.request.Request(
+            _CABEXTRACT_URL,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            pkg_bytes = resp.read()
+        dctx = zstandard.ZstdDecompressor()
+        raw = dctx.stream_reader(io.BytesIO(pkg_bytes))
+        with tarfile.open(fileobj=raw, mode="r|") as tf:
+            for member in tf:
+                if member.name == "usr/bin/cabextract" and member.isfile():
+                    extracted = tf.extractfile(member)
+                    if extracted is None:
+                        continue
+                    dest.write_bytes(extracted.read())
+                    break
+            else:
+                _log("cabextract binary not found inside the downloaded package.")
+                return False
+        dest.chmod(dest.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        _log(f"cabextract installed to {dest}.")
+        return True
+    except Exception as exc:
+        _log(f"cabextract download failed: {exc}")
+        return False
 
 
 def install_winetricks(log_fn: Callable[[str], None] | None = None) -> bool:
@@ -96,14 +146,21 @@ def _install_via_winetricks(
         if not install_winetricks(log_fn=log_fn):
             return False
 
+    if not cabextract_installed():
+        log_fn("cabextract not found — downloading a portable copy now …")
+        if not install_cabextract(log_fn=log_fn):
+            return False
+
     winetricks = str(_bundled_winetricks())
 
     env = os.environ.copy()
     env["WINEPREFIX"] = str(prefix_path)
 
+    path_prefix = str(_get_tools_dir())
     proton_bin = _get_proton_bin()
     if proton_bin:
-        env["PATH"] = proton_bin + os.pathsep + env.get("PATH", "")
+        path_prefix = proton_bin + os.pathsep + path_prefix
+    env["PATH"] = path_prefix + os.pathsep + env.get("PATH", "")
 
     log_fn(f"Installing {component} via winetricks (this may take a minute) …")
     try:
