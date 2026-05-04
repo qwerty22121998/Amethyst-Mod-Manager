@@ -172,6 +172,13 @@ if [ "$MM_USE_PKGBUILD" = "1" ]; then
     pacman -U --noconfirm --overwrite '*' --nodeps "$PKG_FILE"
 
     echo "=== Running quick-sharun (PKGBUILD mode) ==="
+    # Stdlib extension modules in lib-dynload are dlopened at runtime, so
+    # quick-sharun's per-binary ldd trace never sees their DT_NEEDED entries
+    # and silently drops the underlying libs. Each line below covers a stdlib
+    # ext we actually import (directly or transitively):
+    #   libssl/libcrypto -> _ssl.so      (HTTPS — Nexus, GitHub, updates)
+    #   libuuid          -> _uuid.so     (uuid.uuid4 used by Nexus SSO)
+    #   libmpdec         -> _decimal.so  (transitive deps may import decimal)
     quick-sharun \
         /usr/bin/mod-manager               \
         /usr/share/amethyst-mod-manager    \
@@ -180,6 +187,10 @@ if [ "$MM_USE_PKGBUILD" = "1" ]; then
         /usr/lib/libgtk-3.so*              \
         /usr/lib/libtcl8.6.so*             \
         /usr/lib/libtk8.6.so*              \
+        /usr/lib/libssl.so*                \
+        /usr/lib/libcrypto.so*             \
+        /usr/lib/libuuid.so*               \
+        /usr/lib/libmpdec.so*              \
         "$TCLTK_STAGE/tcl8.6"              \
         "$TCLTK_STAGE/tk8.6"               \
         $( [ -f "$AUX_DIR/bin/bsdtar" ] && printf %s "$AUX_DIR/bin/bsdtar" )
@@ -305,6 +316,7 @@ EOF
     fi
 
     echo "=== Running quick-sharun (AppDir mode) ==="
+    # See PKGBUILD-mode comment above re: stdlib extension dlopen libs.
     quick-sharun \
         "$APPDIR/bin/mod-manager"        \
         "$APP_SHARE"                     \
@@ -313,6 +325,10 @@ EOF
         /usr/lib/libgtk-3.so*            \
         /usr/lib/libtcl8.6.so*           \
         /usr/lib/libtk8.6.so*            \
+        /usr/lib/libssl.so*              \
+        /usr/lib/libcrypto.so*           \
+        /usr/lib/libuuid.so*             \
+        /usr/lib/libmpdec.so*            \
         "$TCLTK_STAGE/tcl8.6"            \
         "$TCLTK_STAGE/tk8.6"             \
         $( [ -f "$APPDIR/bin/bsdtar" ] && printf %s "$APPDIR/bin/bsdtar" )
