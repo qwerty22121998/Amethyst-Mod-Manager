@@ -1134,14 +1134,14 @@ class CollectionDetailDialog(tk.Frame):
         style.configure(
             "CollDetail.Treeview",
             background=BG_PANEL, foreground=TEXT_MAIN,
-            fieldbackground=BG_PANEL, rowheight=scaled(24),
-            font=(FONT_FAMILY, _theme.FS9),
+            fieldbackground=BG_PANEL, rowheight=scaled(28),
+            font=(FONT_FAMILY, _theme.FS11),
             borderwidth=0, relief="flat",
         )
         style.configure(
             "CollDetail.Treeview.Heading",
             background=BG_HEADER, foreground=TEXT_MAIN,
-            font=(FONT_FAMILY, _theme.FS9, "bold"),
+            font=(FONT_FAMILY, _theme.FS11, "bold"),
             borderwidth=0, relief="flat",
         )
         style.map(
@@ -1188,7 +1188,7 @@ class CollectionDetailDialog(tk.Frame):
 
         # --- Priority note ---
         self._priority_note = tk.Label(
-            self, text="Order = author's install order  (↓ installed last = highest priority)",
+            self, text="Mods listed alphabetically",
             bg=BG_DEEP, fg=TEXT_DIM, font=font_sized_px(FONT_FAMILY, 8), anchor="w",
         )
         self._priority_note.pack(fill="x", side="top", padx=10, pady=(0, 2))
@@ -1200,7 +1200,7 @@ class CollectionDetailDialog(tk.Frame):
         ctk.CTkButton(
             ftr, text="Close",
             height=scaled(30), fg_color=BTN_GREY_ALT, hover_color=BTN_GREY_ALT_HOV,
-            text_color=TEXT_MAIN, font=font_sized(FONT_FAMILY, 10),
+            text_color=TEXT_MAIN, font=font_sized(FONT_FAMILY, 12, "bold"),
             border_width=0,
             command=self._on_close,
         ).pack(side="right", padx=10, pady=6)
@@ -1208,7 +1208,7 @@ class CollectionDetailDialog(tk.Frame):
         self._install_btn = ctk.CTkButton(
             ftr, text="Install Collection",
             height=scaled(30), fg_color=BTN_SUCCESS, hover_color=BTN_SUCCESS_HOV,
-            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10, "bold"),
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 12, "bold"),
             border_width=0,
             command=self._on_install_collection,
         )
@@ -1217,7 +1217,7 @@ class CollectionDetailDialog(tk.Frame):
         ctk.CTkButton(
             ftr, text="Open on Nexus",
             height=scaled(30), fg_color=BTN_NEUTRAL, hover_color=BTN_NEUTRAL_HOV,
-            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 12, "bold"),
             border_width=0,
             command=self._on_open_on_nexus,
         ).pack(side="right", padx=(10, 0), pady=6)
@@ -1225,7 +1225,7 @@ class CollectionDetailDialog(tk.Frame):
         self._open_missing_btn = ctk.CTkButton(
             ftr, text="Open Missing on Nexus",
             height=scaled(30), fg_color=BTN_WARN_BROWN, hover_color=BTN_WARN_BROWN_HOV,
-            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 12, "bold"),
             border_width=0,
             command=self._on_open_missing_on_nexus,
         )
@@ -1233,8 +1233,8 @@ class CollectionDetailDialog(tk.Frame):
 
         self._reset_btn = ctk.CTkButton(
             ftr, text="Reset Load Order",
-            height=scaled(30), fg_color=BTN_WARN_BROWN, hover_color=BTN_WARN_BROWN_HOV,
-            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 10),
+            height=scaled(30), fg_color=BTN_WARN_ORANGE, hover_color=BTN_WARN_ORANGE_HOV,
+            text_color=TEXT_WHITE, font=font_sized(FONT_FAMILY, 12, "bold"),
             border_width=0,
             command=self._on_reset_load_order,
         )
@@ -1619,19 +1619,8 @@ class CollectionDetailDialog(tk.Frame):
             # different from the one currently installed.
             self._update_install_btn_state()
 
-        _NO_POS = len(schema_order) + 1
-        sorted_mods = sorted(mods, key=lambda m: schema_order.get(m.file_id, _NO_POS))
-
-        has_order = bool(schema_order)
-        ordered_count = sum(1 for m in sorted_mods if m.file_id in schema_order)
-        if has_order:
-            extra = (
-                f" ({ordered_count} positioned, {len(mods) - ordered_count} unpositioned)"
-                if ordered_count < len(mods) else ""
-            )
-            self._status_var.set(f"{len(mods):,} mods \u2014 sorted by author's install order{extra}")
-        else:
-            self._status_var.set(f"{len(mods):,} mod file entries loaded (collection order unavailable)")
+        sorted_mods = sorted(mods, key=lambda m: (m.mod_name or "").casefold())
+        self._status_var.set(f"{len(mods):,} mods")
 
         installed_names, file_id_to_folder = self._get_installed_mod_info()
         self._file_id_to_tree_iid.clear()
@@ -1639,13 +1628,7 @@ class CollectionDetailDialog(tk.Frame):
         for display_i, mod in enumerate(sorted_mods, start=1):
             tag = "odd" if display_i % 2 else "even"
             opt_mark = "\u2713" if mod.optional else ""
-            if has_order and mod.file_id in schema_order:
-                order_label = str(schema_order[mod.file_id] + 1)
-            elif has_order:
-                order_label = "\u2014"
-                tag = "unordered"
-            else:
-                order_label = str(display_i)
+            order_label = str(display_i)
 
             # Highlight rows where the mod is already installed in the collection profile
             is_installed = False
@@ -4465,6 +4448,7 @@ class CollectionDetailDialog(tk.Frame):
         schema_file_id_to_size: dict[int, int] = {}
         schema_file_id_to_md5: dict[int, str] = {}
         schema_file_id_to_domain: dict[int, str] = {}
+        schema_file_id_to_phase: dict[int, int] = {}
         fomod_by_file_id: dict[int, dict] = {}
 
         _raw_logical: dict[int, str] = {}
@@ -4510,6 +4494,10 @@ class CollectionDetailDialog(tk.Frame):
                 _det_type = ((sm.get("details") or {}).get("type") or "").strip()
                 if _det_type:
                     schema_file_id_to_install_type[fid] = _det_type
+                try:
+                    schema_file_id_to_phase[fid] = int(sm.get("phase") or 0)
+                except (TypeError, ValueError):
+                    schema_file_id_to_phase[fid] = 0
                 choices = sm.get("choices") or {}
                 if choices.get("type") == "fomod":
                     fomod_by_file_id[fid] = _fomod_choices_from_collection(choices)
@@ -4519,7 +4507,14 @@ class CollectionDetailDialog(tk.Frame):
         def _sort_key(m):
             return schema_file_id_to_pos.get(m.file_id, len(schema_mods))
 
-        ordered_mods = sorted(mods, key=_sort_key)
+        # Install-execution order: all phase-N mods must finish before any phase-(N+1) starts.
+        def _phase_key(m):
+            return (
+                schema_file_id_to_phase.get(m.file_id, 0),
+                schema_file_id_to_pos.get(m.file_id, len(schema_mods)),
+            )
+
+        ordered_mods = sorted(mods, key=_phase_key)
 
         # Disambiguate collection entries that would install into the same
         # folder name (see _build_collision_suffix_map docstring).
@@ -4641,13 +4636,14 @@ class CollectionDetailDialog(tk.Frame):
             else:
                 to_download.append(mod)
 
-        # Sort by size per collection settings (mirrors _run_install)
+        # Phase is the primary sort; size is a tie-breaker within a phase (sort is stable).
         from Utils.ui_config import load_collection_settings as _load_col_cfg
         _col_cfg = _load_col_cfg()
         to_download.sort(
             key=lambda m: getattr(m, "size_bytes", 0) or 0,
             reverse=(_col_cfg["download_order"] == "largest"),
         )
+        to_download.sort(key=lambda m: schema_file_id_to_phase.get(m.file_id, 0))
 
         # ------------------------------------------------------------------
         # Step 3: Sequential manual download + install
@@ -4707,10 +4703,61 @@ class CollectionDetailDialog(tk.Frame):
                 _time_mod.sleep(2.0)
             return None  # cancelled
 
+        # Refresh plugins.txt between phases so later-phase FOMOD XML conditions see earlier-phase plugins.
+        def _write_phase_plugins_txt(label: str) -> None:
+            try:
+                _plugin_exts = (".esm", ".esl", ".esp")
+                _phase_staging = self._game.get_effective_mod_staging_path()
+                _known_folders: list[str] = []
+                _seen_folders: set[str] = set()
+                for _fname in already_installed_by_fid.values():
+                    if _fname and _fname not in _seen_folders:
+                        _seen_folders.add(_fname)
+                        _known_folders.append(_fname)
+                for _, _fname in install_order:
+                    if _fname and _fname not in _seen_folders:
+                        _seen_folders.add(_fname)
+                        _known_folders.append(_fname)
+                _phase_plugins: list = []
+                _seen_plugins: set = set()
+                for _fname in _known_folders:
+                    _mod_dir = _phase_staging / _fname
+                    if not _mod_dir.is_dir():
+                        continue
+                    for _root, _dirs, _files in os.walk(str(_mod_dir)):
+                        for _fn in _files:
+                            if _fn.lower().endswith(_plugin_exts):
+                                _pname_low = _fn.lower()
+                                if _pname_low not in _seen_plugins:
+                                    _seen_plugins.add(_pname_low)
+                                    _phase_plugins.append(
+                                        PluginEntry(name=_fn, enabled=True)
+                                    )
+                if _phase_plugins:
+                    _star = getattr(self._game, "plugins_use_star_prefix", True)
+                    write_plugins(profile_dir / "plugins.txt", _phase_plugins,
+                                  star_prefix=_star)
+                    write_loadorder(profile_dir / "loadorder.txt", _phase_plugins)
+                    self._log(
+                        f"Manual install: wrote phase plugins.txt "
+                        f"({len(_phase_plugins)} plugin(s)) — {label}."
+                    )
+            except Exception as _phase_exc:
+                self._log(f"Manual install: phase plugins.txt skipped — {_phase_exc}")
+
+        _current_phase: int | None = None
+
         dl_total = len(to_download)
         for idx_0, mod in enumerate(to_download):
             if self._manual_cancel_event.is_set():
                 break
+
+            _this_phase = schema_file_id_to_phase.get(mod.file_id, 0)
+            if _current_phase is not None and _this_phase != _current_phase:
+                _write_phase_plugins_txt(
+                    f"phase {_current_phase} → {_this_phase}"
+                )
+            _current_phase = _this_phase
 
             idx = idx_0 + 1
             # Update overlay on main thread and wait for it to complete
