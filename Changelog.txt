@@ -1,5 +1,6 @@
 - v1.3.1
 - Added some missing dependencies to appimage build
+- d3dcompiler install uses will fallback to winetricks if protontricks fails
 
 - v1.3.0
 - Switch to quick-sharun for appimage builds for better compatibility
