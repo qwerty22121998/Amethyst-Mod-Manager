@@ -1,4 +1,5 @@
 - v1.3.0
+- Switch to quick-sharun for appimage builds for better compatibility
 - Added Bsa and Ba2 packing and unpacking, Loose files can be packed in the mod files tab and archives can be unpacked
 - Removed some duplicate code (Game handlers had a lot)
 - The restore function no longer leaves empty folders on root deployed games
@@ -10,6 +11,7 @@
 - The Baldurs Gate 3 modsettings writer now uses a collection pak load order if present.
 - Removed shader cache related deploy/restore steps for Skyrim SE as these are no longer needed
 - Updated flatpak to gnome runtime 50
+- Added Payday 2
 
 - v1.2.14
 - Fixed staged folders not being found when deploying with cyberpunk
