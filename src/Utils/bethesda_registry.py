@@ -1,9 +1,16 @@
-"""Register Bethesda game install paths in an isolated Proton prefix.
+"""Register Bethesda game install paths in a Proton prefix.
 
-Bethesda tools (xEdit, LOOT, Synthesis, Wrye Bash, etc.) locate the game
-by reading ``HKLM\\Software\\Wow6432Node\\Bethesda Softworks\\<Game>``.
-A fresh Proton prefix has no such key, so tools launched in a custom
-per-exe prefix can't find the game until we write it ourselves.
+Bethesda tools locate the game by reading ``Bethesda Softworks\\<Game>\\
+Installed Path``. 32-bit tools (xEdit, LOOT, Synthesis, Wrye Bash) read it
+under ``HKLM\\Software\\Wow6432Node\\...``; 64-bit tools (BodySlide x64,
+Outfit Studio x64) read the plain ``HKLM\\Software\\...`` view. Wine does
+not mirror writes between the two views, so we write both.
+
+Steam itself writes the 64-bit key when the user launches the game through
+Steam — but users who install the game and immediately use a mod-manager
+wizard never trigger that, leaving the key absent. Per-exe prefixes
+(xEdit/Synthesis launched in their own compat folder) never have it at
+all. Registering ourselves covers both cases.
 """
 
 from __future__ import annotations
@@ -22,8 +29,11 @@ def _posix_to_wine_path(p: Path) -> str:
 
 
 def _marker_path(prefix_dir: Path, registry_game_name: str) -> Path:
+    # Marker suffix is bumped (.v2) when dual-view writing was added; old v1
+    # markers indicated a Wow6432Node-only write and would otherwise suppress
+    # the now-needed 64-bit key write that BodySlide / Outfit Studio rely on.
     safe = registry_game_name.replace(" ", "_").replace("\\", "_").replace("/", "_")
-    return prefix_dir / ".bethesda_registry" / f"{safe}.done"
+    return prefix_dir / ".bethesda_registry" / f"{safe}.v2.done"
 
 
 def register_bethesda_game_path(
@@ -59,30 +69,36 @@ def register_bethesda_game_path(
         return False
 
     wine_value = _posix_to_wine_path(Path(game_path))
-    key = (
-        r"HKLM\Software\Wow6432Node\Bethesda Softworks"
-        + "\\" + registry_game_name
-    )
-    cmd = [
-        "python3", str(proton_script), "run",
-        "reg", "add", key,
-        "/v", "Installed Path",
-        "/t", "REG_SZ",
-        "/d", wine_value,
-        "/f",
+    keys = [
+        r"HKLM\Software\Bethesda Softworks" + "\\" + registry_game_name,
+        r"HKLM\Software\Wow6432Node\Bethesda Softworks" + "\\" + registry_game_name,
     ]
     _log(f"Bethesda registry: registering {registry_game_name} → {wine_value}")
-    try:
-        result = subprocess.run(
-            cmd, env=env,
-            capture_output=True, text=True, timeout=60,
-        )
-    except Exception as exc:
-        _log(f"Bethesda registry: reg add failed: {exc}")
-        return False
-    if result.returncode != 0:
-        stderr = (result.stderr or result.stdout or "").strip()[:200]
-        _log(f"Bethesda registry: reg add exited {result.returncode}: {stderr}")
+    all_ok = True
+    for key in keys:
+        cmd = [
+            "python3", str(proton_script), "run",
+            "reg", "add", key,
+            "/v", "Installed Path",
+            "/t", "REG_SZ",
+            "/d", wine_value,
+            "/f",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, env=env,
+                capture_output=True, text=True, timeout=60,
+            )
+        except Exception as exc:
+            _log(f"Bethesda registry: reg add failed for {key}: {exc}")
+            all_ok = False
+            continue
+        if result.returncode != 0:
+            stderr = (result.stderr or result.stdout or "").strip()[:200]
+            _log(f"Bethesda registry: reg add exited {result.returncode} for {key}: {stderr}")
+            all_ok = False
+
+    if not all_ok:
         return False
 
     try:

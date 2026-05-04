@@ -462,7 +462,7 @@ class _BodySlideBaseWizard(ctk.CTkFrame):
         except Exception as exc:
             self._log(f"{self._wizard_title} Wizard: output redirect failed: {exc}")
 
-        proton_script, env, _prefix = self._get_proton_env()
+        proton_script, env, prefix = self._get_proton_env()
         if proton_script is None:
             self._set_label(
                 "_run_status",
@@ -470,6 +470,23 @@ class _BodySlideBaseWizard(ctk.CTkFrame):
                 color="#e06c6c",
             )
             return
+
+        # BodySlide x64 / Outfit Studio x64 autofill the Data folder from
+        # the Bethesda Softworks registry key. Steam writes that key only
+        # when the user launches the game natively through Steam — users
+        # who install the game and go straight to a wizard won't have it.
+        try:
+            from Utils.bethesda_registry import maybe_register_for_game
+            compat_data = Path(env.get("STEAM_COMPAT_DATA_PATH", str(prefix.parent)))
+            maybe_register_for_game(
+                prefix_dir=compat_data,
+                proton_script=Path(proton_script),
+                env=env,
+                game=self._game,
+                log_fn=self._log,
+            )
+        except Exception as exc:
+            self._log(f"{self._wizard_title} Wizard: registry write skipped: {exc}")
 
         self._log(f"{self._wizard_title} Wizard: launching {exe} via Proton (cwd={exe.parent})")
         try:
