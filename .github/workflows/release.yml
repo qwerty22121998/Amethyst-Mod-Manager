@@ -228,6 +228,8 @@ jobs:
     needs: [appimage, flatpak]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download AppImage
         uses: actions/download-artifact@v4
         with:
@@ -239,6 +241,30 @@ jobs:
         with:
           name: AmethystModManager-flatpak
           path: artifacts/
+
+      # Extract the section for this version from Changelog.txt.
+      # For prereleases (v1.3.0-beta.2) we look up the base stable version
+      # (v1.3.0). If no matching section is found we fall back to GitHub's
+      # auto-generated notes by leaving release-notes.md absent.
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          tag='${{ github.ref_name }}'
+          base="${tag%%-*}"
+          awk -v v="- $base" '
+            $0 == v { capture = 1; next }
+            capture && /^- v[0-9]/ { exit }
+            capture { print }
+          ' Changelog.txt | sed -e :a -e '/^$/{$d;N;ba' -e '}' > release-notes.md
+          if [ -s release-notes.md ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "----- release notes -----"
+            cat release-notes.md
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No changelog entry for $base; falling back to auto-generated notes"
+            rm -f release-notes.md
+          fi
 
       # When publishing a new beta, remove older prereleases (and their
       # tags) so only the latest beta is visible on the releases page.
@@ -262,5 +288,6 @@ jobs:
         with:
           files: artifacts/*
           prerelease: ${{ contains(github.ref_name, '-') }}
-          generate_release_notes: true
+          body_path: ${{ steps.changelog.outputs.found == 'true' && 'release-notes.md' || '' }}
+          generate_release_notes: ${{ steps.changelog.outputs.found != 'true' }}
           fail_on_unmatched_files: true
