@@ -1,3 +1,6 @@
+- v1.3.1
+- Added some missing dependencies to appimage build
+
 - v1.3.0
 - Switch to quick-sharun for appimage builds for better compatibility
 - Added Bsa and Ba2 packing and unpacking, Loose files can be packed in the mod files tab and archives can be unpacked
