@@ -246,25 +246,52 @@ jobs:
       # For prereleases (v1.3.0-beta.2) we look up the base stable version
       # (v1.3.0). If no matching section is found we fall back to GitHub's
       # auto-generated notes by leaving release-notes.md absent.
+      #
+      # Stable releases get wrapped in a "What's Changed" header plus an
+      # install command footer. Prereleases get the raw bullet list only.
       - name: Extract changelog section
         id: changelog
         run: |
           tag='${{ github.ref_name }}'
           base="${tag%%-*}"
+          is_prerelease=''
+          if [ "$tag" != "$base" ]; then
+            is_prerelease='1'
+          fi
           awk -v v="- $base" '
             $0 == v { capture = 1; next }
             capture && /^- v[0-9]/ { exit }
             capture { print }
-          ' Changelog.txt | sed -e :a -e '/^$/{$d;N;ba' -e '}' > release-notes.md
-          if [ -s release-notes.md ]; then
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "----- release notes -----"
-            cat release-notes.md
-          else
+          ' Changelog.txt | sed -e :a -e '/^$/{$d;N;ba' -e '}' > raw-notes.md
+          if [ ! -s raw-notes.md ]; then
             echo "found=false" >> "$GITHUB_OUTPUT"
             echo "No changelog entry for $base; falling back to auto-generated notes"
-            rm -f release-notes.md
+            rm -f raw-notes.md release-notes.md
+            exit 0
           fi
+          if [ -n "$is_prerelease" ]; then
+            mv raw-notes.md release-notes.md
+          else
+            {
+              echo "## Whats Changed"
+              echo
+              # Convert "- text" lines into markdown bullets. The changelog
+              # already uses "- " as a bullet marker, so just pass through.
+              cat raw-notes.md
+              echo
+              echo "##"
+              echo
+              echo "Run the following command to install/Update. Or download the appimage directly."
+              echo
+              echo '```bash'
+              echo 'curl -sSL https://raw.githubusercontent.com/ChrisDKN/Amethyst-Mod-Manager/main/src/appimage/Amethyst-MM-installer.sh | bash'
+              echo '```'
+            } > release-notes.md
+            rm -f raw-notes.md
+          fi
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "----- release notes -----"
+          cat release-notes.md
 
       # When publishing a new beta, remove older prereleases (and their
       # tags) so only the latest beta is visible on the releases page.
